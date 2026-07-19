@@ -6,7 +6,9 @@
 Qwen3.5-4B (GRPO), дообученная автором и работающая на домашнем GPU:
 [huggingface.co/Rob1234567/qwen3.5-4b-ariadna-grpo-v1-gguf](https://huggingface.co/Rob1234567/qwen3.5-4b-ariadna-grpo-v1-gguf)
 
-![Theseus TUI — рабочая сессия: блоки с желобком, markdown, инструменты](docs/screenshot.png)
+![Theseus TUI — ML-кейс: оценка загрузки GPU (MFU) через concept_search, library_search, concept_explain и library_read](docs/screenshot-gpu-tools.png)
+
+![Theseus TUI — ML-кейс: расчёт MFU по формуле 6ND, таблицы сценариев и выводы](docs/screenshot-gpu-answer.png)
 
 ![Theseus TUI — welcome-экран](docs/screenshot-welcome.png)
 
