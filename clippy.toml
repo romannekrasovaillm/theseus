@@ -1,0 +1,6 @@
+# Clippy config (по образцу codex-rs/clippy.toml).
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+
+# Порог для result_large_err — богатые варианты ошибок (как у codex/grok).
+large-error-threshold = 256
