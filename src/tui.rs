@@ -1879,6 +1879,11 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         }
                         if let AState::Idle(mut a) = state {
                             app.agent_done = false;
+                            // новая задача — возвращаем автопрокрутку: ручной скролл
+                            // выше (PgUp/колесо/выделение мышью) выключал follow, и
+                            // лог «уходил вниз» без догона (баг пользователя 20.07)
+                            app.follow = true;
+                            app.scroll = 0;
                             a.controls = controls.clone();
                             let b3 = broker.clone();
                             a.perm_answerer = Some(Box::new(move |q: &str| b3.ask(q)));
@@ -1916,6 +1921,11 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         if let AState::Idle(mut a) = state {
                             // агент свободен — Ctrl+S = Enter (та же ветка запуска)
                             app.agent_done = false;
+                            // новая задача — возвращаем автопрокрутку: ручной скролл
+                            // выше (PgUp/колесо/выделение мышью) выключал follow, и
+                            // лог «уходил вниз» без догона (баг пользователя 20.07)
+                            app.follow = true;
+                            app.scroll = 0;
                             a.controls = controls.clone();
                             let b3 = broker.clone();
                             a.perm_answerer = Some(Box::new(move |q: &str| b3.ask(q)));
@@ -1980,6 +1990,11 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                                 format!("📨 беру из очереди ({}): {preview}", queued.len()),
                                 role_style(&app.theme, ThemeRole::Accent))]);
                             app.agent_done = false;
+                            // новая задача — возвращаем автопрокрутку: ручной скролл
+                            // выше (PgUp/колесо/выделение мышью) выключал follow, и
+                            // лог «уходил вниз» без догона (баг пользователя 20.07)
+                            app.follow = true;
+                            app.scroll = 0;
                             a.controls = controls.clone();
                             let b4 = broker.clone();
                             a.perm_answerer = Some(Box::new(move |q: &str| b4.ask(q)));
