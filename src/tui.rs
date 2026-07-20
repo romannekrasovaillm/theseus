@@ -889,11 +889,14 @@ pub struct TuiApp {
     agent_done: bool,
     started_at: Instant,
     stream_open: bool,
-    /// индекс сырой стрим-строки дельт в логе (заменяется markdown-рендером
-    /// при AgentText). Именно индекс, а не «последняя строка»: промежуточные
-    /// Status/Reasoning добавляют строки ПОСЛЕ стрим-строки, и pop() снимал бы
-    /// чужую строку, оставляя сырой текст — фразы дублировались.
+    /// индекс ПЕРВОЙ строки стрим-блока в логе (markdown налету, v0.6.4):
+    /// блок перерендеривается целиком на каждую дельту в этой позиции
     stream_line_idx: Option<usize>,
+    /// накопленный текст текущего стрима (дельты конкатенируются, блок
+    /// перерендеривается с него; очищается на AgentText)
+    stream_text: String,
+    /// длина стрим-блока в строках лога (для drain при перерендере)
+    stream_block_len: usize,
     /// активная цветовая тема (дизайн-токены crate::theme; dark по умолчанию)
     theme: Theme,
     /// оценка токенов из последнего Status — для контекст-бара заголовка
@@ -1034,6 +1037,24 @@ fn sanitize_paste(s: &str) -> String {
     out
 }
 
+/// Санитация стрим-дельты ДО markdown-рендера: управляющие символы → пробел,
+/// но `\n` сохраняем — это структура markdown (в отличие от лога, где \n → ⏎).
+fn sanitize_stream(s: &str) -> String {
+    s.chars().map(|c| if c.is_control() && c != '\n' { ' ' } else { c }).collect()
+}
+
+/// Санитация спанов строки лога от управляющих символов (общий код push() и
+/// вставок стрим-блока — ни один путь не должен отдать C0/C1 в терминал).
+fn sanitize_spans(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
+    spans.into_iter().map(|sp| {
+        if sp.content.chars().any(char::is_control) {
+            Span::styled(sanitize_log_str(&sp.content).into_owned(), sp.style)
+        } else {
+            sp
+        }
+    }).collect()
+}
+
 /// Приблизительная высота логической строки лога в визуальных строках
 /// (ceil по числу символов; широкие runes занижают оценку — компенсируется
 /// запасом окна и точным пиннингом через wrapped_height).
@@ -1063,6 +1084,7 @@ impl TuiApp {
             git_status: String::new(),
             scroll: 0, follow: true, agent_done: false, started_at: Instant::now(),
             stream_open: false, stream_line_idx: None,
+            stream_text: String::new(), stream_block_len: 0,
             // дефолты для тестов и до инициализации в run_tui: dark-тема,
             // стандартный лимит, UTC; боевые значения подставляет run_tui
             theme: tui_theme("dark").unwrap_or_else(|| Theme::new("dark")),
@@ -1077,14 +1099,32 @@ impl TuiApp {
     fn push(&mut self, spans: Vec<Span<'static>>) {
         // единая точка входа строк в лог — чистим управляющие символы здесь,
         // чтобы ни один путь (markdown, события, статусы) не расстроил терминал
-        let spans = spans.into_iter().map(|sp| {
-            if sp.content.chars().any(char::is_control) {
-                Span::styled(sanitize_log_str(&sp.content).into_owned(), sp.style)
+        self.log.push(LogLine { spans: sanitize_spans(spans) });
+        if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+    }
+    /// Перерендер стрим-блока (markdown налету, v0.6.4): старые rendered-строки
+    /// снимаются по stream_line_idx, новые вставляются туда же. Строки,
+    /// добавленные ПОСЛЕ начала стрима (Reasoning и т.п.), не задеваются.
+    fn render_stream_block(&mut self) {
+        let Some(idx) = self.stream_line_idx else { return };
+        let end = (idx + self.stream_block_len).min(self.log.len());
+        if idx < end {
+            self.log.drain(idx..end);
+        }
+        let agent = role_style(&self.theme, ThemeRole::AgentText);
+        let rendered = crate::markdown::render(&self.stream_text, 100);
+        let lines = md_ansi_to_lines(&rendered);
+        let count = lines.len();
+        for (off, spans) in lines.into_iter().enumerate() {
+            let mut line = if off == 0 {
+                self.gutter_first("◆ ", agent)
             } else {
-                sp
-            }
-        }).collect();
-        self.log.push(LogLine { spans });
+                self.gutter_cont()
+            };
+            line.extend(spans);
+            self.log.insert(idx + off, LogLine { spans: sanitize_spans(line) });
+        }
+        self.stream_block_len = count;
         if self.follow { self.scroll = self.log.len().saturating_sub(1); }
     }
     /// Верх окна ручного скролла с полным экраном (кламп против «провала»
@@ -1131,26 +1171,24 @@ impl TuiApp {
         // стили — из активной темы (дизайн-токены), а не хардкод-цвета;
         // клонируем раз на событие, чтобы не держать заимствование self
         let theme = self.theme.clone();
-        let agent = role_style(&theme, ThemeRole::AgentText);
         let dim = role_style(&theme, ThemeRole::Dim);
         let accent = role_style(&theme, ThemeRole::Accent);
         let error = role_style(&theme, ThemeRole::Error);
         match ev {
             AgentEvent::AgentTextDelta(s) => {
-                // стриминг: дописываем в открытую строку (v0.2)
-                if self.stream_open {
-                    if let Some(last) = self.log.last_mut() {
-                        // дельта идёт мимо push() — чистим управляющие символы тут
-                        last.spans.push(Span::raw(sanitize_log_str(&s).into_owned()));
-                    }
-                } else {
-                    self.stream_open = true;
+                // стриминг с markdown налету (v0.6.4, запрос пользователя):
+                // дельта копится в stream_text, блок перерендеривается целиком —
+                // разметка оформляется по мере поступления, а не в конце ответа.
+                // Незакрытые маркеры парсер показывает литералом (устаканиваются
+                // с приходом закрывающего маркера).
+                if self.stream_line_idx.is_none() {
                     self.begin_block(BlockKind::Agent);
-                    let mut line = self.gutter_first("◆ ", agent);
-                    line.push(Span::raw(s));
-                    self.push(line);
-                    self.stream_line_idx = Some(self.log.len() - 1);
+                    self.stream_line_idx = Some(self.log.len());
+                    self.stream_block_len = 0;
                 }
+                self.stream_open = true;
+                self.stream_text.push_str(&sanitize_stream(&s));
+                self.render_stream_block();
             }
             AgentEvent::UserMsg(t) => {
                 self.stream_open = false;
@@ -1161,26 +1199,20 @@ impl TuiApp {
                 self.push(line);
             }
             AgentEvent::AgentText(t) => {
-                // markdown-рендер ответа модели (v0.4.1): заголовки/код/списки/ссылки
-                // отображаются стилями; сырая стрим-строка удаляется ПО ИНДЕКСУ —
-                // промежуточные строки (Reasoning и т.п.) не задеваются.
-                if let Some(idx) = self.stream_line_idx.take() {
-                    if idx < self.log.len() {
-                        self.log.remove(idx);
-                    }
-                    if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+                // финальный текст — тот же блок, последний перерендер точным текстом
+                // (на случай потерянных дельт); стрим-состояние сбрасывается
+                self.stream_text = t;
+                if self.stream_line_idx.is_none() {
+                    // ответ пришёл одним куском без дельт — блока ещё нет
+                    self.begin_block(BlockKind::Agent);
+                    self.stream_line_idx = Some(self.log.len());
+                    self.stream_block_len = 0;
                 }
-                self.begin_block(BlockKind::Agent);
-                let rendered = crate::markdown::render(&t, 100);
-                for (i, spans) in md_ansi_to_lines(&rendered).into_iter().enumerate() {
-                    let mut line = if i == 0 {
-                        self.gutter_first("◆ ", agent)
-                    } else {
-                        self.gutter_cont()
-                    };
-                    line.extend(spans);
-                    self.push(line);
-                }
+                self.render_stream_block();
+                self.stream_open = false;
+                self.stream_line_idx = None;
+                self.stream_block_len = 0;
+                self.stream_text.clear();
             }
             AgentEvent::Reasoning(n) => {
                 self.begin_block(BlockKind::Agent);
@@ -1837,6 +1869,8 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                 // что ссылается на строки/области прежней сессии
                 app.stream_open = false;
                 app.stream_line_idx = None;
+                app.stream_block_len = 0;
+                app.stream_text.clear();
                 app.last_tool_open = None;
                 app.sel = None;
                 app.completion_cycle = None;
@@ -2619,7 +2653,8 @@ mod render_bug_tests {
             .collect();
         assert!(text.contains("di 6"), "\\x0c должен стать пробелом: {text}");
         assert!(text.contains('⏎'), "переносы показаны маркером: {text}");
-        assert!(text.contains("начало  хвост"), "\\x0b стал пробелом: {text}");
+        // \x0b не дошёл (стал пробелом); markdown нормализует пробелы в один
+        assert!(text.contains("начало хвост"), "\\x0b стал пробелом: {text}");
     }
 
     /// Голый «/» (v0.6.0, запрос пользователя): в панели — весь список команд,
@@ -2813,6 +2848,40 @@ mod render_bug_tests {
         assert_eq!(pos("abc", 2), (1, 1), "враппинг: курсор на второй строке");
         assert_eq!(pos("ab\nc", 10), (1, 1), "после переноса — вторая строка");
         assert_eq!(pos("ab\n", 10), (1, 0), "после \\n — начало новой строки");
+    }
+
+    /// Markdown налету (v0.6.4, запрос пользователя): разметка рендерится
+    /// во время стрима, а не только по AgentText — сырые маркеры не висят
+    /// в логе, а после закрывающего маркера текст «устаканивается» в стиль.
+    #[test]
+    fn stream_renders_markdown_on_the_fly() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::UserMsg("расскажи".into()));
+        // заголовок приходит одной дельтой — сразу рендерится без «##»
+        app.on_event(AgentEvent::AgentTextDelta("## Тайтл\n".into()));
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("Тайтл"), "заголовок виден: {text}");
+        assert!(!text.contains("## Тайтл"), "сырые маркеры не висят: {text}");
+        // маркер, разорванный между дельтами, закрывается — текст устаканивается
+        app.on_event(AgentEvent::AgentTextDelta("текст **жир".into()));
+        app.on_event(AgentEvent::AgentTextDelta("ный**".into()));
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("жирный"), "собранный текст: {text}");
+        assert!(!text.contains("**"), "незакрытый маркер заменён: {text}");
+        // финал не дублирует: AgentText перерендеривает тот же блок
+        app.on_event(AgentEvent::AgentText("## Тайтл\nтекст **жирный**".into()));
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert_eq!(text.matches("Тайтл").count(), 1, "без дублей: {text}");
+        assert_eq!(text.matches("жирный").count(), 1, "без дублей: {text}");
+        // стрим-состояние сброшено
+        assert!(app.stream_line_idx.is_none() && app.stream_block_len == 0
+            && app.stream_text.is_empty());
     }
 
     /// Ручной скролл колесом (баг пользователя 20.07 «проваливается в пустой
