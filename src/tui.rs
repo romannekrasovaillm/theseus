@@ -9,7 +9,7 @@ use crate::slash::{self, Parsed};
 use crate::theme::{Color16, ColorSpec, Theme, ThemeRole};
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-    EnableMouseCapture, DisableMouseCapture};
+    EnableBracketedPaste, DisableBracketedPaste, EnableMouseCapture, DisableMouseCapture};
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
@@ -328,8 +328,10 @@ fn context_limit_from_config() -> usize {
 /// Максимум строк в панели slash-completion.
 const MAX_COMPLETIONS: usize = 6;
 
+/// Максимум видимых строк многострочного поля ввода (дальше — окно за курсором).
+const MAX_INPUT_LINES: usize = 8;
+
 /// Подсказки slash-completion для панели над строкой ввода.
-///
 /// Простое правило показа: ввод — это «/» + префикс без пробелов. Голый «/»
 /// выводит ВЕСЬ список команд (пользователь осматривает, что доступно);
 /// непустой префикс фильтрует по имени или алиасу, регистронезависимо,
@@ -920,6 +922,9 @@ pub struct TuiApp {
     /// код режима разрешений из Controls.mode_atomic (обновляется в цикле run_tui):
     /// индикатор режима в заголовке ввода слева (Совет/Авто-правки/Автомат)
     mode_code: u8,
+    /// курсор в поле ввода — символьный индекс (многострочный ввод v0.6.3):
+    /// вставка/удаление идут по курсору, не только в конце строки
+    cursor: usize,
 }
 
 /// Тип блока в логе: пользователь / ответ агента / инструменты / системные заметки.
@@ -963,6 +968,84 @@ fn wrapped_height(lines: Vec<Line>, width: u16, max_height: u16) -> usize {
     0
 }
 
+/// Позиция сразу после последнего контентного символа текста с переносами —
+/// (строка, колонка) в визуальных координатах. Точный ответ для курсора поля
+/// ввода при враппинге длинных строк (офскрин-рендер тем же WordWrapper'ом).
+fn wrapped_end_pos(lines: Vec<Line>, width: u16, max_height: u16) -> (usize, usize) {
+    use ratatui::buffer::Buffer;
+    use ratatui::widgets::Widget;
+    let area = Rect::new(0, 0, width.max(1), max_height.max(1));
+    let mut buf = Buffer::empty(area);
+    Widget::render(Paragraph::new(lines).wrap(Wrap { trim: false }), area, &mut buf);
+    for y in (0..max_height).rev() {
+        for x in (0..width).rev() {
+            if buf.get(x, y).symbol() != " " {
+                return (y as usize, x as usize + 1);
+            }
+        }
+    }
+    (0, 0)
+}
+
+/// Байтовый индекс символа `char_idx` в строке (для insert/remove по курсору).
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices().nth(char_idx).map(|(b, _)| b).unwrap_or(s.len())
+}
+
+/// Вставка текста в поле ввода по курсору (курсор — символьный индекс).
+fn input_insert(input: &mut String, cursor: &mut usize, text: &str) {
+    input.insert_str(char_to_byte(input, *cursor), text);
+    *cursor += text.chars().count();
+}
+
+/// Backspace по курсору: удалить символ перед ним (включая `\n` —
+/// многострочное поле при удалении переноса сжимается обратно).
+fn input_backspace(input: &mut String, cursor: &mut usize) {
+    if *cursor == 0 {
+        return;
+    }
+    input.remove(char_to_byte(input, *cursor - 1));
+    *cursor -= 1;
+}
+
+/// Санитация вставляемого (paste) текста: CRLF/CR → LF, таб → 4 пробела,
+/// прочие управляющие символы (C0/C1, кроме `\n`) выбрасываются — иначе
+/// форм-фиды и табы ломают отрисовку кадра (урок бага 16-42-57).
+fn sanitize_paste(s: &str) -> String {
+    let s = s.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\n' => out.push('\n'),
+            '\t' => out.push_str("    "),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Приблизительная высота логической строки лога в визуальных строках
+/// (ceil по числу символов; широкие runes занижают оценку — компенсируется
+/// запасом окна и точным пиннингом через wrapped_height).
+fn approx_rows(spans: &[Span], width: usize) -> usize {
+    let w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
+    if w == 0 { 1 } else { w.div_ceil(width.max(1)) }
+}
+
+/// Верх окна ручного скролла, при котором экран ещё полон: самая поздняя
+/// логическая строка, от которой хватает контента на `visible_rows` визуальных.
+/// Кламп не даёт колесу «провалиться» в пустоту под концом лога.
+fn manual_max_top(log: &[LogLine], visible_rows: usize, width: usize) -> usize {
+    let mut approx = 0usize;
+    let mut top = log.len();
+    while top > 0 && approx < visible_rows {
+        top -= 1;
+        approx += approx_rows(&log[top].spans, width);
+    }
+    top
+}
+
 impl TuiApp {
     fn new() -> Self {
         TuiApp {
@@ -979,6 +1062,7 @@ impl TuiApp {
             completion_cycle: None, block_kind: None,
             sel: None, log_area: Rect::default(), last_tool_open: None,
             mode_code: crate::permissions::MODE_UNSET,
+            cursor: 0,
         }
     }
     fn push(&mut self, spans: Vec<Span<'static>>) {
@@ -993,6 +1077,12 @@ impl TuiApp {
         }).collect();
         self.log.push(LogLine { spans });
         if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+    }
+    /// Верх окна ручного скролла с полным экраном (кламп против «провала»
+    /// колеса в пустоту под концом лога). Читает log_area последнего кадра.
+    fn max_scroll(&self) -> usize {
+        manual_max_top(&self.log, self.log_area.height as usize,
+                       self.log_area.width.max(1) as usize)
     }
     /// Начало блока нового типа: вставить пустую строку-разделитель
     /// (воздух между блоками — междустрочный ритм вместо сплошной простыни).
@@ -1209,13 +1299,22 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     } else {
         shown as u16 + 2 + u16::from(hidden > 0)
     };
+    // многострочный ввод (v0.6.3): высота по ВИЗУАЛЬНЫМ строкам — переносы и
+    // враппинг длинных строк при ручном вводе тоже растят поле (по умолчанию
+    // одна строка); буфер — точная верхняя оценка высоты по байтам
+    let input_width = f.size().width.saturating_sub(2).max(1);
+    let input_cap = (app.input.len() / input_width as usize
+        + app.input.lines().count() + 2) as u16;
+    let input_lines: Vec<Line> = app.input.split('\n').map(Line::from).collect();
+    let input_rows = wrapped_height(input_lines, input_width, input_cap).max(1);
+    let input_height = (input_rows.min(MAX_INPUT_LINES) + 2) as u16;
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),
             Constraint::Min(3),
             Constraint::Length(completion_height),
-            Constraint::Length(3),
+            Constraint::Length(input_height),
         ])
         .split(f.size());
 
@@ -1282,7 +1381,19 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
             app.log.iter().skip(total.saturating_sub(visible_rows + 20))
                 .map(|l| Line::from(l.spans.clone())).collect()
         } else {
-            app.log.iter().skip(app.scroll.min(total.saturating_sub(1))).take(visible_rows)
+            // ручной скролл: верх окна — логическая строка scroll, окно добирается
+            // вперёд по приблизительной высоте до полного экрана и пиннится низом
+            // (pin ниже). Верх клампится к manual_max_top: колесо не «проваливается»
+            // в пустоту под концом лога (баг пользователя 20.07).
+            let width = app.log_area.width.max(1) as usize;
+            let top = app.scroll.min(manual_max_top(&app.log, visible_rows, width));
+            let mut approx = 0usize;
+            let mut end = top;
+            while end < total && approx < visible_rows + 2 {
+                approx += approx_rows(&app.log[end].spans, width);
+                end += 1;
+            }
+            app.log.iter().skip(top).take(end - top)
                 .map(|l| Line::from(l.spans.clone())).collect()
         }
     };
@@ -1302,10 +1413,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
             Span::styled("думаю…".to_string(), role_style(&app.theme, ThemeRole::Dim)),
         ]));
     }
-    // точный пиннинг низа в follow-режиме: реальная высота суффикса с переносами
-    // (офскрин-рендер тем же WordWrapper'ом) минус экран; в режиме ручного
-    // скролла (follow=false) поведение прежнее
-    let pin = if app.follow && !app.log.is_empty() {
+    // точный пиннинг низа в ОБОИХ режимах: реальная высота окна с переносами
+    // (офскрин-рендер тем же WordWrapper'ом) минус экран. Follow — низ лога,
+    // ручной скролл — низ окна (полный экран контента, без пустого «подвала»)
+    let pin = if !app.log.is_empty() {
         wrapped_height(body.clone(), app.log_area.width,
                        visible_rows as u16 * 4 + 60)
             .saturating_sub(visible_rows) as u16
@@ -1364,21 +1475,41 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         ("Enter — новая задача | драг — выделение | Esc — выход ".to_string(),
          role_style(&app.theme, ThemeRole::Dim))
     } else {
-        ("Enter — отправить | ↑/↓ — история | /help — команды | PgUp/PgDn/колесо — скролл | драг — выделение | Esc — выход ".to_string(),
+        ("Enter — отправить | Ctrl+N — новая строка | ↑/↓ — история | /help — команды | PgUp/PgDn/колесо — скролл | драг — выделение | Esc — выход ".to_string(),
          role_style(&app.theme, ThemeRole::Dim))
     };
     title_spans.push(Span::styled(hint, hint_style));
     let input_block = Block::default().borders(Borders::ALL)
         .title(Line::from(title_spans));
+    // курсор в визуальных координатах: офскрин-рендер префикса ввода — и
+    // переносы, и враппинг длинных строк учтены точно
+    let cursor_byte = char_to_byte(&app.input, app.cursor);
+    let prefix_lines: Vec<Line> = app.input[..cursor_byte].split('\n').map(Line::from).collect();
+    let (mut cur_row, mut cur_col) = wrapped_end_pos(prefix_lines, input_width, input_cap);
+    if app.input[..cursor_byte].ends_with('\n') {
+        cur_row += 1;
+        cur_col = 0;
+    }
+    let visible_n = input_rows.min(MAX_INPUT_LINES);
+    let offset = if cur_row >= visible_n { cur_row + 1 - visible_n } else { 0 };
     match input_placeholder(&app.input) {
         // пустой ввод — dim-плейсхолдер вместо пустой строки
         Some(placeholder) => f.render_widget(
             Paragraph::new(Line::from(Span::styled(placeholder, role_style(&app.theme, ThemeRole::Dim))))
                 .block(input_block),
             chunks[3]),
-        None => f.render_widget(Paragraph::new(app.input.as_str()).block(input_block), chunks[3]),
+        None => f.render_widget(
+            Paragraph::new(app.input.as_str()).block(input_block)
+                .wrap(Wrap { trim: false }).scroll((offset as u16, 0)),
+            chunks[3]),
     }
-    f.set_cursor(chunks[3].x + 1 + app.input.chars().count() as u16, chunks[3].y + 1);
+    // курсор терминала — внутри рамки поля
+    let cx = chunks[3].x + 1 + cur_col as u16;
+    let cy = chunks[3].y + 1 + (cur_row - offset) as u16;
+    f.set_cursor(
+        cx.min(chunks[3].x + chunks[3].width.saturating_sub(2)),
+        cy.min(chunks[3].y + chunks[3].height.saturating_sub(2)),
+    );
 
     if let Some(q) = perm_q {
         let area = centered(60, 30, f.size());
@@ -1747,6 +1878,8 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
     enable_raw_mode()?;
     // колесо мыши — прокрутка лога (как у тройки лидеров); на выходе — Disable
     stdout.execute(EnableMouseCapture)?;
+    // bracketed paste — многострочная вставка одним событием (Event::Paste)
+    stdout.execute(EnableBracketedPaste)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = TuiApp::new();
     // метаданные старта: модель для welcome-блока, лимит контекст-бара из
@@ -1775,16 +1908,29 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
 
         if event::poll(Duration::from_millis(100))? {
             let ev = event::read()?;
+            // bracketed paste: многострочная вставка одним событием (v0.6.3) —
+            // текст вставляется по курсору после санитации (CRLF→LF, табы и
+            // управляющие символы не ломают кадр)
+            if let Event::Paste(s) = ev {
+                let clean = sanitize_paste(&s);
+                input_insert(&mut app.input, &mut app.cursor, &clean);
+                app.completion_cycle = None;
+                continue;
+            }
             // колесо мыши: прокрутка лога; при достижении дна — возврат в follow
             if let Event::Mouse(m) = ev {
                 match m.kind {
                     MouseEventKind::ScrollUp => {
+                        // вверх — в ручной режим с клампом: нельзя «выше» верхнего
+                        // полного окна, пустого экрана под текстом не будет
                         app.follow = false;
-                        app.scroll = app.scroll.saturating_sub(3);
+                        app.scroll = app.scroll.min(app.max_scroll()).saturating_sub(3);
                     }
                     MouseEventKind::ScrollDown => {
+                        // вниз — до нижнего полного окна, дальше — follow (низ лога)
+                        let mt = app.max_scroll();
                         app.scroll = app.scroll.saturating_add(3);
-                        if app.scroll >= app.log.len().saturating_sub(1) { app.follow = true; }
+                        if app.scroll >= mt { app.scroll = mt; app.follow = true; }
                     }
                     // выделение в логе: Down начинает, Drag тянет, Up копирует
                     MouseEventKind::Down(MouseButton::Left) => {
@@ -1861,13 +2007,28 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         // несколько — общий префикс, дальше — цикл по кандидатам
                         if let Some((new_input, cycle)) = slash_complete(&app.input, app.completion_cycle.clone()) {
                             app.input = new_input;
+                            app.cursor = app.input.chars().count();
                             app.completion_cycle = cycle;
                         }
                     }
+                    // Alt+Enter — новая строка в поле ввода (многострочный ввод
+                    // v0.6.3; просто Enter — отправка, как и было)
+                    KeyCode::Enter if key.modifiers.contains(KeyModifiers::ALT) => {
+                        input_insert(&mut app.input, &mut app.cursor, "\n");
+                    }
                     KeyCode::Enter => {
+                        // «\» в конце ввода + Enter — новая строка (конвенция
+                        // Claude Code): бэкслеш снимается, отправки нет
+                        if app.cursor == app.input.chars().count() && app.input.ends_with('\\') {
+                            app.input.pop();
+                            app.cursor -= 1;
+                            input_insert(&mut app.input, &mut app.cursor, "\n");
+                            continue;
+                        }
                         let text = app.input.trim().to_string();
                         if text.is_empty() { continue; }
                         app.input.clear();
+                        app.cursor = 0;
                         // история: любая отправленная строка (и промпт, и команда);
                         // push сбрасывает навигацию ↑/↓, сохраняем на диск сразу
                         history.push(&text);
@@ -1906,12 +2067,18 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                                     role_style(&app.theme, ThemeRole::Dim))]);
                         }
                     }
+                    // Ctrl+N — новая строка в поле ввода (надёжно во всех терминалах;
+                    // Alt+Enter — тоже поддерживается, но не везде различим)
+                    KeyCode::Char('n') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                        input_insert(&mut app.input, &mut app.cursor, "\n");
+                    }
                     // Ctrl+S — срочная вставка с преемпцией стрима (Immediate);
                     // когда агент свободен — эквивалент Enter
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let text = app.input.trim().to_string();
                         if text.is_empty() { continue; }
                         app.input.clear();
+                        app.cursor = 0;
                         history.push(&text);
                         save_history(&history, hist_path.as_deref());
                         if text.starts_with('/') {
@@ -1946,22 +2113,39 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                                     role_style(&app.theme, ThemeRole::Dim))]);
                         }
                     }
-                    KeyCode::Backspace => { app.input.pop(); }
+                    KeyCode::Backspace => { input_backspace(&mut app.input, &mut app.cursor); }
+                    // ← / → — навигация курсором по тексту (многострочный ввод)
+                    KeyCode::Left => { app.cursor = app.cursor.saturating_sub(1); }
+                    KeyCode::Right => {
+                        app.cursor = (app.cursor + 1).min(app.input.chars().count());
+                    }
                     KeyCode::Up => {
                         // листание истории «назад»: текущий ввод уходит в черновик
                         if let Some(entry) = history.prev(&app.input) {
                             app.input = entry.to_string();
+                            app.cursor = app.input.chars().count();
                         }
                     }
                     KeyCode::Down => {
                         // «вперёд»; за самой новой записью восстанавливается черновик
                         if let Some(entry) = history.next() {
                             app.input = entry.to_string();
+                            app.cursor = app.input.chars().count();
                         }
                     }
-                    KeyCode::Char(c) => app.input.push(c),
-                    KeyCode::PageUp => { app.follow = false; app.scroll = app.scroll.saturating_sub(10); }
-                    KeyCode::PageDown => { app.follow = false; app.scroll = app.scroll.saturating_add(10); }
+                    KeyCode::Char(c) => {
+                        let mut b = [0u8; 4];
+                        input_insert(&mut app.input, &mut app.cursor, c.encode_utf8(&mut b));
+                    }
+                    KeyCode::PageUp => {
+                        app.follow = false;
+                        app.scroll = app.scroll.min(app.max_scroll()).saturating_sub(10);
+                    }
+                    KeyCode::PageDown => {
+                        let mt = app.max_scroll();
+                        app.scroll = app.scroll.saturating_add(10);
+                        if app.scroll >= mt { app.scroll = mt; app.follow = true; }
+                    }
                     KeyCode::End => { app.follow = true; }
                     _ => {}
                 }
@@ -2021,6 +2205,7 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
 
     // выход из TUI: история на диск (каталог ~/.theseus создастся при save)
     save_history(&history, hist_path.as_deref());
+    terminal.backend_mut().execute(DisableBracketedPaste)?;
     terminal.backend_mut().execute(DisableMouseCapture)?;
     disable_raw_mode()?;
     terminal.backend_mut().execute(LeaveAlternateScreen)?;
@@ -2494,6 +2679,145 @@ mod render_bug_tests {
             "низ лога не виден — автопрокрутка не работает:\n{joined}");
         assert!(!joined.contains("строка 1"),
             "верх должен был уйти за край:\n{joined}");
+    }
+
+    /// (строка, колонка) курсора по символьному индексу — вспомогательная
+    /// для тестов редактирования ввода.
+    fn cursor_line_col(input: &str, cursor: usize) -> (usize, usize) {
+        let mut line = 0;
+        let mut col = 0;
+        for (i, c) in input.chars().enumerate() {
+            if i == cursor {
+                break;
+            }
+            if c == '\n' {
+                line += 1;
+                col = 0;
+            } else {
+                col += 1;
+            }
+        }
+        (line, col)
+    }
+
+    /// Многострочный ввод (v0.6.3): редактирование по курсору — вставка и
+    /// backspace в произвольной позиции, (строка, колонка) от символьного индекса.
+    #[test]
+    fn input_editing_at_cursor() {
+        let mut s = String::from("привет");
+        let mut c = 3; // после «при»
+        input_insert(&mut s, &mut c, "X");
+        assert_eq!(s, "приXвет");
+        assert_eq!(c, 4);
+        input_backspace(&mut s, &mut c);
+        assert_eq!(s, "привет");
+        assert_eq!(c, 3);
+        input_insert(&mut s, &mut c, "\nновая ");
+        assert_eq!(s, "при\nновая вет");
+        assert_eq!(cursor_line_col(&s, c), (1, 6));
+        // backspace через перенос строки — поле «сжимается»
+        input_backspace(&mut s, &mut c);
+        input_backspace(&mut s, &mut c);
+        input_backspace(&mut s, &mut c);
+        input_backspace(&mut s, &mut c);
+        input_backspace(&mut s, &mut c);
+        input_backspace(&mut s, &mut c);
+        input_backspace(&mut s, &mut c);
+        assert_eq!(s, "привет");
+        assert_eq!(cursor_line_col(&s, c), (0, 3));
+        // навигация в нуле и за концом — безопасна
+        let mut c0 = 0;
+        input_backspace(&mut s, &mut c0);
+        assert_eq!(c0, 0);
+        // (строка, колонка) по всем позициям
+        assert_eq!(cursor_line_col("", 0), (0, 0));
+        assert_eq!(cursor_line_col("ab\ncd", 0), (0, 0));
+        assert_eq!(cursor_line_col("ab\ncd", 2), (0, 2));
+        assert_eq!(cursor_line_col("ab\ncd", 3), (1, 0));
+        assert_eq!(cursor_line_col("ab\ncd", 6), (1, 2));
+    }
+
+    /// Санитация вставки: CRLF/CR → LF, таб → 4 пробела, управляющие (кроме \n) —
+    /// удаляются: вставленный текст не должен ломать кадр терминала.
+    #[test]
+    fn paste_sanitize_keeps_newlines_drops_controls() {
+        assert_eq!(sanitize_paste("a\r\nb\tc\u{c}d\u{8}e"), "a\nb    cde");
+        assert_eq!(sanitize_paste("одна\rдве"), "одна\nдве");
+        assert_eq!(sanitize_paste("чистый текст"), "чистый текст");
+    }
+
+    /// Поле ввода: одна строка по умолчанию; растёт по переносам; при строках
+    /// больше MAX_INPUT_LINES видимое окно держит курсор (хвост виден, начало нет).
+    #[test]
+    fn multiline_input_grows_and_windows_to_cursor() {
+        let mut app = TuiApp::new();
+        app.input = "первая\nвторая\nтретья".into();
+        app.cursor = app.input.chars().count();
+        let backend = TestBackend::new(80, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        for line in ["первая", "вторая", "третья"] {
+            assert!(joined.contains(line), "нет строки «{line}»:\n{joined}");
+        }
+        // 10 строк: окно — последние MAX_INPUT_LINES (3..=10), начало скрыто
+        app.input = (1..=10).map(|i| format!("строка{i}")).collect::<Vec<_>>().join("\n");
+        app.cursor = app.input.chars().count();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        assert!(joined.contains("строка10"), "хвост виден:\n{joined}");
+        assert!(joined.contains("строка3"), "окно от 3-й:\n{joined}");
+        assert!(!joined.contains("строка2"), "начало скрыто:\n{joined}");
+    }
+
+    /// Враппинг при ручном вводе (замечание пользователя): длинная строка БЕЗ
+    /// переносов \n тоже растит поле — текст переносится визуально, а не
+    /// клиппится в одну строку справа; курсор — на визуальной позиции конца.
+    #[test]
+    fn typed_long_line_wraps_and_grows_input() {
+        let mut app = TuiApp::new();
+        // 100 символов при ширине поля ~58 — минимум две визуальные строки
+        app.input = "а".repeat(100);
+        app.cursor = app.input.chars().count();
+        let backend = TestBackend::new(60, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let lines = buffer_lines(&terminal);
+        // первая визуальная строка — сплошные «а» во всю ширину поля
+        let rows_with_a = (0..lines.len())
+            .filter(|&y| lines[y].contains("аааааааааа")).count();
+        assert!(rows_with_a >= 2,
+            "строка не перенеслась визуально (ожидалось >= 2 строк с «а»):\n{}",
+            lines.join("\n"));
+    }
+
+    /// Ручной скролл колесом (баг пользователя 20.07 «проваливается в пустой
+    /// экран»): окно ручного режима всегда полное — верх клампится к последнему
+    /// ПОЛНОМУ окну (manual_max_top), пустого «подвала» под концом лога нет.
+    #[test]
+    fn manual_scroll_window_stays_full() {
+        let mut app = TuiApp::new();
+        for i in 1..=20 {
+            app.push(vec![Span::raw(format!("строка {i}"))]);
+        }
+        app.follow = false;
+        let backend = TestBackend::new(60, 12); // видимых строк лога: 12-1-3-2 = 6
+        let mut terminal = Terminal::new(backend).unwrap();
+        // середина лога: окно заполнено контентом, без пустоты снизу
+        app.scroll = 10;
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        assert!(joined.contains("строка 13"), "окно отсюда:\n{joined}");
+        assert!(joined.contains("строка 18"), "и досюда (6 полных строк):\n{joined}");
+        assert!(!joined.contains("строка 19"), "за окном:\n{joined}");
+        // scroll далеко за max_top (= 20-6 = 14): показывается ПОЛНОЕ нижнее
+        // окно (строки 15..20), а не «1 строка текста + пустой экран»
+        app.scroll = 19;
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        assert!(joined.contains("строка 20"), "низ лога виден:\n{joined}");
+        assert!(joined.contains("строка 15"), "окно полное сверху:\n{joined}");
+        assert!(!joined.contains("строка 14"), "выше окна:\n{joined}");
     }
 
     /// Индикатор мышления (v0.5.5, замечание пользователя «спиннер в шапке не видно»):
