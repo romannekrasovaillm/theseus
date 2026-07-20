@@ -987,6 +987,15 @@ fn wrapped_end_pos(lines: Vec<Line>, width: u16, max_height: u16) -> (usize, usi
     (0, 0)
 }
 
+/// Визуальная позиция курсора поля ввода: рендер префикса с сентинелем «█»
+/// на конце — иначе хвостовой пробел (пустая ячейка) не двигал курсор, и при
+/// вводе казалось, что пробел «не нажимается» (баг пользователя 20.07).
+fn wrapped_cursor_pos(lines: Vec<Line>, width: u16, max_height: u16) -> (usize, usize) {
+    let (y, x) = wrapped_end_pos(lines, width, max_height);
+    // курсор — ПОД сентинелем: wrapped_end_pos вернул позицию ПОСЛЕ него
+    (y, x.saturating_sub(1))
+}
+
 /// Байтовый индекс символа `char_idx` в строке (для insert/remove по курсору).
 fn char_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map(|(b, _)| b).unwrap_or(s.len())
@@ -1481,15 +1490,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     title_spans.push(Span::styled(hint, hint_style));
     let input_block = Block::default().borders(Borders::ALL)
         .title(Line::from(title_spans));
-    // курсор в визуальных координатах: офскрин-рендер префикса ввода — и
-    // переносы, и враппинг длинных строк учтены точно
+    // курсор в визуальных координатах: офскрин-рендер префикса ввода с
+    // сентинелем «█» — и переносы, и враппинг, и ХВОСТОВЫЕ ПРОБЕЛЫ учтены точно
     let cursor_byte = char_to_byte(&app.input, app.cursor);
-    let prefix_lines: Vec<Line> = app.input[..cursor_byte].split('\n').map(Line::from).collect();
-    let (mut cur_row, mut cur_col) = wrapped_end_pos(prefix_lines, input_width, input_cap);
-    if app.input[..cursor_byte].ends_with('\n') {
-        cur_row += 1;
-        cur_col = 0;
-    }
+    let probe = format!("{}█", &app.input[..cursor_byte]);
+    let probe_lines: Vec<Line> = probe.split('\n').map(Line::from).collect();
+    let (cur_row, cur_col) = wrapped_cursor_pos(probe_lines, input_width, input_cap);
     let visible_n = input_rows.min(MAX_INPUT_LINES);
     let offset = if cur_row >= visible_n { cur_row + 1 - visible_n } else { 0 };
     match input_placeholder(&app.input) {
@@ -2789,6 +2795,24 @@ mod render_bug_tests {
         assert!(rows_with_a >= 2,
             "строка не перенеслась визуально (ожидалось >= 2 строк с «а»):\n{}",
             lines.join("\n"));
+    }
+
+    /// Курсор после хвостового пробела (баг «пробел не нажимается» 20.07):
+    /// пробел — тоже колонка; сентинель «█» в wrapped_cursor_pos не даёт
+    /// позиции курсора «залипнуть» на последнем непробельном символе.
+    #[test]
+    fn cursor_pos_accounts_trailing_space() {
+        let pos = |s: &str, w: u16| {
+            let probe = format!("{s}█");
+            let lines: Vec<Line> = probe.split('\n').map(Line::from).collect();
+            wrapped_cursor_pos(lines, w, 50)
+        };
+        assert_eq!(pos("ab ", 10), (0, 3), "пробел занимает колонку");
+        assert_eq!(pos("ab", 10), (0, 2));
+        assert_eq!(pos("", 10), (0, 0), "пустой ввод — курсор в начале");
+        assert_eq!(pos("abc", 2), (1, 1), "враппинг: курсор на второй строке");
+        assert_eq!(pos("ab\nc", 10), (1, 1), "после переноса — вторая строка");
+        assert_eq!(pos("ab\n", 10), (1, 0), "после \\n — начало новой строки");
     }
 
     /// Ручной скролл колесом (баг пользователя 20.07 «проваливается в пустой
