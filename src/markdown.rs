@@ -42,8 +42,12 @@ const ANSI_DIM: &str = "\u{1b}[2m";
 const ANSI_CYAN: &str = "\u{1b}[36m";
 /// Акцентный цвет заголовков (яркий маджента).
 const ANSI_ACCENT: &str = "\u{1b}[95m";
-/// Фон код-фенсов: чёрный текст на циановом фоне.
-const ANSI_BG_CYAN: &str = "\u{1b}[30;46m";
+/// Фон код-фенсов: ярко-белый текст на тёмно-сером фоне (нейтрально для глаз).
+/// Фон код-фенса: мягкий светло-серый текст (gray 248) на нейтральном тёмно-сером
+/// поле (gray 238 из 256-палитры) — подсветка видна на тёмном фоне, но без
+/// цветового шума и рези в глазах (замечание пользователя 20.07; чистый
+/// bright black на тёмном терминале сливался с фоном — отсюда 256-цвета).
+const ANSI_BG_CODE: &str = "\u{1b}[38;5;248;48;5;238m";
 
 /// Видимый стиль текстового сегмента (без привязки к конкретным ANSI-кодам).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -166,15 +170,15 @@ impl MarkdownRenderer {
             format!(" {lang} ")
         };
         let pad = self.width.saturating_sub(label.chars().count());
-        out.push_str(ANSI_BG_CYAN);
+        out.push_str(ANSI_BG_CODE);
         out.push_str(&label);
         out.push_str(&" ".repeat(pad));
         out.push_str(ANSI_RESET);
         out.push('\n');
     }
 
-    /// Строка внутри код-фенса: дословно, с отступами, на циановом фоне
-    /// (в ANSI-режиме фон добивается пробелами до полной ширины).
+    /// Строка внутри код-фенса: дословно, с отступами, на нейтральном тёмно-сером
+    /// фоне (в ANSI-режиме фон добивается пробелами до полной ширины).
     fn write_code_line(&self, out: &mut String, line: &str) {
         if self.mode == RenderMode::Strip {
             out.push_str(line);
@@ -182,7 +186,7 @@ impl MarkdownRenderer {
             return;
         }
         let pad = self.width.saturating_sub(line.chars().count());
-        out.push_str(ANSI_BG_CYAN);
+        out.push_str(ANSI_BG_CODE);
         out.push_str(line);
         out.push_str(&" ".repeat(pad));
         out.push_str(ANSI_RESET);
@@ -615,7 +619,7 @@ mod tests {
     fn fence_preserves_content_verbatim() {
         let src = "```rust\n    let x = **не жирный**;\n    // `кавычки`\n```";
         let out = render(src, 60);
-        assert!(out.contains(ANSI_BG_CYAN));
+        assert!(out.contains(ANSI_BG_CODE));
         assert!(out.contains("    let x = **не жирный**;"));
         assert!(out.contains("rust"));
         // Внутри фенса инлайн-разметка не срабатывает.

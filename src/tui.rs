@@ -81,7 +81,12 @@ impl MdStyle {
             "2" => self.dim = true,
             "36" => self.fg = Some(Color::Cyan),
             "95" => self.fg = Some(Color::LightMagenta),
-            "30;46" => { self.fg = Some(Color::Black); self.bg = Some(Color::Cyan); }
+            // код-фенс: мягкий светло-серый текст на нейтральном тёмно-сером
+            // поле 256-палитры (видно на тёмном фоне, не режет глаза)
+            "38;5;248;48;5;238" => {
+                self.fg = Some(Color::Indexed(248));
+                self.bg = Some(Color::Indexed(238));
+            }
             _ => {} // чужие коды игнорируем — текст не теряется
         }
     }
@@ -2289,13 +2294,46 @@ mod md_render_tests {
         }
     }
 
-    /// Код-фенс: фоновая полоса 30;46 → чёрный на циане.
+    /// Код-фенс: нейтральная фоновая полоса 256-палитры — мягкий светло-серый
+    /// текст (gray 248) на тёмно-сером поле (gray 238); видна на тёмном фоне,
+    /// не режет глаза (замечание пользователя 20.07).
     #[test]
     fn code_fence_background() {
         let rendered = crate::markdown::render("```rust\nfn main() {}\n```", 80);
         let lines = md_ansi_to_lines(&rendered);
-        let has_bg = lines.iter().flatten().any(|s| s.style.bg == Some(Color::Cyan));
-        assert!(has_bg, "ожидалась фоновая полоса фенса: {lines:?}");
+        let has_bg = lines.iter().flatten().any(|s| s.style.bg == Some(Color::Indexed(238)));
+        assert!(has_bg, "ожидалась фоновая полоса gray-238: {lines:?}");
+        let has_fg = lines.iter().flatten().any(|s| s.style.fg == Some(Color::Indexed(248)));
+        assert!(has_fg, "ожидался текст gray-248 на полосе: {lines:?}");
+        // и вся цепочка до буфера кадра: bg доходит до ячеек терминала
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::AgentText("```rust\nfn main() {}\n```".into()));
+        let backend = ratatui::backend::TestBackend::new(100, 20);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let buf = terminal.backend().buffer();
+        let area = buf.area;
+        let mut found_bg = false;
+        for y in 0..area.height {
+            for x in 0..area.width {
+                if buf.get(x, y).bg == Color::Indexed(238) {
+                    found_bg = true;
+                }
+            }
+        }
+        assert!(found_bg, "bg gray-238 не дошёл до буфера кадра");
+        // и через живой путь стрима: дельты с незакрытым фенсом → финал с
+        // закрытым — фон фенса обязан появиться в логе после финала
+        let mut app = TuiApp::new();
+        let final_text = "## Пример\n\nЗдесь идёт обычный параграф текста.\n\n```python\ndef greet(name):\n    \"\"\"Приветствует пользователя.\"\"\"\n    return message\n```\n";
+        app.on_event(AgentEvent::AgentTextDelta("## Пример\n\n```python\ndef greet(name):\n".into()));
+        app.on_event(AgentEvent::AgentText(final_text.into()));
+        let has_bg_log = app.log.iter()
+            .flat_map(|l| l.spans.iter())
+            .any(|s| s.style.bg == Some(Color::Indexed(238)));
+        assert!(has_bg_log, "после стрима фон фенса потерян: {:?}", app.log.iter()
+            .map(|l| l.spans.iter().map(|s| (s.content.clone(), s.style.bg))
+                .collect::<Vec<_>>()).collect::<Vec<_>>());
     }
 
     /// Список: маркер заменён на •, текст не потерян.
