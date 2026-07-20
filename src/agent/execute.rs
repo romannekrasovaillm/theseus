@@ -141,6 +141,20 @@ impl Agent {
         out
     }
 
+    /// Прогон субагента из инструмента task: бюджет из спеки (default_budget
+    /// по типу), итог с пометкой обрыва по бюджету и учётом ходов/токенов.
+    fn run_subagent(&self, spec: &crate::agents::AgentSpec, prompt: &str) -> String {
+        let budget = crate::agents::default_budget(spec);
+        match subagent::run_agent(&self.sub, &self.workspace, spec, prompt, budget, self.env.sandbox) {
+            Ok(res) => {
+                let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
+                crate::tools::cap_pub(format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
+                    res.summary, spec.name, res.turns, res.tokens, note))
+            }
+            Err(e) => format!("ERROR: субагент «{}»: {e}", spec.name),
+        }
+    }
+
     fn execute_inner(&mut self, call: &ToolCall, name: &str, args: serde_json::Value) -> String {
         // v0.2: MCP-роутинг
         if let Some(rest) = name.strip_prefix("mcp__") {
@@ -197,13 +211,53 @@ impl Agent {
                 return out;
             }
             "task" => {
+                let agent_name = args["agent"].as_str().unwrap_or("explore").to_string();
                 let prompt = args["prompt"].as_str().unwrap_or("").to_string();
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow (subagent explore)".into() });
-                let out = match subagent::run_explore(&self.sub, &self.workspace, &prompt, 10) {
-                    Ok(s) => s,
-                    Err(e) => format!("ERROR: субагент: {e}"),
+                // маршрутизация по реестру типов (v0.6.2): explore/plan/code_review/
+                // test_runner из crate::agents — раньше был захардкожен только explore
+                let registry = crate::agents::AgentRegistry::with_builtins();
+                let spec = match registry.get(&agent_name) {
+                    Ok(s) => s.clone(),
+                    Err(e) => {
+                        self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Deny".into() });
+                        let out = format!("ERROR: {e}");
+                        self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok: false });
+                        return out;
+                    }
                 };
-                let ok = !out.starts_with("ERROR");
+                // не-readonly спека (test_runner с bash) — гейт по режиму, как у peer_ask:
+                // DontAsk → Deny (некому подтвердить), Ask/SemiAuto → попап, Yolo → Allow
+                enum SubGate { Allow, Ask(String), Deny(String) }
+                let gate = if spec.readonly {
+                    SubGate::Allow
+                } else {
+                    match self.perms.mode() {
+                        Mode::DontAsk => SubGate::Deny(format!(
+                            "субагент «{}» (есть bash) заблокирован в режиме DontAsk — нужно подтверждение", spec.name)),
+                        Mode::Ask | Mode::SemiAuto => SubGate::Ask(format!(
+                            "запустить субагента «{}» (есть bash): {prompt}", spec.name)),
+                        Mode::Yolo => SubGate::Allow,
+                    }
+                };
+                let decision_label = match &gate {
+                    SubGate::Allow => format!("Allow (subagent {})", spec.name),
+                    SubGate::Ask(_) => format!("Ask (subagent {})", spec.name),
+                    SubGate::Deny(_) => format!("Deny (subagent {})", spec.name),
+                };
+                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: decision_label });
+                let out = match gate {
+                    SubGate::Deny(reason) => format!("DENIED: {reason}"),
+                    SubGate::Ask(question) => {
+                        let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
+                        if allow {
+                            self.run_subagent(&spec, &prompt)
+                        } else {
+                            format!("DENIED: пользователь отклонил субагента «{}»", spec.name)
+                        }
+                    }
+                    SubGate::Allow => self.run_subagent(&spec, &prompt),
+                };
+                let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
                 self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
                 return out;
             }

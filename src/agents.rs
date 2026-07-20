@@ -417,6 +417,21 @@ impl AgentBudget {
     }
 }
 
+/// Бюджет по умолчанию для встроенного типа: ходы — из спеки, токены и настенное
+/// время — под «вес» задачи. plan/code_review читают много кода (каждый ход
+/// тащит накопленную историю — токены растут квадратично по ходам), test_runner
+/// гоняет длинные прогоны тестов. Живой прогон 20.07: plan с лимитом 200k
+/// оборвался на 10-м ходу (235k), не выдав результата.
+pub fn default_budget(spec: &AgentSpec) -> AgentBudget {
+    let (tokens, sec) = match spec.name.as_str() {
+        "plan" => (500_000, 900),
+        "code_review" => (300_000, 600),
+        "test_runner" => (400_000, 900),
+        _ => (250_000, 600),
+    };
+    AgentBudget::for_spec(spec, tokens, sec)
+}
+
 impl Default for AgentBudget {
     /// Умеренные лимиты по умолчанию: 20 ходов, 200k токенов, 10 минут.
     fn default() -> Self {
@@ -659,6 +674,22 @@ mod tests {
         assert!(spec.allows_tool("bash"));
         assert!(!spec.allows_tool("edit_file"));
         assert!(spec.system_prompt.contains("do not modify sources"));
+    }
+
+    /// Бюджеты взвешены по типу (урок живого прогона 20.07: plan на 200k
+    /// оборвался на 10-м ходу без результата — токены растут квадратично,
+    /// каждый ход тащит накопленную историю).
+    #[test]
+    fn default_budget_scales_by_spec_weight() {
+        let by_name = |n: &str| builtin_specs().into_iter().find(|s| s.name == n).unwrap();
+        let plan = default_budget(&by_name("plan"));
+        assert_eq!(plan.max_turns, 25, "ходы — из спеки");
+        assert_eq!(plan.max_tokens, 500_000);
+        assert_eq!(default_budget(&by_name("explore")).max_tokens, 250_000);
+        assert_eq!(default_budget(&by_name("code_review")).max_tokens, 300_000);
+        assert_eq!(default_budget(&by_name("test_runner")).max_sec, 900);
+        // монотонность: «тяжёлые» типы получают не меньше «лёгкого» explore
+        assert!(plan.max_tokens > default_budget(&by_name("explore")).max_tokens);
     }
 
     #[test]

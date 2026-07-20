@@ -194,8 +194,9 @@ pub fn tool_specs() -> serde_json::Value {
             },"required":["todos"]}}},
         {"type":"function","function":{
             "name":"task",
-            "description":"Delegate a read-only exploration subtask to an explore subagent (isolated context, cannot modify files). Use for codebase questions that need many file reads without polluting your own context.",
+            "description":"Delegate a subtask to a subagent (isolated context, own budget). Agents: explore — codebase Q&A with file:line refs (readonly); plan — architecture implementation plan (readonly); code_review — diff/file review with findings by severity (readonly); test_runner — run build/tests/lint and report faithfully (bash, no source edits). Use to keep your own context clean.",
             "parameters":{"type":"object","properties":{
+                "agent":{"type":"string","description":"explore | plan | code_review | test_runner (default: explore)"},
                 "prompt":{"type":"string"}
             },"required":["prompt"]}}},
         {"type":"function","function":{
