@@ -314,3 +314,47 @@ fn reset_session_clears_history_on_next_run() -> Result<()> {
     assert!(!agent.controls.reset_session.load(std::sync::atomic::Ordering::Relaxed));
     Ok(())
 }
+
+/// Продление лимита ходов (v0.6.5, баг пользователя 20.07 — сессия умерла
+/// на 40-м ходу посреди разведки): при достижении лимита эксперт подтверждает
+/// продление батчем до потолка ×4; без подтверждения — прежняя ошибка лимита.
+#[test]
+fn turn_limit_extends_on_expert_confirm() -> Result<()> {
+    let ws = TempWs::new("limit_extend");
+    std::fs::write(ws.path().join("a.txt"), "данные\n")?;
+    let mk_server = || {
+        MockLlm::with_scenarios(vec![
+            Scenario::new().reply_tool_call("read_file", r#"{"path":"a.txt"}"#)
+                .finish_reason("tool_calls"),
+            Scenario::new().reply_tool_call("finish", r#"{"summary":"готово после продления"}"#),
+            Scenario::new().reply_text("ок"),
+        ])
+    };
+    // 1) эксперт подтверждает (perm_answerer → true): лимит 1 продлевается до 2,
+    //    finish успевает на втором ходу
+    let handle = mk_server().serve_on_ephemeral()?;
+    let mut agent = mock_agent(&handle.base_url, ws.path(), 1);
+    agent.perm_answerer = Some(Box::new(|_q: &str| true));
+    let out = agent.run("прочитай a.txt и заверши")?;
+    assert!(out.contains("готово после продления"), "продление не сработало: {out}");
+    assert!(!out.contains("лимит ходов"), "ложный лимит: {out}");
+    // HookNote о продлении записан в транскрипт сессии (1 → 2)
+    let events = std::fs::read_dir(ws.path().join(".theseus"))?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.file_name().to_string_lossy().starts_with("events-"))
+        .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+        .collect::<String>();
+    assert!(events.contains("лимит ходов продлён до 2"), "нет HookNote: {events}");
+    // 2) эксперт отклоняет (perm_answerer → false): прежняя ошибка на 1-м ходу
+    let handle2 = mk_server().serve_on_ephemeral()?;
+    let mut agent2 = mock_agent(&handle2.base_url, ws.path(), 1);
+    agent2.perm_answerer = Some(Box::new(|_q: &str| false));
+    let out2 = agent2.run("прочитай a.txt и заверши")?;
+    assert!(out2.contains("достигнут лимит ходов (1)"), "out2: {out2}");
+    // 3) без answerer'а (headless) — тоже ошибка, без самопродления
+    let handle3 = mk_server().serve_on_ephemeral()?;
+    let mut agent3 = mock_agent(&handle3.base_url, ws.path(), 1);
+    let out3 = agent3.run("прочитай a.txt и заверши")?;
+    assert!(out3.contains("достигнут лимит ходов (1)"), "out3: {out3}");
+    Ok(())
+}

@@ -91,6 +91,10 @@ enum TurnFlow {
 /// Колбэк подтверждения разрешений (вопрос из попапа → да/нет)
 pub type PermAnswerer = Box<dyn FnMut(&str) -> bool + Send>;
 
+/// Потолок продления лимита ходов: лимит можно продлевать батчами не выше
+/// `initial_max_turns × N` (v0.6.5). Защита от бесконечной сессии при зажатом «y».
+const TURN_LIMIT_CEILING_MULT: usize = 4;
+
 pub struct Agent {
     api: ApiClient,
     perms: PermissionEngine,
@@ -727,10 +731,15 @@ impl Agent {
             }
         }
         let t0 = Instant::now();
-        let mut final_turn = 0;
-
-        for turn in 1..=self.max_turns {
-            final_turn = turn;
+        // лимит ходов с продлением для эксперта (v0.6.5, баг пользователя 20.07 —
+        // сессия умерла на 40-м ходу посреди разведки): при достижении лимита
+        // спрашиваем через тот же perm-попап — продлить на batch до потолка ×4;
+        // headless (нет answerer'а) — прежнее поведение: останов с ошибкой
+        let initial_max = self.max_turns;
+        let ceiling = initial_max.saturating_mul(TURN_LIMIT_CEILING_MULT);
+        let mut turn = 0;
+        loop {
+            turn += 1;
             // корневой спан хода: закрывается на всех путях, включая ошибки
             // (ручной scopeguard: close_span до диспетчеризации flow, Err тоже фиксируется)
             let turn_span = self.trace.open_span("turn", None);
@@ -744,10 +753,26 @@ impl Agent {
                 TurnFlow::Continue => {}
                 TurnFlow::Done(out) => return Ok(out),
             }
+            if turn >= self.max_turns {
+                if self.max_turns >= ceiling {
+                    break; // потолок выбран полностью — выход с ошибкой лимита
+                }
+                let batch = initial_max;
+                let question = format!(
+                    "⏱ достигнут лимит {} ходов. Продолжить ещё {} (потолок {})?",
+                    self.max_turns, batch, ceiling);
+                let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
+                if !allow {
+                    break;
+                }
+                self.max_turns = (self.max_turns + batch).min(ceiling);
+                self.emit(AgentEvent::HookNote(format!(
+                    "▶ лимит ходов продлён до {} (потолок {})", self.max_turns, ceiling)));
+            }
         }
         self.emit_accounting();
         self.save_session(messages);
-        let err = format!("достигнут лимит ходов ({}) на ходе {}", self.max_turns, final_turn);
+        let err = format!("достигнут лимит ходов ({}) на ходе {}", self.max_turns, turn);
         self.emit(AgentEvent::Error(err.clone()));
         Ok(err)
     }
