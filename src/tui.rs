@@ -945,6 +945,24 @@ fn sanitize_log_str(s: &str) -> Cow<'_, str> {
     }).collect())
 }
 
+/// Точная высота строк с учётом переносов: рендер в офскрин-буфер той же
+/// ширины (тот же WordWrapper, что и у основного рендера кадра) и поиск
+/// последней непустой строки. Нужна для пиннинга низа лога (автопрокрутка):
+/// логические строки с wrap занимают больше экрана, чем считает их количество.
+fn wrapped_height(lines: Vec<Line>, width: u16, max_height: u16) -> usize {
+    use ratatui::buffer::Buffer;
+    use ratatui::widgets::Widget;
+    let area = Rect::new(0, 0, width.max(1), max_height.max(1));
+    let mut buf = Buffer::empty(area);
+    Widget::render(Paragraph::new(lines).wrap(Wrap { trim: false }), area, &mut buf);
+    for y in (0..max_height).rev() {
+        if (0..width).any(|x| buf.get(x, y).symbol() != " ") {
+            return y as usize + 1;
+        }
+    }
+    0
+}
+
 impl TuiApp {
     fn new() -> Self {
         TuiApp {
@@ -1250,16 +1268,21 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     // координат мыши (выделение); обновляется каждый кадр
     let log_block = Block::default().borders(Borders::ALL).title(" лог ");
     app.log_area = log_block.inner(chunks[1]);
+    let visible_rows = chunks[1].height.saturating_sub(2) as usize;
     let mut body: Vec<Line> = if app.log.is_empty() {
         welcome_lines(&app.model_info, &app.theme)
     } else {
-        let visible = chunks[1].height.saturating_sub(2) as usize;
         let total = app.log.len();
         if app.follow {
-            app.log.iter().skip(total.saturating_sub(visible))
+            // автопрокрутка: суффикс последних visible+20 ЛОГИЧЕСКИХ строк,
+            // точный пиннинг низа по высоте с переносами — ниже. Раньше брали
+            // последние `visible` строк и рисовали с их начала: длинные
+            // обёрнутые ответы уходили за нижний край, и пользователю
+            // приходилось догонять лог мышью вручную.
+            app.log.iter().skip(total.saturating_sub(visible_rows + 20))
                 .map(|l| Line::from(l.spans.clone())).collect()
         } else {
-            app.log.iter().skip(app.scroll.min(total.saturating_sub(1))).take(visible)
+            app.log.iter().skip(app.scroll.min(total.saturating_sub(1))).take(visible_rows)
                 .map(|l| Line::from(l.spans.clone())).collect()
         }
     };
@@ -1279,8 +1302,18 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
             Span::styled("думаю…".to_string(), role_style(&app.theme, ThemeRole::Dim)),
         ]));
     }
+    // точный пиннинг низа в follow-режиме: реальная высота суффикса с переносами
+    // (офскрин-рендер тем же WordWrapper'ом) минус экран; в режиме ручного
+    // скролла (follow=false) поведение прежнее
+    let pin = if app.follow && !app.log.is_empty() {
+        wrapped_height(body.clone(), app.log_area.width,
+                       visible_rows as u16 * 4 + 60)
+            .saturating_sub(visible_rows) as u16
+    } else {
+        0
+    };
     f.render_widget(
-        Paragraph::new(body).block(log_block).wrap(Wrap { trim: false }),
+        Paragraph::new(body).block(log_block).wrap(Wrap { trim: false }).scroll((pin, 0)),
         chunks[1]);
 
     // панель совпадений slash-команд: имя + summary; при голом «/» — весь
@@ -2422,6 +2455,30 @@ mod render_bug_tests {
         assert!(joined.contains("Enter — в очередь"), "нет подсказки очереди:\n{joined}");
         assert!(joined.contains("Ctrl+S — вставить сразу"), "нет подсказки преемпции:\n{joined}");
         assert!(joined.contains("Esc — прервать"), "Esc-подсказка не должна пропасть:\n{joined}");
+    }
+
+    /// Автопрокрутка (замечание пользователя «сообщения уходят вниз, приходится
+    /// скроллить мышью»): follow-режим обязан держать НИЗ лога видимым, даже
+    /// когда последние сообщения — длинные обёрнутые строки. Раньше брались
+    /// последние `visible` ЛОГИЧЕСКИХ строк, и хвост уходил за нижний край.
+    #[test]
+    fn follow_pins_bottom_with_wrapped_lines() {
+        let mut app = TuiApp::new();
+        for i in 1..=6 {
+            app.push(vec![Span::raw(format!("строка {i}"))]);
+        }
+        // длинная строка: при ширине 60 займёт ~6 визуальных строк
+        app.push(vec![Span::raw("длинная ".repeat(40))]);
+        app.push(vec![Span::raw("ПОСЛЕДНЯЯ_СТРОКА_МАРКЕР".to_string())]);
+        app.follow = true;
+        let backend = TestBackend::new(60, 12);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        assert!(joined.contains("ПОСЛЕДНЯЯ_СТРОКА_МАРКЕР"),
+            "низ лога не виден — автопрокрутка не работает:\n{joined}");
+        assert!(!joined.contains("строка 1"),
+            "верх должен был уйти за край:\n{joined}");
     }
 
     /// Индикатор мышления (v0.5.5, замечание пользователя «спиннер в шапке не видно»):
