@@ -43,6 +43,11 @@ const CHAT_TEMPERATURE: f64 = 0.2;
 /// бюджета на блок <think> — при 1024 ответ иногда не начинался вовсе
 /// (живой кейс 18.07: два запроса вернули один лишь «<think»).
 const CHAT_MAX_TOKENS: u32 = 3072;
+/// Усечённый потолок при CPU-фолбэке: v10-модель игнорирует
+/// `enable_thinking=false` (проверено живьём 20.07: kwargs работает на старой
+/// GGUF, не на v10), а на CPU это ~5 ток/с — 3072 токена = 10+ минут ожидания.
+/// 768 × 5 ток/с ≈ 2.5 минуты худшего случая.
+const CHAT_MAX_TOKENS_CPU: u32 = 768;
 
 /// Срезать thinking-блоки из ответа модели: `<think>...</think>` целиком и
 /// незакрытый хвост `<think>...` (обрезка по бюджету токенов). Если после
@@ -85,8 +90,10 @@ const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_secs(30);
 const HEALTH_POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// Таймаут одного пробного `/health` (мёртвый loopback-порт отказывает мгновенно).
 const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_secs(2);
-/// Таймаут chat-запроса: генерация на 4B — десятки секунд, на CPU — минуты.
-const CHAT_TIMEOUT: Duration = Duration::from_secs(600);
+/// Таймаут chat-запроса: генерация на 4B — секунды на GPU, десятки секунд на
+/// CPU. 600 секунд было чрезмерным для «быстрого помощника»: при CPU-фолбэке
+/// (~5 ток/с) агент висел по 10 минут на trivial-вопросе (баг 20.07).
+const CHAT_TIMEOUT: Duration = Duration::from_secs(240);
 /// Таймаут установления TCP-соединения.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Сколько байт с конца лога сервера прикладывать к ошибке старта.
@@ -226,6 +233,21 @@ pub fn is_available(cfg: &AriadnaConfig) -> bool {
     cfg.server_bin.is_file() && cfg.gguf_path.is_file()
 }
 
+/// Аргументы командной строки llama-server. `--jinja` обязателен: только с
+/// ним `chat_template_kwargs.enable_thinking=false` из chat-запроса реально
+/// применяется к GRPO-шаблону — без него kwargs молча игнорируются, и модель
+/// думает 2500+ токенов на trivial-вопрос (баг 20.07: 10 минут на CPU).
+fn server_args(cfg: &AriadnaConfig) -> Vec<String> {
+    vec![
+        "--model".to_string(), cfg.gguf_path.display().to_string(),
+        "--host".to_string(), cfg.host.clone(),
+        "--port".to_string(), cfg.port.to_string(),
+        "-c".to_string(), cfg.ctx.to_string(),
+        "--n-gpu-layers".to_string(), cfg.gpu_layers.to_string(),
+        "--jinja".to_string(),
+    ]
+}
+
 /// Гарантирует работающий llama-server и возвращает [`ServerGuard`].
 ///
 /// Порядок действий: `/health` отвечает 2xx → переиспользовать (гард без
@@ -254,16 +276,7 @@ pub fn ensure_server(cfg: &AriadnaConfig) -> Result<ServerGuard> {
         .with_context(|| format!("создание лог-файла {}", log_path.display()))?;
     let log_err = log_out.try_clone().context("клонирование дескриптора лог-файла")?;
     let mut child = Command::new(&cfg.server_bin)
-        .arg("--model")
-        .arg(&cfg.gguf_path)
-        .arg("--host")
-        .arg(&cfg.host)
-        .arg("--port")
-        .arg(cfg.port.to_string())
-        .arg("-c")
-        .arg(cfg.ctx.to_string())
-        .arg("--n-gpu-layers")
-        .arg(cfg.gpu_layers.to_string())
+        .args(server_args(cfg))
         .stdin(Stdio::null())
         .stdout(Stdio::from(log_out))
         .stderr(Stdio::from(log_err))
@@ -304,20 +317,33 @@ pub fn ensure_server(cfg: &AriadnaConfig) -> Result<ServerGuard> {
 /// `temperature` 0.2, `max_tokens` 3072, плюс `chat_template_kwargs.
 /// enable_thinking=false` — иначе GRPO-модель генерирует многосотенные
 /// thinking-токены на простые вопросы (живой замер: 2500+ токенов на
-/// однострочный вопрос, ~10 минут генерации). Неподдерживаемые сервером
-/// kwargs игнорируются без ошибок.
+/// однострочный вопрос, ~10 минут генерации). kwargs применяются только
+/// если сервер запущен с `--jinja` (добавлен в [`server_args`], баг 20.07);
+/// неподдерживаемые сервером kwargs игнорируются без ошибок.
 ///
 /// # Errors
 /// Ошибка транспорта (сервер недоступен), не-2xx статус (в текст ошибки
 /// включается тело ответа), битый JSON, отсутствие `choices[0].message.content`.
 pub fn chat(cfg: &AriadnaConfig, messages: &[ChatMessage]) -> Result<String> {
+    chat_with_max_tokens(cfg, messages, CHAT_MAX_TOKENS)
+}
+
+/// То же, что [`chat`], но с явным потолком токенов ответа (CPU-фолбэк —
+/// усечённый бюджет [`CHAT_MAX_TOKENS_CPU`]).
+pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
+                            max_tokens: u32) -> Result<String> {
     let url = format!("{}/v1/chat/completions", cfg.base_url());
     let body = serde_json::json!({
         "model": MODEL_NAME,
         "messages": messages,
         "temperature": CHAT_TEMPERATURE,
-        "max_tokens": CHAT_MAX_TOKENS,
+        "max_tokens": max_tokens,
         "chat_template_kwargs": { "enable_thinking": false },
+        // стоп-секвенс против вырожденного цикла v10: модель генерирует
+        // бесконечные пустые «<think></think>» подряд (баг 20.07, доказано
+        // прямым запросом — enable_thinking его не лечит). Срезаем цикл на
+        // втором блоке: остаток сводится к честному маркеру вместо 10 минут.
+        "stop": ["</think>\n\n<think>"],
     });
     let client = http_client(CHAT_TIMEOUT)?;
     let resp = client
@@ -350,11 +376,37 @@ pub fn chat(cfg: &AriadnaConfig, messages: &[ChatMessage]) -> Result<String> {
 /// для серии задач выгоднее самим вызвать [`ensure_server`], держать
 /// гард и ходить в [`chat`] напрямую.
 ///
+/// Если порождённый сервер не смог поднять GPU (лог содержит «no usable GPU
+/// found» — CPU-фолбэк, генерация в ~20 раз медленнее), к ответу добавляется
+/// честная пометка `[system: …]`, чтобы родительский агент понимал задержку.
+///
 /// # Errors
 /// Сумма ошибок [`ensure_server`] и [`chat`].
 pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String> {
-    let _guard = ensure_server(cfg)?;
-    chat(cfg, &[ChatMessage::system(system), ChatMessage::user(task)])
+    let guard = ensure_server(cfg)?;
+    // CPU-фолбэк порождённого сервера (баг 20.07: ggml_cuda_init упал,
+    // генерация ~5 ток/с, агент висел 10 минут) — усечённый бюджет токенов
+    // (v10 игнорирует enable_thinking, стопить можно только потолком) + пометка
+    let on_cpu = guard.log_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|c| cpu_fallback(&c));
+    let max_tokens = if on_cpu { CHAT_MAX_TOKENS_CPU } else { CHAT_MAX_TOKENS };
+    let answer = chat_with_max_tokens(cfg,
+        &[ChatMessage::system(system), ChatMessage::user(task)], max_tokens)?;
+    if on_cpu {
+        return Ok(format!(
+            "{answer}\n[system: Ариадна работает на CPU — GPU недоступен \
+             (ggml_cuda_init failed); бюджет ответа усечён до {CHAT_MAX_TOKENS_CPU} \
+             токенов против бегущего thinking у v10. Рекомендуется поднять \
+             сервер на GPU или использовать GGUF с рабочим enable_thinking]"
+        ));
+    }
+    Ok(answer)
+}
+
+/// CPU-фолбэк по логу сервера: ggml_cuda_init упал → «no usable GPU found».
+fn cpu_fallback(log_content: &str) -> bool {
+    log_content.contains("no usable GPU found")
 }
 
 /// Жив ли сервер: `/health` отвечает успешным статусом. Любая ошибка
@@ -653,6 +705,31 @@ mod tests {
         assert_eq!(cfg.base_url(), "http://10.0.0.7:1234");
     }
 
+    /// CPU-фолбэк по логу сервера (баг 20.07): «no usable GPU found» —
+    /// сигнал усечь бюджет токенов, v10 thinking потолком не стопить иначе.
+    #[test]
+    fn cpu_fallback_detects_log_marker() {
+        assert!(cpu_fallback("warning: no usable GPU found, --gpu-layers option will be ignored"));
+        assert!(!cpu_fallback("ggml_cuda_init: OK, using CUDA device 0"));
+        assert!(!cpu_fallback(""));
+    }
+
+    /// Аргументы llama-server (баг 20.07): `--jinja` обязателен — без него
+    /// `chat_template_kwargs.enable_thinking=false` игнорируется GRPO-шаблоном,
+    /// и модель «думает» 2500+ токенов на trivial-вопрос (10 минут на CPU).
+    #[test]
+    fn server_args_contain_jinja_and_model() {
+        let cfg = AriadnaConfig::default();
+        let args = server_args(&cfg);
+        assert!(args.iter().any(|a| a == "--jinja"),
+            "без --jinja enable_thinking не работает: {args:?}");
+        let model_pos = args.iter().position(|a| a == "--model").expect("--model");
+        assert!(args[model_pos + 1].contains("ariadna"));
+        let port_pos = args.iter().position(|a| a == "--port").expect("--port");
+        assert_eq!(args[port_pos + 1], "8399");
+        assert!(args.iter().any(|a| a == "--n-gpu-layers"));
+    }
+
     #[test]
     fn chat_message_constructors_and_serialization() {
         assert_eq!(ChatMessage::system("s"), ChatMessage { role: "system".into(), content: "s".into() });
@@ -837,6 +914,8 @@ mod tests {
         assert_eq!(body["model"], json!("ariadna"));
         assert_eq!(body["temperature"], json!(0.2));
         assert_eq!(body["max_tokens"], json!(3072));
+        // стоп-секвенс против вырожденного цикла пустых think-блоков у v10
+        assert_eq!(body["stop"], json!(["</think>\n\n<think>"]));
         let messages = body["messages"].as_array().expect("messages — массив");
         assert_eq!(messages.len(), 2);
         assert_eq!(messages[0], json!({"role": "system", "content": "SYS"}));
