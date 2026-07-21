@@ -902,6 +902,10 @@ pub struct TuiApp {
     stream_text: String,
     /// длина стрим-блока в строках лога (для drain при перерендере)
     stream_block_len: usize,
+    /// желобок первой строки стрим-блока с ЗАМОРОЖЕННЫМ временем начала стрима
+    /// (баг хронологии 21.07: перерендер на дельтах обновлял HH:MM текущим
+    /// временем, и блок «переезжал» вперёд — оказывался выше старших строк)
+    stream_gutter: Option<Vec<Span<'static>>>,
     /// активная цветовая тема (дизайн-токены crate::theme; dark по умолчанию)
     theme: Theme,
     /// оценка токенов из последнего Status — для контекст-бара заголовка
@@ -1089,7 +1093,7 @@ impl TuiApp {
             git_status: String::new(),
             scroll: 0, follow: true, agent_done: false, started_at: Instant::now(),
             stream_open: false, stream_line_idx: None,
-            stream_text: String::new(), stream_block_len: 0,
+            stream_text: String::new(), stream_block_len: 0, stream_gutter: None,
             // дефолты для тестов и до инициализации в run_tui: dark-тема,
             // стандартный лимит, UTC; боевые значения подставляет run_tui
             theme: tui_theme("dark").unwrap_or_else(|| Theme::new("dark")),
@@ -1120,9 +1124,19 @@ impl TuiApp {
         let rendered = crate::markdown::render(&self.stream_text, 100);
         let lines = md_ansi_to_lines(&rendered);
         let count = lines.len();
+        // желобок первой строки — с ЗАМОРОЖЕННЫМ временем начала стрима:
+        // перерендеры не «переезжают» блок вперёд по хронологии (баг 21.07)
+        let first_gutter = match &self.stream_gutter {
+            Some(g) => g.clone(),
+            None => {
+                let g = self.gutter_first("◆ ", agent);
+                self.stream_gutter = Some(g.clone());
+                g
+            }
+        };
         for (off, spans) in lines.into_iter().enumerate() {
             let mut line = if off == 0 {
-                self.gutter_first("◆ ", agent)
+                first_gutter.clone()
             } else {
                 self.gutter_cont()
             };
@@ -1183,6 +1197,7 @@ impl TuiApp {
             self.stream_line_idx = None;
             self.stream_block_len = 0;
             self.stream_text.clear();
+            self.stream_gutter = None;
         }
         // стили — из активной темы (дизайн-токены), а не хардкод-цвета;
         // клонируем раз на событие, чтобы не держать заимствование self
@@ -1229,6 +1244,7 @@ impl TuiApp {
                 self.stream_line_idx = None;
                 self.stream_block_len = 0;
                 self.stream_text.clear();
+                self.stream_gutter = None;
             }
             AgentEvent::Reasoning(n) => {
                 self.begin_block(BlockKind::Agent);
@@ -1887,6 +1903,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                 app.stream_line_idx = None;
                 app.stream_block_len = 0;
                 app.stream_text.clear();
+                app.stream_gutter = None;
                 app.last_tool_open = None;
                 app.sel = None;
                 app.completion_cycle = None;
@@ -2931,6 +2948,34 @@ mod render_bug_tests {
         // стрим-состояние сброшено
         assert!(app.stream_line_idx.is_none() && app.stream_block_len == 0
             && app.stream_text.is_empty());
+    }
+
+    /// Хронология стрим-блока (баг 21.07): желобок первой строки заморожен
+    /// на начало стрима — перерендеры на дельтах не «переезжают» блок вперёд
+    /// по времени выше старших строк. После финала желобок сбрасывается.
+    #[test]
+    fn stream_block_timestamp_frozen_at_start() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::UserMsg("вопрос".into()));
+        app.on_event(AgentEvent::AgentTextDelta("первая часть".into()));
+        let g1: String = app.stream_gutter.as_ref().expect("желобок сохранён")
+            .iter().map(|s| s.content.to_string()).collect();
+        // первая строка блока открывается именно этим желобком
+        let idx = app.stream_line_idx.expect("блок есть");
+        let head: String = app.log[idx].spans.iter()
+            .map(|s| s.content.to_string()).collect();
+        assert!(head.starts_with(&g1), "блок открыт замороженным желобком: {head}");
+        // ещё дельта — желобок тот же объект, не перегенерирован
+        app.on_event(AgentEvent::AgentTextDelta("вторая часть".into()));
+        let g2: String = app.stream_gutter.as_ref().expect("желобок на месте")
+            .iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(g1, g2, "желобок «переехал» на новое время");
+        let head2: String = app.log[idx].spans.iter()
+            .map(|s| s.content.to_string()).collect();
+        assert!(head2.starts_with(&g1), "перерендер сменил желобок: {head2}");
+        // финал — желобок сброшен
+        app.on_event(AgentEvent::AgentText("финал".into()));
+        assert!(app.stream_gutter.is_none(), "после финала желобок не сброшен");
     }
 
     /// Преемпция стрима (баг «перемешивания времени» 20.07): прерванный

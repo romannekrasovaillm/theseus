@@ -586,6 +586,15 @@ impl ToolEnv {
     fn list_files(&self, args: &serde_json::Value) -> Result<String> {
         let base = self.resolve(args["path"].as_str().unwrap_or("."));
         let max = args["max_results"].as_u64().unwrap_or(100) as usize;
+        // явные ошибки вместо «(пусто)»: иначе модель принимала несуществующий
+        // путь за пустой каталог и уходила в ложную разведку (живой кейс 21.07:
+        // list_files library/index → «(пусто)» при отсутствующем каталоге)
+        if !base.exists() {
+            return Err(anyhow!("нет такого файла или каталога: {}", base.display()));
+        }
+        if !base.is_dir() {
+            return Err(anyhow!("не каталог: {}", base.display()));
+        }
         let mut out = vec![];
         walk(&base, &base, &mut out, max, 0)?;
         if out.is_empty() { return Ok("(пусто)".into()); }
@@ -1247,6 +1256,24 @@ mod tests {
         assert!(out.contains("unknown tool agent-sessions"), "{out}");
         assert!(out.contains("read_file"), "список инструментов: {out}");
         assert!(out.contains("skill"), "подсказка про скилл: {out}");
+    }
+
+    /// list_files: несуществующий путь и файл — явные ошибки, а не «(пусто)»
+    /// (живой кейс 21.07: модель приняла отсутствующий каталог за пустой).
+    #[test]
+    fn list_files_errors_on_missing_path_and_file() {
+        let dir = tdir("list-missing");
+        let mut env = ToolEnv::new(&dir);
+        let out = env.call("list_files", &serde_json::json!({"path": "no/such/dir"}));
+        assert!(out.starts_with("ERROR"), "{out}");
+        assert!(out.contains("нет такого файла или каталога"), "{out}");
+        std::fs::write(dir.join("f.txt"), "x").unwrap();
+        let out2 = env.call("list_files", &serde_json::json!({"path": "f.txt"}));
+        assert!(out2.starts_with("ERROR") && out2.contains("не каталог"), "{out2}");
+        // пустой каталог — по-прежнему честное «(пусто)»
+        std::fs::create_dir(dir.join("empty")).unwrap();
+        let out3 = env.call("list_files", &serde_json::json!({"path": "empty"}));
+        assert_eq!(out3, "(пусто)");
     }
 
     #[test]
