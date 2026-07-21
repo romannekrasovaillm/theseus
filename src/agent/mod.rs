@@ -60,6 +60,10 @@ pub struct Controls {
     /// запрос новой сессии из TUI (/new, /clear): агент при старте следующей
     /// задачи очищает session_history и пер-задачное состояние
     pub reset_session: Arc<AtomicBool>,
+    /// число работающих фоновых задач (субагенты/пиры/bash) — для индикатора
+    /// «фон: N» в шапке TUI (v0.6.6); BgRegistry инкрементит на старте и
+    /// декрементит на завершении
+    pub bg_running: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl Default for Controls {
@@ -71,6 +75,7 @@ impl Default for Controls {
             prompt_slot: Arc::new(Mutex::new(crate::scheduler::PromptQueue::new())),
             mode_atomic: Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_UNSET)),
             reset_session: Arc::new(AtomicBool::new(false)),
+            bg_running: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
         }
     }
 }
@@ -681,6 +686,8 @@ impl Agent {
     /// Основной цикл агента (общий для run и run_resume)
     fn run_with(&mut self, messages: &mut Vec<Message>, user_prompt: &str) -> Result<String> {
         self.todo_rejections = 0;
+        // счётчик фоновых задач в разделяемый атомик (индикатор «фон: N» в TUI)
+        self.bg.set_counter(self.controls.bg_running.clone());
         // сброс пер-задачного состояния: env.finished и детекторы живут в Agent,
         // который в TUI переиспользуется между вопросами. Без сброса второй вопрос
         // мгновенно «завершался» устаревшим env.finished от первой задачи

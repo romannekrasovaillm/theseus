@@ -14,11 +14,15 @@ pub struct BgTask {
     pub out: Arc<Mutex<String>>,
     child: Option<Child>,
     pub done: Arc<Mutex<Option<i32>>>,
+    /// потоковая задача (spawn_fn): результата — строка из замыкания, child нет
+    pub threaded: bool,
 }
 
 pub struct BgRegistry {
     tasks: BTreeMap<u64, BgTask>,
     next: u64,
+    /// разделяемый счётчик работающих задач (индикатор «фон: N» в TUI)
+    counter: Option<Arc<std::sync::atomic::AtomicUsize>>,
 }
 
 impl Default for BgRegistry {
@@ -29,7 +33,18 @@ impl Default for BgRegistry {
 
 impl BgRegistry {
     pub fn new() -> Self {
-        BgRegistry { tasks: BTreeMap::new(), next: 0 }
+        BgRegistry { tasks: BTreeMap::new(), next: 0, counter: None }
+    }
+
+    /// Подключить разделяемый счётчик работающих задач (Controls.bg_running).
+    pub fn set_counter(&mut self, counter: Arc<std::sync::atomic::AtomicUsize>) {
+        self.counter = Some(counter);
+    }
+
+    fn counter_inc(&self) {
+        if let Some(c) = &self.counter {
+            c.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 
     pub fn spawn(&mut self, command: &str, cwd: &PathBuf) -> Result<u64> {
@@ -63,14 +78,46 @@ impl BgRegistry {
             }
         });
 
+        self.counter_inc();
         self.tasks.insert(id, BgTask {
             id, command: command.to_string(), started: Instant::now(),
-            out, child: Some(child), done,
+            out, child: Some(child), done, threaded: false,
         });
         Ok(id)
     }
 
+    /// Фоновая ПОТОКОВАЯ задача (не процесс): замыкание производит строку-
+    /// результат (фоновые субагенты и peer-вызовы, v0.6.6 — Тесей продолжает
+    /// работу, не дожидаясь субагента). Процессного child нет: stop её не
+    /// убивает — время жизни ограничивают собственные бюджеты/таймауты задачи.
+    pub fn spawn_fn(&mut self, label: String, f: impl FnOnce() -> String + Send + 'static) -> u64 {
+        let out = Arc::new(Mutex::new(String::new()));
+        let done = Arc::new(Mutex::new(None));
+        self.next += 1;
+        let id = self.next;
+        let out2 = out.clone();
+        let done2 = done.clone();
+        let counter2 = self.counter.clone();
+        self.counter_inc();
+        std::thread::spawn(move || {
+            let res = f();
+            *out2.lock().unwrap() = res;
+            *done2.lock().unwrap() = Some(0);
+            if let Some(c) = counter2 {
+                let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)));
+            }
+        });
+        self.tasks.insert(id, BgTask {
+            id, command: label, started: Instant::now(),
+            out, child: None, done, threaded: true,
+        });
+        id
+    }
+
     pub fn output(&mut self, id: u64) -> String {
+        let counter = self.counter.clone();
         let Some(t) = self.tasks.get_mut(&id) else {
             return format!("ERROR: задача {id} не найдена");
         };
@@ -79,30 +126,52 @@ impl BgRegistry {
             if let Some(ch) = t.child.as_mut() {
                 if let Ok(Some(status)) = ch.try_wait() {
                     *t.done.lock().unwrap() = status.code();
+                    if let Some(c) = &counter {
+                        let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                            |v| Some(v.saturating_sub(1)));
+                    }
                     t.child = None;
                 }
             }
         }
         let status = match *t.done.lock().unwrap() {
             Some(code) => format!("завершена (exit {code:?})"),
-            None => "выполняется".to_string(),
+            // анти-flail (живой кейс 21.07: модель опросила task_output 7 раз
+            // подряд за 5с и бросила ждать) — направляем на другую работу
+            None => "выполняется — НЕ опрашивайте подряд: продолжайте другую \
+                     работу и заберите результат позже".to_string(),
         };
         let out = t.out.lock().unwrap().clone();
-        let tail = if out.len() > 4096 {
-            out.chars().skip(out.chars().count() - 400).collect::<String>()
+        // хвост: для процессов — последние ~400 символов лога, для потоковых
+        // (субагенты/пиры) — до ~2000: там результат целиком, он и есть payload
+        let tail_chars = if t.threaded { 2000 } else { 400 };
+        let tail = if out.len() > 4096 * 2 {
+            out.chars().skip(out.chars().count() - tail_chars).collect::<String>()
         } else { out };
         format!("[bg {}] {} | {:.0}s | {}\n{}", id, t.command, t.started.elapsed().as_secs_f32(), status, tail)
     }
 
     pub fn stop(&mut self, id: u64) -> String {
+        let counter = self.counter.clone();
         let Some(t) = self.tasks.get_mut(&id) else {
             return format!("ERROR: задача {id} не найдена");
         };
+        if t.threaded {
+            return format!(
+                "[bg {id}] потоковая задача (субагент/peer) не останавливается — \
+                 у неё свой бюджет/таймаут; дождитесь завершения");
+        }
         if let Some(ch) = t.child.as_mut() {
             let _ = ch.kill();
             let _ = ch.wait();
             *t.done.lock().unwrap() = Some(-9);
             t.child = None;
+            if let Some(c) = &counter {
+                let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)));
+            }
             format!("[bg {id}] остановлена")
         } else {
             format!("[bg {id}] уже завершена")
@@ -136,5 +205,62 @@ mod tests {
         let stop = reg.stop(43);
         assert!(stop.contains("43"), "id не подставлен: {stop}");
         assert!(!stop.contains("{id}"), "литерал-плейсхолдер остался: {stop}");
+    }
+
+    /// Счётчик работающих задач (индикатор «фон: N» в TUI): +1 на старте
+    /// потоковой задачи, −1 на завершении; процессная — декремент при
+    /// обнаружении выхода в output().
+    #[test]
+    fn counter_tracks_running_tasks() {
+        let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut reg = BgRegistry::new();
+        reg.set_counter(counter.clone());
+        let id = reg.spawn_fn("subagent — тест".into(), || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            "ok".to_string()
+        });
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 1,
+            "после старта — одна работающая");
+        for _ in 0..60 {
+            if counter.load(std::sync::atomic::Ordering::Relaxed) == 0 { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0,
+            "после завершения — ноль");
+        let _ = reg.output(id);
+        // процессная задача: спавн + обнаружение завершения
+        let id2 = reg.spawn("true", &std::env::temp_dir()).expect("spawn bash");
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 1);
+        for _ in 0..60 {
+            if counter.load(std::sync::atomic::Ordering::Relaxed) == 0 { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            let _ = reg.output(id2);
+        }
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0);
+    }
+
+    /// Потоковые фоновые задачи (v0.6.6 — фоновые субагенты/пиры): замыкание
+    /// производит результат, статус идёт «выполняется» → «завершена», stop
+    /// честно отказывает (не процесс).
+    #[test]
+    fn spawn_fn_lifecycle() {
+        let mut reg = BgRegistry::new();
+        let id = reg.spawn_fn("subagent explore — тест".into(), || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            "ответ субагента".to_string()
+        });
+        let running = reg.output(id);
+        assert!(running.contains("subagent explore"), "{running}");
+        // дождаться завершения потока
+        for _ in 0..50 {
+            if reg.output(id).contains("завершена") { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let done = reg.output(id);
+        assert!(done.contains("завершена"), "{done}");
+        assert!(done.contains("ответ субагента"), "результат потерян: {done}");
+        // stop на потоковой — честный отказ, а не «уже завершена»
+        let stop = reg.stop(id);
+        assert!(stop.contains("не останавливается"), "{stop}");
     }
 }

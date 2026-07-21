@@ -114,11 +114,12 @@ pub fn tool_specs() -> serde_json::Value {
             },"required":["query"]}}},
         {"type":"function","function":{
             "name":"peer_ask",
-            "description":"Ask an external CLI agent installed on this machine (claude=Claude Code, kimi=Kimi Code, codewhale, hermes=Hermes Agent, openclaw). Runs the agent headless with your task and returns its answer. Powerful: requires ask/yolo mode.",
+            "description":"Ask an external CLI agent installed on this machine (claude=Claude Code, kimi=Kimi Code, codewhale, hermes=Hermes Agent, openclaw). Runs the agent headless with your task and returns its answer. Powerful: requires ask/yolo mode. Set is_background=true to run it in background and keep working (collect via task_output).",
             "parameters":{"type":"object","properties":{
                 "agent":{"type":"string","description":"claude | kimi | codewhale | hermes | openclaw"},
                 "task":{"type":"string"},
-                "timeout_secs":{"type":"integer","description":"optional, per-agent default"}
+                "timeout_secs":{"type":"integer","description":"optional, per-agent default"},
+                "is_background":{"type":"boolean","description":"default false; true — run in background, returns bg id"}
             },"required":["agent","task"]}}},
         {"type":"function","function":{
             "name":"bash",
@@ -194,10 +195,11 @@ pub fn tool_specs() -> serde_json::Value {
             },"required":["todos"]}}},
         {"type":"function","function":{
             "name":"task",
-            "description":"Delegate a subtask to a subagent (isolated context, own budget). Agents: explore — codebase Q&A with file:line refs (readonly); plan — architecture implementation plan (readonly); code_review — diff/file review with findings by severity (readonly); test_runner — run build/tests/lint and report faithfully (bash, no source edits). Use to keep your own context clean.",
+            "description":"Delegate a subtask to a subagent (isolated context, own budget). Agents: explore — codebase Q&A with file:line refs (readonly); plan — architecture implementation plan (readonly); code_review — diff/file review with findings by severity (readonly); test_runner — run build/tests/lint and report faithfully (bash, no source edits). Use to keep your own context clean. Set is_background=true to run the subagent in background and keep working (collect via task_output).",
             "parameters":{"type":"object","properties":{
                 "agent":{"type":"string","description":"explore | plan | code_review | test_runner (default: explore)"},
-                "prompt":{"type":"string"}
+                "prompt":{"type":"string"},
+                "is_background":{"type":"boolean","description":"default false; true — run in background, returns bg id"}
             },"required":["prompt"]}}},
         {"type":"function","function":{
             "name":"finish",

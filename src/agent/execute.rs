@@ -155,6 +155,72 @@ impl Agent {
         }
     }
 
+    /// Запуск субагента синхронно или в ФОНЕ (v0.6.6, is_background): в фоне —
+    /// поток в BgRegistry, Тесей продолжает работу; результат — task_output.
+    fn spawn_or_run_subagent(&mut self, spec: &crate::agents::AgentSpec,
+                             prompt: &str, is_background: bool) -> String {
+        if !is_background {
+            return self.run_subagent(spec, prompt);
+        }
+        // owned-значения для потока (self в фон унести нельзя)
+        let sub_cfg = crate::subagent::SubConfig {
+            base_url: self.sub.base_url.clone(),
+            api_key: self.sub.api_key.clone(),
+            model: self.sub.model.clone(),
+            timeout_secs: self.sub.timeout_secs,
+            extra_body: self.sub.extra_body.clone(),
+            max_output_tokens: self.sub.max_output_tokens,
+        };
+        let ws = self.workspace.clone();
+        let spec2 = spec.clone();
+        let prompt2 = prompt.to_string();
+        let budget = crate::agents::default_budget(spec);
+        let sandbox = self.env.sandbox;
+        let label = format!("subagent {} — {}", spec.name,
+            prompt.chars().take(60).collect::<String>());
+        let id = self.bg.spawn_fn(label, move || {
+            match crate::subagent::run_agent(&sub_cfg, &ws, &spec2, &prompt2, budget, sandbox) {
+                Ok(res) => {
+                    let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
+                    format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
+                        res.summary, spec2.name, res.turns, res.tokens, note)
+                }
+                Err(e) => format!("ERROR: субагент «{}»: {e}", spec2.name),
+            }
+        });
+        format!("[bg {id}] субагент «{}» запущен в фоне — продолжайте работу; \
+                 результат заберите через task_output", spec.name)
+    }
+
+    /// Запуск peer-агента синхронно или в ФОНЕ (v0.6.6, is_background).
+    fn spawn_or_run_peer(&mut self, agent: &str, task: &str,
+                         timeout_secs: Option<u64>, is_background: bool) -> String {
+        if !is_background {
+            return run_peer_ask(self, agent, task, timeout_secs);
+        }
+        let Some(pspec) = crate::peers::builtin_peers().into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(agent)) else {
+            let known = crate::peers::builtin_peers().iter()
+                .map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+            return format!("ERROR: неизвестный peer-агент «{agent}». Доступно: {known}");
+        };
+        let timeout = std::time::Duration::from_secs(
+            timeout_secs.unwrap_or(pspec.default_timeout_secs).min(600));
+        let ws = self.workspace.clone();
+        let task2 = task.to_string();
+        let label = format!("peer {} — {}", pspec.name,
+            task.chars().take(60).collect::<String>());
+        let name2 = pspec.name.clone();
+        let id = self.bg.spawn_fn(label, move || {
+            match crate::peers::peer_ask(&pspec, &task2, &ws, timeout) {
+                Ok(out) => out,
+                Err(e) => format!("ERROR: peer «{name2}» недоступен или упал: {e:#}"),
+            }
+        });
+        format!("[bg {id}] peer «{agent}» запущен в фоне — продолжайте работу; \
+                 результат заберите через task_output")
+    }
+
     fn execute_inner(&mut self, call: &ToolCall, name: &str, args: serde_json::Value) -> String {
         // v0.2: MCP-роутинг
         if let Some(rest) = name.strip_prefix("mcp__") {
@@ -176,6 +242,7 @@ impl Agent {
                 // DontAsk → Deny (некому подтвердить), Ask → Ask (попап), Yolo → Allow.
                 let agent = args["agent"].as_str().unwrap_or("").to_lowercase();
                 let task = args["task"].as_str().unwrap_or("").to_string();
+                let is_bg = args["is_background"].as_bool().unwrap_or(false);
                 let mode = self.perms.mode();
                 // решение как внутреннее представление: Allow исполняем сразу,
                 // Ask — через попап, Deny — с причиной
@@ -199,12 +266,12 @@ impl Agent {
                     PeerGate::Ask(question) => {
                         let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
                         if allow {
-                            run_peer_ask(self, &agent, &task, args["timeout_secs"].as_u64())
+                            self.spawn_or_run_peer(&agent, &task, args["timeout_secs"].as_u64(), is_bg)
                         } else {
                             format!("DENIED: пользователь отклонил peer_ask к «{agent}»")
                         }
                     }
-                    PeerGate::Allow => run_peer_ask(self, &agent, &task, args["timeout_secs"].as_u64()),
+                    PeerGate::Allow => self.spawn_or_run_peer(&agent, &task, args["timeout_secs"].as_u64(), is_bg),
                 };
                 let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
                 self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
@@ -213,6 +280,7 @@ impl Agent {
             "task" => {
                 let agent_name = args["agent"].as_str().unwrap_or("explore").to_string();
                 let prompt = args["prompt"].as_str().unwrap_or("").to_string();
+                let is_bg = args["is_background"].as_bool().unwrap_or(false);
                 // маршрутизация по реестру типов (v0.6.2): explore/plan/code_review/
                 // test_runner из crate::agents — раньше был захардкожен только explore
                 let registry = crate::agents::AgentRegistry::with_builtins();
@@ -250,12 +318,12 @@ impl Agent {
                     SubGate::Ask(question) => {
                         let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
                         if allow {
-                            self.run_subagent(&spec, &prompt)
+                            self.spawn_or_run_subagent(&spec, &prompt, is_bg)
                         } else {
                             format!("DENIED: пользователь отклонил субагента «{}»", spec.name)
                         }
                     }
-                    SubGate::Allow => self.run_subagent(&spec, &prompt),
+                    SubGate::Allow => self.spawn_or_run_subagent(&spec, &prompt, is_bg),
                 };
                 let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
                 self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });

@@ -934,6 +934,9 @@ pub struct TuiApp {
     /// код режима разрешений из Controls.mode_atomic (обновляется в цикле run_tui):
     /// индикатор режима в заголовке ввода слева (Совет/Авто-правки/Автомат)
     mode_code: u8,
+    /// число работающих фоновых задач из Controls.bg_running (обновляется в
+    /// цикле run_tui): индикатор «фон: N» в шапке (v0.6.6)
+    bg_running: usize,
     /// курсор в поле ввода — символьный индекс (многострочный ввод v0.6.3):
     /// вставка/удаление идут по курсору, не только в конце строки
     cursor: usize,
@@ -1102,6 +1105,7 @@ impl TuiApp {
             completion_cycle: None, block_kind: None,
             sel: None, log_area: Rect::default(), last_tool_open: None,
             mode_code: crate::permissions::MODE_UNSET,
+            bg_running: 0,
             cursor: 0,
         }
     }
@@ -1416,6 +1420,17 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         head.push(Span::styled(
             format!("{} работаю…", spinner_frame(tick)),
             role_style(&app.theme, ThemeRole::Accent),
+        ));
+    }
+    if app.bg_running > 0 {
+        // фоновые агенты (субагенты/пиры/bash): свой индикатор с пульсом
+        // (v0.6.6) — виден и когда основной агент свободен
+        let tick = app.started_at.elapsed().as_millis() as u64 / 250;
+        let pulse = ["⡀", "⣀", "⣠", "⣰"][(tick % 4) as usize];
+        head.push(sep());
+        head.push(Span::styled(
+            format!("{pulse} фон: {}", app.bg_running),
+            role_style(&app.theme, ThemeRole::ToolName),
         ));
     }
     if let Some(est) = app.ctx_est_tokens {
@@ -1976,6 +1991,8 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
         app.agent_running = matches!(state, AState::Running(_));
         // индикатор режима разрешений (слева в заголовке ввода)
         app.mode_code = controls.mode_atomic.load(std::sync::atomic::Ordering::Relaxed);
+        // индикатор фоновых задач в шапке («фон: N»)
+        app.bg_running = controls.bg_running.load(std::sync::atomic::Ordering::Relaxed);
         let pq = broker.peek();
         terminal.draw(|f| draw(f, &mut app, pq.as_deref()))?;
 
@@ -3000,6 +3017,23 @@ mod render_bug_tests {
             "старая часть должна остаться выше вставки: {text:?}");
         assert!(pos_second > pos_interject,
             "продолжение ушло ВЫШЕ вставки — перемешивание времени: {text:?}");
+    }
+
+    /// Индикатор фоновых агентов (v0.6.6): в шапке виден «фон: N» с пульсом,
+    /// когда N > 0; при нуле — скрыт.
+    #[test]
+    fn bg_indicator_visible_when_tasks_running() {
+        let mut app = TuiApp::new();
+        app.bg_running = 2;
+        let backend = TestBackend::new(120, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        assert!(joined.contains("фон: 2"), "нет индикатора фона:\n{joined}");
+        app.bg_running = 0;
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined2 = buffer_lines(&terminal).join("\n");
+        assert!(!joined2.contains("фон:"), "индикатор не скрылся:\n{joined2}");
     }
 
     /// Ручной скролл колесом (баг пользователя 20.07 «проваливается в пустой
