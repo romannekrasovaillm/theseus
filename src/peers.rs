@@ -4,7 +4,9 @@
 //! соседние агентные CLI, установленные на машине, в их headless-режиме
 //! (команды проверены на машине пользователя):
 //!
-//! - Claude Code — `claude -p {task}` (текстовый ответ в stdout);
+//! - Claude Code — `claude --dangerously-skip-permissions -p {task}`
+//!   (текстовый ответ в stdout; флаг — чтобы CLI не ждал интерактивного
+//!   подтверждения разрешений и не висел до таймаута в headless-захвате);
 //! - Kimi Code — `kimi -p {task}`;
 //! - CodeWhale — `codewhale exec {task}`;
 //! - Hermes Agent — `hermes -z {task}`;
@@ -91,7 +93,11 @@ pub fn builtin_peers() -> Vec<PeerSpec> {
         default_timeout_secs,
     };
     vec![
-        spec("claude", "claude", &["-p", TASK_PLACEHOLDER], 300),
+        // claude: --dangerously-skip-permissions — иначе в headless-захвате CLI
+        // ждёт интерактивного подтверждения разрешений (write/bash) и молча
+        // висит до таймаута 300с (живой кейс 21.07: два вызова убиты таймаутом
+        // с пустым stderr). Свой гейт разрешений есть на уровне peer_ask.
+        spec("claude", "claude", &["--dangerously-skip-permissions", "-p", TASK_PLACEHOLDER], 300),
         spec("kimi", "kimi", &["-p", TASK_PLACEHOLDER], 300),
         spec("codewhale", "codewhale", &["exec", TASK_PLACEHOLDER], 300),
         spec("hermes", "hermes", &["-z", TASK_PLACEHOLDER], 300),
