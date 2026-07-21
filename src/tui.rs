@@ -1173,6 +1173,17 @@ impl TuiApp {
         if !matches!(ev, AgentEvent::AgentTextDelta(_)) {
             self.stream_open = false;
         }
+        // финализация прерванного стрима — ТОЛЬКО по вставке пользователя
+        // (преемпция Ctrl+S / очередь): частичный блок остаётся как есть,
+        // следующая дельта начнёт НОВЫЙ блок ПОСЛЕ вставки, а не в старой
+        // позиции над ней (баг «перемешивания времени» 20.07).
+        // Reasoning/Status НЕ сбрасывают: они идут между дельтами и AgentText
+        // в нормальном ходе, и сброс ломал бы замену стрим-блока (дубли).
+        if matches!(ev, AgentEvent::UserMsg(_)) {
+            self.stream_line_idx = None;
+            self.stream_block_len = 0;
+            self.stream_text.clear();
+        }
         // стили — из активной темы (дизайн-токены), а не хардкод-цвета;
         // клонируем раз на событие, чтобы не держать заимствование self
         let theme = self.theme.clone();
@@ -2920,6 +2931,30 @@ mod render_bug_tests {
         // стрим-состояние сброшено
         assert!(app.stream_line_idx.is_none() && app.stream_block_len == 0
             && app.stream_text.is_empty());
+    }
+
+    /// Преемпция стрима (баг «перемешивания времени» 20.07): прерванный
+    /// Ctrl+S/вставкой блок финализируется на месте, а продолжение ответа
+    /// начинает НОВЫЙ блок ПОСЛЕ вставки — не уходит в старую позицию выше неё.
+    #[test]
+    fn preempted_stream_finalizes_next_delta_starts_fresh_block() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::UserMsg("вопрос".into()));
+        app.on_event(AgentEvent::AgentTextDelta("часть ответа первая".into()));
+        // преемпция: вставка пользователя посреди хода (не-дельта событие)
+        app.on_event(AgentEvent::UserMsg("(вставка посреди хода) стоп".into()));
+        // следующая дельта — ответ на вставку — НЕ должна уйти в старую позицию
+        app.on_event(AgentEvent::AgentTextDelta("вторая часть ответа".into()));
+        let text: Vec<String> = app.log.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        let pos_first = text.iter().position(|t| t.contains("часть ответа первая")).unwrap();
+        let pos_interject = text.iter().position(|t| t.contains("вставка посреди хода")).unwrap();
+        let pos_second = text.iter().position(|t| t.contains("вторая часть ответа")).unwrap();
+        assert!(pos_first < pos_interject,
+            "старая часть должна остаться выше вставки: {text:?}");
+        assert!(pos_second > pos_interject,
+            "продолжение ушло ВЫШЕ вставки — перемешивание времени: {text:?}");
     }
 
     /// Ручной скролл колесом (баг пользователя 20.07 «проваливается в пустой
