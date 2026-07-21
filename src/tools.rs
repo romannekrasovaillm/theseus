@@ -405,7 +405,22 @@ impl ToolEnv {
                 self.finished = Some(s.clone());
                 Ok(s)
             }
-            other => Err(anyhow!("unknown tool {other}")),
+            other => {
+                // полезная ошибка вместо голой «unknown tool» (урок тройки):
+                // список реальных инструментов + подсказка про скилл — иначе
+                // модель флаила несколько ходов (живой кейс 21.07: модель
+                // вызвала «agent-sessions» — это скилл, а не инструмент)
+                let specs = tool_specs();
+                let names: Vec<&str> = specs.as_array()
+                    .map(|a| a.iter().filter_map(|t| t["function"]["name"].as_str()).collect())
+                    .unwrap_or_default();
+                Err(anyhow!(
+                    "unknown tool {other}. Доступные инструменты: {}. \
+                     Если «{other}» — это скилл, загрузите его инструментом skill \
+                     (поиск по имени — skill_search).",
+                    names.join(", ")
+                ))
+            }
         }
     }
 
@@ -1220,6 +1235,18 @@ mod tests {
         };
         let msg = concept_not_found_message("zzz", &[&card]);
         assert_eq!(msg, "концепт «zzz» не найден. Похожие: grpo");
+    }
+
+    /// Полезная ошибка неизвестного инструмента (живой кейс 21.07 — модель
+    /// вызвала скилл «agent-sessions» как инструмент): список реальных
+    /// инструментов + подсказка про skill.
+    #[test]
+    fn unknown_tool_error_lists_tools_and_skill_hint() {
+        let mut env = ToolEnv::new(Path::new("/tmp"));
+        let out = env.call("agent-sessions", &serde_json::json!({}));
+        assert!(out.contains("unknown tool agent-sessions"), "{out}");
+        assert!(out.contains("read_file"), "список инструментов: {out}");
+        assert!(out.contains("skill"), "подсказка про скилл: {out}");
     }
 
     #[test]

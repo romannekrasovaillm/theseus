@@ -165,7 +165,10 @@ pub fn peer_ask(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration) -> R
     let cap = run_capture(&mut cmd, timeout)?;
     let Some(status) = cap.status else {
         bail!(
-            "агент «{}» ({}) не ответил за {}с — процесс убит; {}",
+            "агент «{}» ({}) не ответил за {}с — процесс убит; {}. \
+             НЕ повторяйте вызов к этому пиру с теми же аргументами — уменьшите \
+             задачу, выберите другого пира или выполните работу сами \
+             (живой кейс 21.07: повторный вызов сжёг ещё 300с)",
             spec.name, spec.binary, timeout.as_secs(), stderr_note(&cap.stderr)
         );
     };
