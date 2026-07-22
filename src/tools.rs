@@ -445,7 +445,20 @@ impl ToolEnv {
     }
 
     fn write_file(&self, args: &serde_json::Value) -> Result<String> {
-        let path = self.resolve(args["path"].as_str().unwrap_or(""));
+        let raw_path = args["path"].as_str().unwrap_or("");
+        // явная валидация вместо «Is a directory (os error 21)» (баг 22.07:
+        // модель вызвала write_file без path — получила непонятную ошибку ОС)
+        if raw_path.is_empty() {
+            return Err(anyhow!(
+                "write_file: параметр path обязателен — укажите путь к файлу \
+                 (например, \"notes/out.md\"), а не только content"));
+        }
+        let path = self.resolve(raw_path);
+        if path.is_dir() {
+            return Err(anyhow!(
+                "write_file: путь является каталогом — укажите путь к файлу: {}",
+                path.display()));
+        }
         let content = args["content"].as_str().unwrap_or("");
         if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
         std::fs::write(&path, content)?;
@@ -1276,6 +1289,26 @@ mod tests {
         std::fs::create_dir(dir.join("empty")).unwrap();
         let out3 = env.call("list_files", &serde_json::json!({"path": "empty"}));
         assert_eq!(out3, "(пусто)");
+    }
+
+    /// write_file без path и с каталогом вместо файла — явные ошибки вместо
+    /// «Is a directory (os error 21)» (баг 22.07 со скриншота пользователя).
+    #[test]
+    fn write_file_validates_missing_and_directory_path() {
+        let dir = tdir("write-validate");
+        let mut env = ToolEnv::new(&dir);
+        // без path — понятная ошибка с именем параметра
+        let out = env.call("write_file", &serde_json::json!({"content": "x"}));
+        assert!(out.starts_with("ERROR"), "{out}");
+        assert!(out.contains("path обязателен"), "{out}");
+        // каталог вместо файла — понятная ошибка с путём
+        let out2 = env.call("write_file", &serde_json::json!({"path": ".", "content": "x"}));
+        assert!(out2.starts_with("ERROR"), "{out2}");
+        assert!(out2.contains("является каталогом"), "{out2}");
+        assert!(!out2.contains("os error"), "{out2}");
+        // валидный путь — работает как раньше
+        let out3 = env.call("write_file", &serde_json::json!({"path": "a/b.txt", "content": "x"}));
+        assert!(out3.starts_with("OK: записано"), "{out3}");
     }
 
     #[test]
