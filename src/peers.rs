@@ -76,7 +76,8 @@ pub enum PeerStatus {
 
 /// Пять штатных агентов-мостов с проверенными headless-режимами.
 ///
-/// Таймауты по умолчанию: 300 с для claude/kimi/codewhale/hermes
+/// Таймауты по умолчанию: 300 с для claude/kimi/codewhale, 600 с для hermes
+/// (медленнее — ревью-задачи ~5 минут), 180 с для openclaw.
 /// (долгие рассуждения — норма), 180 с для openclaw (embedded-старт медленнее).
 ///
 /// OpenClaw: работающая форма вызова на этой машине — `--local` (embedded,
@@ -100,7 +101,10 @@ pub fn builtin_peers() -> Vec<PeerSpec> {
         spec("claude", "claude", &["--dangerously-skip-permissions", "-p", TASK_PLACEHOLDER], 300),
         spec("kimi", "kimi", &["-p", TASK_PLACEHOLDER], 300),
         spec("codewhale", "codewhale", &["exec", TASK_PLACEHOLDER], 300),
-        spec("hermes", "hermes", &["-z", TASK_PLACEHOLDER], 300),
+        // hermes: таймаут 600с — ревью-задачи идут у него ~5 минут (несколько
+        // последовательных проходов модели): при 300с убивались на финише
+        // (живой кейс 22.07 — «Гермес завис»; замер зондом: ответ пришёл ~5.5 мин)
+        spec("hermes", "hermes", &["-z", TASK_PLACEHOLDER], 600),
         spec("openclaw", "openclaw",
             &["agent", "--local", "--session-id", "theseus",
               "--model", "deepseek/deepseek-v4-flash", "--message", TASK_PLACEHOLDER],
@@ -432,7 +436,7 @@ mod tests {
             assert_eq!(p.name, p.binary, "бинарь совпадает с именем: {p:?}");
         }
         let timeouts: Vec<u64> = peers.iter().map(|p| p.default_timeout_secs).collect();
-        assert_eq!(timeouts, [300, 300, 300, 300, 180]);
+        assert_eq!(timeouts, [300, 300, 300, 600, 180]);
     }
 
     #[test]
