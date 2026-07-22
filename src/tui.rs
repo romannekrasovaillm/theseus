@@ -1709,6 +1709,175 @@ fn cmd_skills(app: &mut TuiApp, filter: &str) {
     }
 }
 
+/// `/skill-search`: умный гибридный поиск по библиотеке скиллов.
+/// Запускает `scripts/smart_search.py` из скилла `tui-skill-finder`
+/// (BM25 + эмбеддинги, union-кандидаты для LLM-реранка). Вызов блокирующий
+/// с таймаутом — как probe в `/peers`: первый прогон дольше (загрузка модели).
+fn cmd_skill_search(app: &mut TuiApp, args: &str) {
+    let theme = app.theme.clone();
+    let accent = role_style(&theme, ThemeRole::Accent);
+    let dim = role_style(&theme, ThemeRole::Dim);
+    let error = role_style(&theme, ThemeRole::Error);
+
+    // разбор аргументов: флаги --audit/--no-embed, остальные слова — запрос
+    let mut audit = false;
+    let mut no_embed = false;
+    let mut words: Vec<&str> = vec![];
+    for tok in args.split_whitespace() {
+        match tok {
+            "--audit" => audit = true,
+            "--no-embed" => no_embed = true,
+            _ => words.push(tok),
+        }
+    }
+    let query = words.join(" ");
+    if !audit && query.is_empty() {
+        app.push(vec![Span::styled(
+            "использование: /skill-search <запрос> [--no-embed] [--audit]".to_string(), error)]);
+        return;
+    }
+
+    // каталоги скиллов — те же, что видит агент (конфиг + стандартные)
+    let mut dirs: Vec<PathBuf> = match crate::config::Config::load(None, None) {
+        Ok(cfg) => cfg.skill_dirs.iter().map(PathBuf::from).collect(),
+        Err(_) => vec![],
+    };
+    dirs.push(workspace_guess().join(".theseus/skills"));
+    if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+        dirs.push(home.join(".theseus/skills"));
+    }
+    let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
+
+    // скрипт ищем как скилл tui-skill-finder в любом из каталогов
+    let script = dirs.iter()
+        .map(|d| d.join("tui-skill-finder/scripts/smart_search.py"))
+        .find(|p| p.is_file());
+    let Some(script) = script else {
+        app.push(vec![Span::styled(
+            "smart-поиск недоступен: не найден <skill_dir>/tui-skill-finder/scripts/smart_search.py".to_string(),
+            error)]);
+        return;
+    };
+    if dirs.is_empty() {
+        app.push(vec![Span::styled("каталоги скиллов не найдены (skill_dirs в конфиге)".to_string(), error)]);
+        return;
+    }
+
+    app.push(vec![Span::styled(
+        if audit { "аудирую библиотеку…".to_string() } else { format!("🔎 ищу «{query}» (первый прогон — до ~10с на загрузку модели)…") },
+        dim)]);
+
+    for dir in &dirs {
+        let mut cmd = std::process::Command::new("python3");
+        cmd.arg(&script).arg("--folder").arg(dir).arg("--format").arg("json");
+        if audit {
+            cmd.arg("--audit");
+        } else {
+            cmd.arg("--query").arg(&query);
+        }
+        if no_embed {
+            cmd.arg("--no-embed");
+        }
+        // запуск с таймаутом: python + загрузка модели не должны висеть вечно
+        let child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn();
+        let mut child = match child {
+            Ok(c) => c,
+            Err(e) => {
+                app.push(vec![Span::styled(format!("не удалось запустить python3: {e}"), error)]);
+                return;
+            }
+        };
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(180);
+        let status = loop {
+            match child.try_wait() {
+                Ok(Some(st)) => break Some(st),
+                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(100)),
+                Ok(None) => { let _ = child.kill(); break None; }
+                Err(_) => break None,
+            }
+        };
+        let Some(status) = status else {
+            app.push(vec![Span::styled(format!("таймаут 180с при поиске в {}", dir.display()), error)]);
+            continue;
+        };
+        let mut out = String::new();
+        if let Some(mut so) = child.stdout.take() {
+            use std::io::Read as _;
+            let _ = so.read_to_string(&mut out);
+        }
+        if !status.success() {
+            app.push(vec![Span::styled(format!("smart_search завершился с ошибкой ({status}) в {}", dir.display()), error)]);
+            continue;
+        }
+        let parsed: serde_json::Value = match serde_json::from_str(&out) {
+            Ok(v) => v,
+            Err(e) => {
+                app.push(vec![Span::styled(format!("не смог разобрать вывод smart_search: {e}"), error)]);
+                continue;
+            }
+        };
+        if audit {
+            render_skill_audit(app, &parsed, dir, &theme);
+        } else {
+            render_skill_search(app, &parsed, &query, dir, &theme);
+        }
+    }
+    let _ = accent;
+}
+
+/// Рендер JSON-вывода smart_search.py (режим поиска).
+fn render_skill_search(app: &mut TuiApp, v: &serde_json::Value, query: &str,
+                       dir: &std::path::Path, theme: &crate::theme::Theme) {
+    let accent = role_style(theme, ThemeRole::Accent);
+    let dim = role_style(theme, ThemeRole::Dim);
+    let cands = v["candidates"].as_array().cloned().unwrap_or_default();
+    let embed = v["embed_status"].as_str().unwrap_or("?");
+    let ms = v["elapsed_ms"].as_u64().unwrap_or(0);
+    app.push(vec![Span::styled(
+        format!("🔎 «{query}» в {}: кандидатов {} (эмбеддинги: {embed}, {ms}мс)",
+                dir.display(), cands.len()),
+        accent)]);
+    for (i, c) in cands.iter().take(8).enumerate() {
+        let name = c["name"].as_str().unwrap_or("?");
+        let desc: String = c["description"].as_str().unwrap_or("").chars().take(100).collect();
+        let ranks = c["channel_ranks"].as_object().map(|m| m.iter()
+            .map(|(k, v)| format!("{k}#{}", v.as_u64().unwrap_or(0)))
+            .collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        app.push(vec![Span::styled(format!("  {}. {name} [{ranks}]", i + 1), dim)]);
+        app.push(vec![Span::styled(format!("     {desc}"), dim)]);
+    }
+    let fused = v["fused_ranking"].as_array().map(|f| f.iter()
+        .filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    if !fused.is_empty() {
+        app.push(vec![Span::styled(format!("  fused топ: {fused}"), dim)]);
+    }
+    app.push(vec![Span::styled(
+        "реранк — за агентом: напишите «загрузи скилл <имя>», и он прочитает SKILL.md и применит его".to_string(),
+        accent)]);
+}
+
+/// Рендер JSON-вывода smart_search.py --audit (здоровье библиотеки).
+fn render_skill_audit(app: &mut TuiApp, v: &serde_json::Value,
+                      dir: &std::path::Path, theme: &crate::theme::Theme) {
+    let accent = role_style(theme, ThemeRole::Accent);
+    let dim = role_style(theme, ThemeRole::Dim);
+    let total = v["skills_total"].as_u64().unwrap_or(0);
+    let unique = v["skills_unique"].as_u64().unwrap_or(0);
+    let dups = v["duplicate_names"].as_array().cloned().unwrap_or_default();
+    let empty = v["empty_description"].as_array().cloned().unwrap_or_default();
+    let no_tags = v["no_tags_count"].as_u64().unwrap_or(0);
+    app.push(vec![Span::styled(
+        format!("📋 аудит {}: {total} скиллов, уникальных {unique}, без тегов {no_tags}", dir.display()),
+        accent)]);
+    let join = |a: &[serde_json::Value]| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ");
+    if !dups.is_empty() {
+        app.push(vec![Span::styled(format!("  дубли имён ({}): {}", dups.len(), join(&dups)), dim)]);
+    }
+    if !empty.is_empty() {
+        app.push(vec![Span::styled(format!("  пустые описания: {}", join(&empty)), dim)]);
+    }
+}
+
 /// `/memory`: сводка кросс-сессионной памяти (файл ~/.theseus/memory/MEMORY.md).
 fn cmd_memory(app: &mut TuiApp) {
     match std::env::var("HOME").ok().map(PathBuf::from) {
@@ -1886,6 +2055,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                     accent)]);
             }
             "skills" => cmd_skills(app, args),
+            "skill-search" => cmd_skill_search(app, args),
             "memory" => cmd_memory(app),
             "sessions" => cmd_sessions(app),
             "trace" => cmd_trace(app),
@@ -2499,6 +2669,16 @@ mod ui_helpers_tests {
             || c.aliases.iter().any(|a| a.starts_with('m'))));
     }
 
+    /// /skill-search: команда в реестре, доступна по имени и алиасу /sfind.
+    #[test]
+    fn slash_completion_skill_search() {
+        assert!(slash_completions("/skill").iter().any(|c| c.name == "skill-search"));
+        // префикс алиаса sfind тоже выводит на команду
+        assert!(slash_completions("/sfi").iter().any(|c| c.name == "skill-search"));
+        // полный реестр валиден (уникальность имён и алиасов)
+        assert!(slash::validate_commands(&slash::builtin_commands()).is_ok());
+    }
+
     /// Формат времени HH:MM: полночь, минуты, пояс +03:00, заворот назад.
     #[test]
     fn time_format_hhmm() {
@@ -2639,8 +2819,9 @@ mod ui_helpers_tests {
     /// Цикл: повторные Tab листают кандидатов по кругу и возвращаются к первому.
     #[test]
     fn complete_cycles_candidates() {
-        // по префиксу «s» два кандидата (skills, sessions) — цикл периода 2
-        let (first, c1) = slash_complete("/s", None).unwrap();
+        // по префиксу «t» два кандидата (theme, trace), общий префикс не длиннее
+        // введённого — цикл периода 2 без промежуточного расширения
+        let (first, c1) = slash_complete("/t", None).unwrap();
         let (second, c2) = slash_complete(&first, c1).unwrap();
         let (third, _) = slash_complete(&second, c2).unwrap();
         assert_ne!(first, second, "цикл обязан менять кандидата: {first} == {second}");

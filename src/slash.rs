@@ -136,6 +136,13 @@ static BUILTIN: &[SlashCmd] = &[
         kind: SlashKind::Local,
     },
     SlashCmd {
+        name: "skill-search",
+        aliases: &["sfind"],
+        summary: "Умный поиск скиллов по библиотеке (BM25 + эмбеддинги, кандидаты для реранка)",
+        usage: "/skill-search <запрос> [--no-embed] [--audit]",
+        kind: SlashKind::Local,
+    },
+    SlashCmd {
         name: "memory",
         aliases: &["mem"],
         summary: "Просмотр и редактирование памяти агента",
@@ -506,11 +513,12 @@ mod tests {
 
     #[test]
     fn suggestions_sorted_by_distance_then_alphabet() {
-        // «/s» — префикс у sessions и skills; обе на расстоянии 0,
+        // «/s» — префикс у sessions, skill-search и skills; все на расстоянии 0,
         // порядок — алфавитный.
         match parse("/s") {
             Parsed::Unknown { suggestions, .. } => {
-                assert_eq!(suggestions, vec!["sessions".to_string(), "skills".to_string()]);
+                assert_eq!(suggestions, vec!["sessions".to_string(),
+                    "skill-search".to_string(), "skills".to_string()]);
             }
             other => panic!("ожидался Unknown, получено: {other:?}"),
         }
@@ -600,7 +608,7 @@ mod tests {
     fn help_index_lists_all_commands() {
         let index = help_index();
         let cmds = builtin_commands();
-        assert!(index.contains("Доступные команды (19):"), "индекс:\n{index}");
+        assert!(index.contains("Доступные команды (20):"), "индекс:\n{index}");
         for cmd in &cmds {
             assert!(index.contains(&format!("/{}", cmd.name)), "нет /{} в индексе:\n{index}", cmd.name);
         }
@@ -668,7 +676,7 @@ mod tests {
     #[test]
     fn builtin_registry_shape() {
         let cmds = builtin_commands();
-        assert_eq!(cmds.len(), 19);
+        assert_eq!(cmds.len(), 20);
         for cmd in &cmds {
             assert!(!cmd.name.is_empty());
             assert!(cmd.usage.starts_with(&format!("/{}", cmd.name)), "usage {} не начинается с имени", cmd.name);
