@@ -37,3 +37,10 @@ config.local.toml
 # Извлечённые из docx тексты и скачанные дайджесты в корне (рабочие файлы)
 /docx_extracted/
 /*_????-??-??.md
+
+# Рабочие артефакты агента в корне (графы концептов, пробы записи)
+/graph.json
+/graph.md
+/*_graph.json
+/*_graph.md
+/.test_write
