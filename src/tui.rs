@@ -1713,7 +1713,10 @@ fn cmd_skills(app: &mut TuiApp, filter: &str) {
 /// Запускает `scripts/smart_search.py` из скилла `tui-skill-finder`
 /// (BM25 + эмбеддинги, union-кандидаты для LLM-реранка). Вызов блокирующий
 /// с таймаутом — как probe в `/peers`: первый прогон дольше (загрузка модели).
-fn cmd_skill_search(app: &mut TuiApp, args: &str) {
+/// Пронумерованный список дополнительно кладётся в notes_slot агента —
+/// иначе агент не видит выдачу и «загрузи скилл 2» резолвится по чужому
+/// списку (баг из живой сессии 19:48).
+fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
     let theme = app.theme.clone();
     let accent = role_style(&theme, ThemeRole::Accent);
     let dim = role_style(&theme, ThemeRole::Dim);
@@ -1767,6 +1770,8 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str) {
         if audit { "аудирую библиотеку…".to_string() } else { format!("🔎 ищу «{query}» (первый прогон — до ~10с на загрузку модели)…") },
         dim)]);
 
+    let mut next_num = 1usize;        // сквозная нумерация кандидатов по всем каталогам
+    let mut note_names: Vec<String> = vec![]; // имена в порядке экрана — для заметки агенту
     for dir in &dirs {
         let mut cmd = std::process::Command::new("python3");
         cmd.arg(&script).arg("--folder").arg(dir).arg("--format").arg("json");
@@ -1819,41 +1824,81 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str) {
         if audit {
             render_skill_audit(app, &parsed, dir, &theme);
         } else {
-            render_skill_search(app, &parsed, &query, dir, &theme);
+            next_num = render_skill_search(app, &parsed, &query, dir, &theme, next_num);
+            // имена в том же порядке и с той же нумерацией, что на экране, —
+            // в заметку агенту для разрешения ссылок по номеру
+            if let Some(cands) = parsed["candidates"].as_array() {
+                for c in cands {
+                    if let Some(n) = c["name"].as_str() {
+                        note_names.push(n.to_string());
+                    }
+                }
+            }
         }
+    }
+    // заметка агенту: пронумерованный список с экрана пользователя (только
+    // последний поиск; аудит списка не даёт — слот просто чистим)
+    let mut slot = controls.notes_slot.lock().unwrap();
+    slot.clear();
+    if !audit && !note_names.is_empty() {
+        slot.push(skill_search_note(&query, &note_names));
+        app.push(vec![Span::styled(
+            format!("📨 список из {} кандидатов передан агенту — «загрузи скилл N» теперь резолвится по нему", note_names.len()),
+            dim)]);
     }
     let _ = accent;
 }
 
+/// Текст заметки агенту со списком /skill-search (чистая функция — для тестов).
+fn skill_search_note(query: &str, names: &[String]) -> String {
+    let numbered: Vec<String> = names.iter().enumerate()
+        .map(|(i, n)| format!("{}. {}", i + 1, n)).collect();
+    format!("[context: пользователь выполнил /skill-search «{query}». На его экране пронумерованный список кандидатов: {}. Если пользователь ссылается на скилл по номеру или позиции («скилл 2», «второй», «загрузи 5»), разрешай номер строго по ЭТОМУ списку и загружай инструментом skill. Это контекст, а не задача.]",
+        numbered.join("; "))
+}
+
 /// Рендер JSON-вывода smart_search.py (режим поиска).
+/// `start` — с какого номера нумеровать (сквозная нумерация по каталогам);
+/// возвращает номер для следующего каталога.
 fn render_skill_search(app: &mut TuiApp, v: &serde_json::Value, query: &str,
-                       dir: &std::path::Path, theme: &crate::theme::Theme) {
+                       dir: &std::path::Path, theme: &crate::theme::Theme, start: usize) -> usize {
     let accent = role_style(theme, ThemeRole::Accent);
     let dim = role_style(theme, ThemeRole::Dim);
+    let lines = skill_search_lines(v, query, dir, start);
+    let count = v["candidates"].as_array().map(Vec::len).unwrap_or(0);
+    for (i, line) in lines.iter().enumerate() {
+        // первая строка (заголовок) и последняя (подсказка реранка) — акцентные
+        let style = if i == 0 || i + 1 == lines.len() { accent } else { dim };
+        app.push(vec![Span::styled(line.clone(), style)]);
+    }
+    start + count
+}
+
+/// Строки выдачи smart-поиска (чистая функция — для тестов).
+/// Все кандидаты по одной строке: имя + ранги каналов + усечённое описание;
+/// иначе хвост union-набора недоступен пользователю (баг: показывали только 8).
+fn skill_search_lines(v: &serde_json::Value, query: &str, dir: &std::path::Path, start: usize) -> Vec<String> {
     let cands = v["candidates"].as_array().cloned().unwrap_or_default();
     let embed = v["embed_status"].as_str().unwrap_or("?");
     let ms = v["elapsed_ms"].as_u64().unwrap_or(0);
-    app.push(vec![Span::styled(
-        format!("🔎 «{query}» в {}: кандидатов {} (эмбеддинги: {embed}, {ms}мс)",
-                dir.display(), cands.len()),
-        accent)]);
-    for (i, c) in cands.iter().take(8).enumerate() {
+    let mut out = vec![format!(
+        "🔎 «{query}» в {}: кандидатов {} (эмбеддинги: {embed}, {ms}мс)",
+        dir.display(), cands.len())];
+    for (i, c) in cands.iter().enumerate() {
         let name = c["name"].as_str().unwrap_or("?");
-        let desc: String = c["description"].as_str().unwrap_or("").chars().take(100).collect();
+        let desc: String = c["description"].as_str().unwrap_or("").chars().take(80).collect();
         let ranks = c["channel_ranks"].as_object().map(|m| m.iter()
             .map(|(k, v)| format!("{k}#{}", v.as_u64().unwrap_or(0)))
             .collect::<Vec<_>>().join(" ")).unwrap_or_default();
-        app.push(vec![Span::styled(format!("  {}. {name} [{ranks}]", i + 1), dim)]);
-        app.push(vec![Span::styled(format!("     {desc}"), dim)]);
+        out.push(format!("  {:>2}. {name} [{ranks}] — {desc}", start + i));
     }
     let fused = v["fused_ranking"].as_array().map(|f| f.iter()
         .filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
     if !fused.is_empty() {
-        app.push(vec![Span::styled(format!("  fused топ: {fused}"), dim)]);
+        out.push(format!("  fused топ: {fused}"));
     }
-    app.push(vec![Span::styled(
-        "реранк — за агентом: напишите «загрузи скилл <имя>», и он прочитает SKILL.md и применит его".to_string(),
-        accent)]);
+    out.push("реранк — за агентом: напишите «загрузи скилл <имя>», и он прочитает SKILL.md и применит его".to_string());
+    out
 }
 
 /// Рендер JSON-вывода smart_search.py --audit (здоровье библиотеки).
@@ -2055,7 +2100,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                     accent)]);
             }
             "skills" => cmd_skills(app, args),
-            "skill-search" => cmd_skill_search(app, args),
+            "skill-search" => cmd_skill_search(app, args, controls),
             "memory" => cmd_memory(app),
             "sessions" => cmd_sessions(app),
             "trace" => cmd_trace(app),
@@ -2677,6 +2722,47 @@ mod ui_helpers_tests {
         assert!(slash_completions("/sfi").iter().any(|c| c.name == "skill-search"));
         // полный реестр валиден (уникальность имён и алиасов)
         assert!(slash::validate_commands(&slash::builtin_commands()).is_ok());
+    }
+
+    /// Регрессия: выдача /skill-search показывает ВСЕХ кандидатов, а не первых 8.
+    #[test]
+    fn skill_search_renders_all_candidates() {
+        let cands: Vec<serde_json::Value> = (1..=12).map(|i| serde_json::json!({
+            "name": format!("skill-{i:02}"),
+            "description": format!("описание скилла номер {i}"),
+            "channel_ranks": {"bm25": i, "embed": i + 1},
+        })).collect();
+        let v = serde_json::json!({
+            "candidates": cands,
+            "fused_ranking": ["skill-01"],
+            "embed_status": "ok (test)",
+            "elapsed_ms": 42,
+        });
+        let lines = skill_search_lines(&v, "запрос", std::path::Path::new("/lib"), 1);
+        // заголовок + 12 кандидатов + fused + подсказка
+        assert_eq!(lines.len(), 1 + 12 + 1 + 1, "строки: {lines:?}");
+        assert!(lines[0].contains("кандидатов 12"));
+        for i in 1..=12 {
+            assert!(lines[i].contains(&format!("skill-{i:02}")), "нет кандидата {i}: {lines:?}");
+            assert!(lines[i].contains("bm25#"), "нет рангов каналов: {}", lines[i]);
+        }
+        assert!(lines[13].contains("fused топ: skill-01"));
+        assert!(lines[14].contains("реранк"));
+        // сквозная нумерация: start=10 → первый кандидат получает №10
+        let lines2 = skill_search_lines(&v, "запрос", std::path::Path::new("/lib"), 10);
+        assert!(lines2[1].contains("10. skill-01"), "нумерация со start: {}", lines2[1]);
+    }
+
+    /// Заметка агенту после /skill-search: нумерация совпадает с экраном,
+    /// есть явное правило разрешения ссылок по номеру (баг «загрузи скилл 2»).
+    #[test]
+    fn skill_search_note_maps_numbers() {
+        let names = vec!["qwen35-vast-grpo".to_string(), "ai-disrupt".to_string()];
+        let note = skill_search_note("vast ai", &names);
+        assert!(note.contains("1. qwen35-vast-grpo"), "note: {note}");
+        assert!(note.contains("2. ai-disrupt"), "note: {note}");
+        assert!(note.contains("«vast ai»"), "note: {note}");
+        assert!(note.contains("по номеру"), "note: {note}");
     }
 
     /// Формат времени HH:MM: полночь, минуты, пояс +03:00, заворот назад.

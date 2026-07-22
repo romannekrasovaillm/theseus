@@ -64,6 +64,11 @@ pub struct Controls {
     /// «фон: N» в шапке TUI (v0.6.6); BgRegistry инкрементит на старте и
     /// декрементит на завершении
     pub bg_running: Arc<std::sync::atomic::AtomicUsize>,
+    /// контекстные заметки от локальных слэш-команд (например, пронумерованный
+    /// список кандидатов /skill-search): подмешиваются к следующему промпту,
+    /// не порождая отдельного хода (урок: slash-вывод иначе невидим агенту —
+    /// баг «загрузи скилл 2» резолвился по чужому списку)
+    pub notes_slot: Arc<Mutex<Vec<String>>>,
 }
 
 impl Default for Controls {
@@ -76,8 +81,26 @@ impl Default for Controls {
             mode_atomic: Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_UNSET)),
             reset_session: Arc::new(AtomicBool::new(false)),
             bg_running: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+            notes_slot: Arc::new(Mutex::new(Vec::new())),
         }
     }
+}
+
+/// Слияние контекстных заметок слэш-команд с промптом пользователя (чистая
+/// функция — для тестов). Заметки идут первым блоком, промпт — после; агент
+/// видит то же, что пользователь на экране, без отдельного хода.
+fn merge_notes_into_prompt(notes: &[String], prompt: &str) -> String {
+    if notes.is_empty() {
+        return prompt.to_string();
+    }
+    let mut out = String::new();
+    for n in notes {
+        out.push_str(n);
+        out.push('\n');
+    }
+    out.push('\n');
+    out.push_str(prompt);
+    out
 }
 
 pub(crate) struct GoalState {
@@ -708,6 +731,12 @@ impl Agent {
             user_prompt = format!("The user set a GOAL for this session: {rest}. Work toward it; it will be audited.");
         }
         // скиллы попали в системный промпт при сборке (build_system_prompt, секция Available skills)
+        // контекстные заметки локальных команд (список /skill-search и т.п.) —
+        // подмешиваем к промпту, чтобы агент видел то же, что и пользователь
+        let notes: Vec<String> = self.controls.notes_slot.lock().unwrap().drain(..).collect();
+        if !notes.is_empty() {
+            user_prompt = merge_notes_into_prompt(&notes, &user_prompt);
+        }
         messages.push(Message::user(user_prompt.clone()));
         self.emit(AgentEvent::UserMsg(user_prompt.clone()));
         // Единый движок hooks_ext (V3 #2.2): SessionStart и UserPromptSubmit —
@@ -1031,6 +1060,18 @@ impl Agent {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+    /// Заметки слэш-команд идут первым блоком, промпт следом; без замет — as-is.
+    #[test]
+    fn merge_notes_prepends_context() {
+        let notes = vec!["[context: список: 1. a; 2. b]".to_string()];
+        let merged = merge_notes_into_prompt(&notes, "загрузи скилл 2");
+        assert!(merged.starts_with("[context: список: 1. a; 2. b]"));
+        assert!(merged.ends_with("загрузи скилл 2"));
+        assert!(merged.len() > notes[0].len() + 1);
+        let bare = merge_notes_into_prompt(&[], "просто вопрос");
+        assert_eq!(bare, "просто вопрос", "без замет промпт не должен меняться");
+    }
 
     /// Уникальный временный workspace (тесты бегут параллельно).
     fn temp_ws(tag: &str) -> PathBuf {
