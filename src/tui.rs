@@ -1234,21 +1234,36 @@ impl TuiApp {
                 self.push(line);
             }
             AgentEvent::AgentText(t) => {
-                // финальный текст — тот же блок, последний перерендер точным текстом
-                // (на случай потерянных дельт); стрим-состояние сбрасывается
-                self.stream_text = t;
-                if self.stream_line_idx.is_none() {
-                    // ответ пришёл одним куском без дельт — блока ещё нет
-                    self.begin_block(BlockKind::Agent);
-                    self.stream_line_idx = Some(self.log.len());
-                    self.stream_block_len = 0;
+                // финальный текст — ВСЕГДА в конец лога (хронология, баг 22.07):
+                // стрим-блок снимается по индексу, итоговый markdown-рендер
+                // дописывается вниз. Рендер по старому индексу оставлял ответ
+                // ВЫШЕ строк, записанных во время стрима (Reasoning, инструменты,
+                // очередь) — пользователю приходилось скроллить вверх за ответом.
+                if let Some(idx) = self.stream_line_idx.take() {
+                    let end = (idx + self.stream_block_len).min(self.log.len());
+                    if idx < end {
+                        self.log.drain(idx..end);
+                    }
+                    if self.follow { self.scroll = self.log.len().saturating_sub(1); }
                 }
-                self.render_stream_block();
-                self.stream_open = false;
-                self.stream_line_idx = None;
                 self.stream_block_len = 0;
                 self.stream_text.clear();
-                self.stream_gutter = None;
+                // желобок с замороженным временем начала стрима — переносим его
+                // с блока в финальный ответ внизу (время рождения сохраняется)
+                let agent = role_style(&theme, ThemeRole::AgentText);
+                let first_gutter = self.stream_gutter.take()
+                    .unwrap_or_else(|| self.gutter_first("◆ ", agent));
+                self.begin_block(BlockKind::Agent);
+                let rendered = crate::markdown::render(&t, 100);
+                for (i, spans) in md_ansi_to_lines(&rendered).into_iter().enumerate() {
+                    let mut line = if i == 0 {
+                        first_gutter.clone()
+                    } else {
+                        self.gutter_cont()
+                    };
+                    line.extend(spans);
+                    self.push(line);
+                }
             }
             AgentEvent::Reasoning(n) => {
                 self.begin_block(BlockKind::Agent);
@@ -2967,6 +2982,28 @@ mod render_bug_tests {
             && app.stream_text.is_empty());
     }
 
+    /// Хронология финала (баг 22.07): AgentText — ВСЕГДА в конец лога,
+    /// а не по индексу стрим-блока: строки, записанные во время стрима
+    /// (Reasoning/инструменты/очередь), остаются выше, ответ — внизу.
+    #[test]
+    fn agent_text_goes_to_log_end_after_intermediate_lines() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::AgentTextDelta("часть ответа".into()));
+        // промежуточная строка ПОСЛЕ начала стрима
+        app.on_event(AgentEvent::Reasoning(42));
+        app.on_event(AgentEvent::AgentText("финальный ответ полностью".into()));
+        let text: Vec<String> = app.log.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        let pos_reasoning = text.iter().position(|t| t.contains("мышление")).unwrap();
+        let pos_final = text.iter().position(|t| t.contains("финальный ответ полностью")).unwrap();
+        assert!(pos_final > pos_reasoning,
+            "ответ не в конце лога (инверсия хронологии): {text:?}");
+        // частичный стрим-блок снят — дублей нет
+        let partial = text.iter().filter(|t| t.contains("часть ответа")).count();
+        assert_eq!(partial, 0, "частичный блок не снят: {text:?}");
+    }
+
     /// Хронология стрим-блока (баг 21.07): желобок первой строки заморожен
     /// на начало стрима — перерендеры на дельтах не «переезжают» блок вперёд
     /// по времени выше старших строк. После финала желобок сбрасывается.
@@ -3317,3 +3354,5 @@ mod clipboard_tests {
         assert_eq!(String::from_utf8(out.stdout).unwrap(), text);
     }
 }
+
+
