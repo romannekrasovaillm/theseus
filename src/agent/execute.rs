@@ -12,8 +12,7 @@ use std::sync::atomic::Ordering;
 
 /// Вызов внешнего peer-агента по имени (crate::peers): спек из builtin-реестра,
 /// исполнение в workspace агента с таймаутом из конфига спеки или args.
-fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>) -> String {
-    let Some(spec) = crate::peers::builtin_peers().into_iter()
+fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>) -> String {    let Some(spec) = crate::peers::builtin_peers().into_iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
     else {
         let known = crate::peers::builtin_peers().iter()
@@ -28,7 +27,43 @@ fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>
     }
 }
 
+/// Имя — реальный инструмент агента (по реестру tool_specs)?
+/// Автоподхват скилла не должен тенить настоящие тулы.
+fn skill_tool_name_is_real_tool(name: &str) -> bool {
+    tools::tool_specs().as_array()
+        .map(|a| a.iter().any(|t| t["function"]["name"].as_str() == Some(name)))
+        .unwrap_or(false)
+}
+
+/// Сопоставить имя вызова со скиллом: нормализация '_'→'-' и lowercase
+/// (agent_sessions → agent-sessions). Чистая функция — для тестов.
+fn resolve_skill_as_tool<'a>(name: &str, skills: &'a [skills::SkillSpec]) -> Option<&'a skills::SkillSpec> {
+    let normalized = name.to_lowercase().replace('_', "-");
+    if normalized.is_empty() {
+        return None;
+    }
+    skills.iter().find(|s| s.name.eq_ignore_ascii_case(&normalized))
+}
+
 impl Agent {
+    /// Автоподхват скилла, вызванного как инструмент (живой кейс 23.07: модель
+    /// позвала «agent_sessions» — это скилл agent-sessions, а не tool).
+    /// Если имя не совпадает с реальным инструментом, но совпадает со скиллом
+    /// (нормализация '_'→'-', без учёта регистра) — возвращаем тело скилла
+    /// с пояснением вместо «unknown tool». Реальные инструменты не теним.
+    pub(crate) fn skill_invoked_as_tool(&self, name: &str) -> Option<String> {
+        if skill_tool_name_is_real_tool(name) {
+            return None;
+        }
+        let spec = resolve_skill_as_tool(name, &self.skills)?;
+        let body = skills::load_body(spec).ok()?;
+        Some(format!(
+            "«{name}» — это скилл «{}», а не инструмент (инструмента с таким именем нет). \
+             Тело скилла загружено автоматически — действуйте по его инструкциям \
+             (скрипты запускайте через bash, файлы читайте read_file):\n\n=== skill {} (из {})\n\n{}",
+            spec.name, spec.name, spec.path.display(), tools::cap_pub(body)))
+    }
+
     pub(crate) fn decide(&mut self, name: &str, args: &serde_json::Value) -> Decision {
         // пользовательские правила — первыми (v0.3)
         let target = match name {
@@ -412,6 +447,16 @@ impl Agent {
                 return format!("GOAL_SET: {text} (аудит до {max_turns} ходов)");
             }
             _ => {}
+        }
+
+        // автоподхват: модель вызвала скилл как инструмент (agent_sessions →
+        // agent-sessions). Отдаём тело скилла с пояснением вместо голой
+        // «unknown tool» — иначе модель флаила ходы на ровном месте
+        // (живой кейс 23.07: skill-harvester → вызов agent_sessions).
+        if let Some(out) = self.skill_invoked_as_tool(name) {
+            self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow (skill-as-tool)".into() });
+            self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok: true });
+            return out;
         }
 
         let decision = self.decide(name, &args);

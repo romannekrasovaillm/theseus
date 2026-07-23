@@ -1073,6 +1073,29 @@ mod tests {
         assert_eq!(bare, "просто вопрос", "без замет промпт не должен меняться");
     }
 
+    /// Автоподхват скилла, вызванного как инструмент (живой кейс 23.07):
+    /// «agent_sessions» → тело скилла agent-sessions вместо unknown tool.
+    #[test]
+    fn skill_invoked_as_tool_loads_body() {
+        let ws = temp_ws("skill_tool");
+        let dir = ws.join("agent-sessions");
+        std::fs::create_dir_all(&dir).expect("создать каталог скилла");
+        std::fs::write(dir.join("SKILL.md"),
+            "---\nname: agent-sessions\ndescription: про сессии\n---\n# Тело скилла сессий\n")
+            .expect("записать SKILL.md");
+        let mut agent = offline_agent(&ws);
+        agent.skills = skills::discover(std::slice::from_ref(&ws));
+        // подчёркивания нормализуются в дефисы: скилл найден, тело загружено
+        let out = agent.skill_invoked_as_tool("agent_sessions").expect("скилл подхвачен");
+        assert!(out.contains("а не инструмент"), "{out}");
+        assert!(out.contains("agent-sessions"), "{out}");
+        assert!(out.contains("Тело скилла сессий"), "{out}");
+        // реальный инструмент не тенится даже при совпадении имён
+        assert!(agent.skill_invoked_as_tool("read_file").is_none());
+        // неизвестное имя не подхватывается
+        assert!(agent.skill_invoked_as_tool("no_such_thing").is_none());
+    }
+
     /// Уникальный временный workspace (тесты бегут параллельно).
     fn temp_ws(tag: &str) -> PathBuf {
         static SEQ: AtomicU64 = AtomicU64::new(0);
