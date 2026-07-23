@@ -443,8 +443,18 @@ impl ToolEnv {
 
     fn read_file(&self, args: &serde_json::Value) -> Result<String> {
         let path = self.resolve(args["path"].as_str().unwrap_or(""));
-        let text = std::fs::read_to_string(&path)
+        let bytes = std::fs::read(&path)
             .map_err(|e| anyhow!("{e}: {}", path.display()))?;
+        // бинарные файлы (баг 23.07: агент флаил read_file по PDF-библиотеке,
+        // получая лишь «stream did not contain valid UTF-8»): PDF — извлекаем
+        // текст pdftotext, прочие бинарники — честный маркер с размером
+        let text = match String::from_utf8(bytes) {
+            Ok(t) => t,
+            Err(e) => {
+                let raw = e.into_bytes();
+                return read_binary_file(&path, &raw);
+            }
+        };
         let offset = args["offset"].as_u64().unwrap_or(1).max(1) as usize;
         let limit = args["limit"].as_u64().unwrap_or(400) as usize;
         let lines: Vec<&str> = text.lines().collect();
@@ -927,12 +937,99 @@ fn html_to_text(html: &str) -> String {
     cap(trimmed.join("\n"))
 }
 
+/// Сигнатура PDF: первые байты `%PDF`.
+fn looks_like_pdf(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"%PDF")
+}
+
+/// Чтение не-UTF8 файла (баг 23.07: read_file падал «stream did not contain
+/// valid UTF-8» на PDF-библиотеке, агент флаил по списку). PDF — извлекаем
+/// текст pdftotext (пользовательская конвенция для arXiv-PDF); прочие
+/// бинарники — честный маркер с размером и сигнатурой вместо ошибки потока.
+fn read_binary_file(path: &Path, bytes: &[u8]) -> Result<String> {
+    if looks_like_pdf(bytes) {
+        return match pdftotext_extract(path) {
+            Ok(text) => {
+                let note = format!(
+                    "[PDF → текст извлечён pdftotext из {} ({} байт)]\n",
+                    path.display(), bytes.len());
+                Ok(cap(format!("{note}{text}")))
+            }
+            Err(e) => Err(anyhow!(
+                "бинарный PDF ({} байт): pdftotext недоступен или упал ({e}). \
+                 Установите poppler-utils или извлеките текст через bash: \
+                 pdftotext \"{}\" - | head -400",
+                bytes.len(), path.display())),
+        };
+    }
+    let sig: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02X}")).collect();
+    Err(anyhow!(
+        "бинарный файл ({} байт, сигнатура {}), чтение как текст невозможно. \
+         Используйте подходящий инструмент через bash (file, strings, \
+         специализированные конвертеры)",
+        bytes.len(), sig.join(" ")))
+}
+
+/// Извлечение текста из PDF через `pdftotext <path> -` (без shell, аргумент
+/// пути — без инъекций), таймаут 60 с. Возвращает весь текст stdout.
+fn pdftotext_extract(path: &Path) -> Result<String> {
+    let mut child = std::process::Command::new("pdftotext")
+        .arg(path)
+        .arg("-")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| anyhow!("запуск pdftotext для {}: {e}", path.display()))?;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(st)) => break Some(st),
+            Ok(None) if std::time::Instant::now() < deadline => {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+            }
+            Ok(None) => {
+                let _ = child.kill();
+                break None;
+            }
+            Err(e) => return Err(anyhow!("опрос pdftotext: {e}")),
+        }
+    };
+    let Some(status) = status else {
+        let _ = child.wait();
+        return Err(anyhow!("pdftotext не завершился за 60 с ({})", path.display()));
+    };
+    let mut out = String::new();
+    if let Some(mut so) = child.stdout.take() {
+        use std::io::Read as _;
+        let mut buf = Vec::new();
+        let _ = so.read_to_end(&mut buf);
+        out = String::from_utf8_lossy(&buf).into_owned();
+    }
+    if !status.success() {
+        let mut err = String::new();
+        if let Some(mut se) = child.stderr.take() {
+            use std::io::Read as _;
+            let mut buf = Vec::new();
+            let _ = se.read_to_end(&mut buf);
+            err = String::from_utf8_lossy(&buf).into_owned();
+        }
+        let short: String = err.trim().chars().take(300).collect();
+        return Err(anyhow!("pdftotext завершился со статусом {status}: {short}"));
+    }
+    if out.trim().is_empty() {
+        return Err(anyhow!(
+            "pdftotext вернул пустой текст (скан-PDF без текстового слоя?) — \
+             нужен OCR, это вне read_file"));
+    }
+    Ok(out)
+}
+
 /// Обрезка вывода до OUTPUT_LIMIT БАЙТ (BUG-QA-EDIT-03): голова и хвост
 /// по половинному байтовому лимиту, срезы только на границах символов
 /// UTF-8; маркер показывает реальное число выкинутых байт (всегда > 0:
 /// хвост начинается строго позже конца головы, т.к. s.len() > OUTPUT_LIMIT).
-fn cap(s: String) -> String {
-    if s.len() > OUTPUT_LIMIT {
+fn cap(s: String) -> String {    if s.len() > OUTPUT_LIMIT {
         let half = OUTPUT_LIMIT / 2;
         // голова — первые `half` байт, отступ назад до границы символа
         let mut head_end = half;
@@ -1288,11 +1385,66 @@ mod tests {
         assert!(out.contains("skill"), "подсказка про скилл: {out}");
     }
 
+    /// read_file на не-UTF8 бинарнике (не PDF): честный маркер с размером и
+    /// сигнатурой вместо «stream did not contain valid UTF-8» (баг 23.07).
+    #[test]
+    fn read_file_binary_marks_size_and_signature() {
+        let dir = tdir("read-bin");
+        std::fs::write(dir.join("blob.bin"), [0xFF, 0xD8, 0x00, 0x01, 0xFE]).unwrap();
+        let mut env = ToolEnv::new(&dir);
+        let out = env.call("read_file", &serde_json::json!({"path": "blob.bin"}));
+        assert!(out.starts_with("ERROR"), "{out}");
+        assert!(out.contains("бинарный файл"), "{out}");
+        assert!(out.contains("5 байт"), "{out}");
+        assert!(out.contains("FF D8"), "сигнатура: {out}");
+        assert!(!out.contains("valid UTF-8"), "старый текст ошибки ушёл: {out}");
+    }
+
+    /// Сигнатура PDF распознаётся по магическим байтам %PDF.
+    #[test]
+    fn pdf_magic_detection() {
+        assert!(looks_like_pdf(b"%PDF-1.7 rest"));
+        assert!(!looks_like_pdf(b"PK\x03\x04 zip"));
+        assert!(!looks_like_pdf(b""));
+    }
+
+    /// Битый PDF (магия есть, структуры нет): ошибка честно называет pdftotext,
+    /// а не «stream did not contain valid UTF-8».
+    #[test]
+    fn read_file_broken_pdf_names_pdftotext() {
+        let dir = tdir("read-badpdf");
+        std::fs::write(dir.join("broken.pdf"), b"%PDF-1.4\n\xe2\xe3\xcf\xd3 garbage").unwrap();
+        let mut env = ToolEnv::new(&dir);
+        let out = env.call("read_file", &serde_json::json!({"path": "broken.pdf"}));
+        assert!(out.starts_with("ERROR"), "{out}");
+        assert!(out.contains("PDF"), "{out}");
+        assert!(out.contains("pdftotext"), "{out}");
+        assert!(!out.contains("valid UTF-8"), "{out}");
+    }
+
+    /// Живой PDF из корня репо: read_file извлекает текст pdftotext
+    /// (пропускается, если pdftotext или фикстура недоступны).
+    #[test]
+    fn read_file_real_pdf_extracts_text() {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_copy.pdf");
+        let pdftotext_missing = std::process::Command::new("pdftotext").arg("-v")
+            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
+            .status().is_err();
+        if pdftotext_missing || !fixture.is_file() {
+            eprintln!("skip: нет pdftotext или test_copy.pdf");
+            return;
+        }
+        let mut env = ToolEnv::new(Path::new("/tmp"));
+        let out = env.call("read_file",
+            &serde_json::json!({"path": fixture.to_string_lossy(), "limit": 20}));
+        assert!(out.contains("[PDF → текст извлечён pdftotext"), "{out}");
+        assert!(!out.contains("valid UTF-8"), "{out}");
+    }
+
     /// list_files: несуществующий путь и файл — явные ошибки, а не «(пусто)»
     /// (живой кейс 21.07: модель приняла отсутствующий каталог за пустой).
     #[test]
-    fn list_files_errors_on_missing_path_and_file() {
-        let dir = tdir("list-missing");
+    fn list_files_errors_on_missing_path_and_file() {        let dir = tdir("list-missing");
         let mut env = ToolEnv::new(&dir);
         let out = env.call("list_files", &serde_json::json!({"path": "no/such/dir"}));
         assert!(out.starts_with("ERROR"), "{out}");
