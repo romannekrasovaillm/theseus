@@ -134,7 +134,11 @@ impl Agent {
         self.fp_window.push_back(fp);
         if self.fp_window.len() > 20 { self.fp_window.pop_front(); }
         let count = self.fp_window.iter().filter(|x| **x == fp).count();
-        if count >= 3 && !matches!(name.as_str(), "todo_write" | "finish") {
+        // исключения: todo_write/finish — штатно повторяются; task_output —
+        // поллинг фоновой задачи (peers живут минуты) — легитимное ожидание,
+        // а не петля: внешняя граница — лимит ходов (живой кейс 23.07: doom
+        // заблокировал получение ответов peer-задач — «статус заблокирован»)
+        if count >= 3 && !matches!(name.as_str(), "todo_write" | "finish" | "task_output") {
             self.doom_warned.insert(fp);
             self.emit(AgentEvent::HookNote(format!(
                 "⚠ doom-loop: «{name}» ×{count} с одинаковыми аргументами (окно 20)")));

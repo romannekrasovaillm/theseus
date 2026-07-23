@@ -1315,6 +1315,36 @@ mod tests {
         }
     }
 
+    /// Поллинг task_output — легитимное ожидание фоновой задачи, а не doom
+    /// loop (живой кейс 23.07: guard заблокировал ответы peer-задач после
+    /// трёх одинаковых опросов за ~20 секунд). Идентичные вызовы task_output
+    /// не должны ни предупреждаться, ни отклоняться doom-детектором.
+    #[test]
+    fn doom_guard_exempts_task_output_polling() {
+        let ws = temp_ws("doom_poll");
+        let mut agent = offline_agent(&ws);
+        let call = tool_call("c1", "task_output", r#"{"id":1}"#);
+        let mut saw_doom = false;
+        for _ in 0..6 {
+            let out = agent.execute(&call);
+            if out.contains("doom loop suspected") || out.contains("doom-loop guard") {
+                saw_doom = true;
+                break;
+            }
+        }
+        assert!(!saw_doom, "поллинг task_output не должен попадать под doom guard");
+        // контроль: read_file с теми же аргументами по-прежнему ловится
+        let rd = tool_call("c2", "read_file", r#"{"path":"x.txt"}"#);
+        let mut doom_on_read = false;
+        for _ in 0..4 {
+            if agent.execute(&rd).contains("doom loop suspected") {
+                doom_on_read = true;
+                break;
+            }
+        }
+        assert!(doom_on_read, "read_file ×3 в окне обязан триггерить doom");
+    }
+
     /// QA-TH-AGENT-001: батч идентичных read-only вызовов не должен обходить
     /// doom-loop guard. Раньше parallel_readonly() исполнял вызовы мимо execute()
     /// с его fingerprint-детектором — 5 одинаковых read_file проходили все.
