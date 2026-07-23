@@ -382,8 +382,7 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
 ///
 /// # Errors
 /// Сумма ошибок [`ensure_server`] и [`chat`].
-pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String> {
-    let guard = ensure_server(cfg)?;
+pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String> {    let guard = ensure_server(cfg)?;
     // CPU-фолбэк порождённого сервера (баг 20.07: ggml_cuda_init упал,
     // генерация ~5 ток/с, агент висел 10 минут) — усечённый бюджет токенов
     // (v10 игнорирует enable_thinking, стопить можно только потолком) + пометка
@@ -407,6 +406,53 @@ pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String>
 /// CPU-фолбэк по логу сервера: ggml_cuda_init упал → «no usable GPU found».
 fn cpu_fallback(log_content: &str) -> bool {
     log_content.contains("no usable GPU found")
+}
+
+/// Системный промпт Ариадны: русский первичен, английский — явный фолбэк.
+/// Уроки живых сессий (скрин 23.07): модель теряет ответ в thinking-блоке,
+/// если промпт — вопрос, а не императив; явная инструкция про язык и
+/// «обязательно ответь текстом» возвращает её к текстовому ответу.
+pub const ARIADNA_SYSTEM_RU: &str =
+    "Ты — Ариадна, локальный быстрый ML-помощник (Qwen3.5-4B). \
+     Отвечай по-русски, кратко и по делу, сразу текстом ответа, без преамбул \
+     и без блоков <think>. Задача сформулирована в императиве — выполняй её \
+     прямо, без уточняющих вопросов. Если ответ по-русски сформулировать не \
+     получается — переключись на английский, но обязательно ответь текстом.";
+
+/// Фолбэк-промпт на случай потери ответа: короткий императив на английском —
+/// доказанный вживую способ вывести модель из «пустого» thinking (скрин 23.07).
+pub const ARIADNA_SYSTEM_EN: &str =
+    "You are Ariadna, a fast local ML helper (Qwen3.5-4B). Answer briefly and \
+     directly, in English. Output the answer text immediately — no preamble, \
+     no <think> blocks. Do the task directly, do not ask clarifying questions.";
+
+/// Фрагмент маркера потери ответа из [`strip_think_blocks`] (thinking съел текст).
+const LOST_ANSWER_MARKER: &str = "только thinking-блок";
+
+/// Императивная рамка задачи: вопросительная форма теряет ответ в thinking
+/// (живой кейс 23.07), императив — нет.
+fn imperative_frame(task: &str) -> String {
+    format!("Задача (выполни прямо, без уточняющих вопросов): {task}")
+}
+
+/// Ответ потерян: пусто или один лишь маркер «только thinking-блок».
+fn answer_is_lost(answer: &str) -> bool {
+    let t = answer.trim();
+    t.is_empty() || t.contains(LOST_ANSWER_MARKER)
+}
+
+/// Локализованная задача Ариадне (инструмент `ariadna_ask`): русский промпт
+/// + императивная рамка; при потере ответа — один фолбэк-прогон на английском
+/// императиве (доказанный вживую рецепт выхода из «пустого» thinking).
+/// Английский ответ самой модели — не повод для ретрая: это штатный фолбэк.
+pub fn run_task_ru_fallback(cfg: &AriadnaConfig, task: &str) -> Result<String> {
+    let answer = run_task(cfg, ARIADNA_SYSTEM_RU, &imperative_frame(task))?;
+    if !answer_is_lost(&answer) {
+        return Ok(answer);
+    }
+    let retry = run_task(cfg, ARIADNA_SYSTEM_EN,
+        &format!("Do the task directly, no clarifying questions: {task}"))?;
+    Ok(retry)
 }
 
 /// Жив ли сервер: `/health` отвечает успешным статусом. Любая ошибка
@@ -480,6 +526,9 @@ mod tests {
         InvalidJson,
         /// HTTP 200, валидный JSON, но без нужных полей.
         EmptyChoices,
+        /// Имитация потери ответа на русском промпте (один think-блок без
+        /// текста) и нормального ответа на английском («You are Ariadna»).
+        RuLostEnOk,
     }
 
     /// Разобранный HTTP-запрос, пришедший на мок.
@@ -594,6 +643,29 @@ mod tests {
                     })
                     .to_string(),
                 ),
+                ChatMode::RuLostEnOk => {
+                    // русский системный промпт → ответ теряется в thinking;
+                    // английский («You are Ariadna») → честный ответ
+                    let content = if req.body.contains("You are Ariadna") {
+                        MOCK_REPLY
+                    } else {
+                        "<think>рассуждения без ответа</think>"
+                    };
+                    (
+                        200,
+                        "OK",
+                        json!({
+                            "id": "chatcmpl-mock",
+                            "object": "chat.completion",
+                            "created": 0,
+                            "model": "ariadna",
+                            "choices": [{"index": 0, "finish_reason": "stop",
+                                "message": {"role": "assistant", "content": content}}],
+                            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+                        })
+                        .to_string(),
+                    )
+                }
                 ChatMode::Http500 => {
                     (500, "Internal Server Error", json!({"error": "boom"}).to_string())
                 }
@@ -969,9 +1041,67 @@ mod tests {
         assert!(msg.contains("choices[0].message.content"), "msg: {msg}");
     }
 
+    /// Промпты Ариадны (скрин 23.07): русский первичен + явный фолбэк
+    /// на английский; оба требуют ответ сразу текстом, без <think>.
     #[test]
-    fn run_task_sends_system_then_user_and_ensures_server() {
+    fn system_prompts_cover_language_and_fallback() {
+        assert!(ARIADNA_SYSTEM_RU.contains("по-русски"), "русский первичен: {ARIADNA_SYSTEM_RU}");
+        assert!(ARIADNA_SYSTEM_RU.contains("английский"), "фолбэк на EN объявлен: {ARIADNA_SYSTEM_RU}");
+        assert!(ARIADNA_SYSTEM_RU.contains("обязательно ответь текстом"));
+        assert!(ARIADNA_SYSTEM_EN.contains("in English"), "EN-фолбэк: {ARIADNA_SYSTEM_EN}");
+        assert!(ARIADNA_SYSTEM_EN.contains("no <think> blocks"));
+    }
+
+    /// Императивная рамка: задача заворачивается в прямое указание (вопросы
+    /// теряют ответ в thinking — живой кейс 23.07).
+    #[test]
+    fn imperative_frame_wraps_task() {
+        let framed = imperative_frame("опиши архитектуру");
+        assert!(framed.contains("Задача"), "{framed}");
+        assert!(framed.contains("без уточняющих вопросов"), "{framed}");
+        assert!(framed.ends_with("опиши архитектуру"), "{framed}");
+    }
+
+    /// Потеря ответа: пустая строка и маркер «только thinking-блок» —
+    /// повод для фолбэк-ретрая; обычный текст (в т.ч. английский) — нет.
+    #[test]
+    fn answer_is_lost_detection() {
+        assert!(answer_is_lost(""));
+        assert!(answer_is_lost("   \n "));
+        assert!(answer_is_lost("(Ариадна вернула только thinking-блок без текста ответа)"));
+        assert!(!answer_is_lost("нормальный ответ"));
+        assert!(!answer_is_lost("plain english answer is fine too"));
+    }
+
+    /// Фолбэк: потерянный ответ на русском → один ретрай на английском
+    /// императиве (скрин 23.07). Мок теряет ответ на RU-промпт и отвечает на EN.
+    #[test]
+    fn ru_fallback_retries_in_english_when_answer_lost() {
+        let mock = MockLlama::start(ChatMode::RuLostEnOk);
+        let out = run_task_ru_fallback(&mock.config(), "скажи привет").expect("фолбэк сработал");
+        assert_eq!(out, MOCK_REPLY, "ответ должен прийти из EN-ретрая");
+        let requests = mock.chat_requests();
+        assert_eq!(requests.len(), 2, "ровно два прогона: RU, затем EN");
+        let first: Value = serde_json::from_str(&requests[0].body).expect("JSON 1");
+        let second: Value = serde_json::from_str(&requests[1].body).expect("JSON 2");
+        assert_eq!(first["messages"][0]["content"], json!(ARIADNA_SYSTEM_RU));
+        assert!(first["messages"][1]["content"].as_str().unwrap_or("").contains("Задача"),
+            "императивная рамка в первом прогоне: {}", requests[0].body);
+        assert_eq!(second["messages"][0]["content"], json!(ARIADNA_SYSTEM_EN));
+        assert!(second["messages"][1]["content"].as_str().unwrap_or("").contains("Do the task directly"));
+    }
+
+    /// Без потери ответа фолбэк-ретрая нет: один прогон, русский промпт.
+    #[test]
+    fn ru_fallback_no_retry_when_answer_ok() {
         let mock = MockLlama::start(ChatMode::Ok);
+        let out = run_task_ru_fallback(&mock.config(), "скажи привет").expect("ответ");
+        assert_eq!(out, MOCK_REPLY);
+        assert_eq!(mock.chat_requests().len(), 1, "ретрай не нужен");
+    }
+
+    #[test]
+    fn run_task_sends_system_then_user_and_ensures_server() {        let mock = MockLlama::start(ChatMode::Ok);
         let cfg = mock.config();
         let out = run_task(&cfg, "Ты — Ариадна.", "Найди выход из лабиринта").expect("run_task");
         assert_eq!(out, MOCK_REPLY);

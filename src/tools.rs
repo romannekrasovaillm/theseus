@@ -85,7 +85,7 @@ pub fn tool_specs() -> serde_json::Value {
             },"required":["path"]}}},
         {"type":"function","function":{
             "name":"ariadna_ask",
-            "description":"Ask Ariadna — a fast local ML helper model (Qwen3.5-4B GRPO, runs on local GPU via llama.cpp). Good for drafts, classification, extraction, simple Q&A. Starts the local server on first use (~30s).",
+            "description":"Ask Ariadna — a fast local ML helper model (Qwen3.5-4B GRPO, runs on local GPU via llama.cpp). Good for drafts, classification, extraction, simple Q&A. State the task as a direct imperative (open questions can lose the answer). She answers in Russian, falling back to English if Russian fails. Starts the local server on first use (~30s).",
             "parameters":{"type":"object","properties":{
                 "task":{"type":"string"}
             },"required":["task"]}}},
@@ -348,11 +348,9 @@ impl ToolEnv {
                     return Ok("Ариадна недоступна: нет бинаря llama-server или GGUF \
                         (проверьте пути в AriadnaConfig)".into());
                 }
-                crate::ariadna::run_task(&cfg,
-                    "Ты — Ариадна, локальный быстрый ML-помощник (Qwen3.5-4B). \
-                     Отвечай кратко и по делу, на русском, сразу текстом ответа, \
-                     без блоков <think>.",
-                    task)
+                // локализованный вызов: русский промпт + императивная рамка,
+                // фолбэк на английский при потере ответа (скрин 23.07)
+                crate::ariadna::run_task_ru_fallback(&cfg, task)
             }
             // --- Дайджесты новостей и HF-коллекции (v0.5.1) ---
             "digest_search" => {
