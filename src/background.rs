@@ -117,24 +117,11 @@ impl BgRegistry {
     }
 
     pub fn output(&mut self, id: u64) -> String {
-        let counter = self.counter.clone();
-        let Some(t) = self.tasks.get_mut(&id) else {
+        if !self.tasks.contains_key(&id) {
             return format!("ERROR: задача {id} не найдена");
-        };
-        // ленивое обновление статуса
-        if t.done.lock().unwrap().is_none() {
-            if let Some(ch) = t.child.as_mut() {
-                if let Ok(Some(status)) = ch.try_wait() {
-                    *t.done.lock().unwrap() = status.code();
-                    if let Some(c) = &counter {
-                        let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
-                            std::sync::atomic::Ordering::Relaxed,
-                            |v| Some(v.saturating_sub(1)));
-                    }
-                    t.child = None;
-                }
-            }
         }
+        self.refresh(id);
+        let t = &self.tasks[&id];
         let status = match *t.done.lock().unwrap() {
             Some(code) => format!("завершена (exit {code:?})"),
             // анти-flail (живой кейс 21.07: модель опросила task_output 7 раз
@@ -150,6 +137,33 @@ impl BgRegistry {
             out.chars().skip(out.chars().count() - tail_chars).collect::<String>()
         } else { out };
         format!("[bg {}] {} | {:.0}s | {}\n{}", id, t.command, t.started.elapsed().as_secs_f32(), status, tail)
+    }
+
+    /// Ленивое обновление статуса процессной задачи (try_wait) + декремент
+    /// счётчика при обнаружении завершения. Потоковые помечают себя сами.
+    fn refresh(&mut self, id: u64) {
+        let counter = self.counter.clone();
+        let Some(t) = self.tasks.get_mut(&id) else { return };
+        if t.done.lock().unwrap().is_none() {
+            if let Some(ch) = t.child.as_mut() {
+                if let Ok(Some(status)) = ch.try_wait() {
+                    *t.done.lock().unwrap() = status.code();
+                    if let Some(c) = &counter {
+                        let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                            std::sync::atomic::Ordering::Relaxed,
+                            |v| Some(v.saturating_sub(1)));
+                    }
+                    t.child = None;
+                }
+            }
+        }
+    }
+
+    /// Завершена ли задача: Some(true/false) по флагу done (с ленивым
+    /// обновлением для процессных), None — задача не найдена. Для swarm_wait.
+    pub fn is_done(&mut self, id: u64) -> Option<bool> {
+        self.refresh(id);
+        self.tasks.get(&id).map(|t| t.done.lock().unwrap().is_some())
     }
 
     pub fn stop(&mut self, id: u64) -> String {

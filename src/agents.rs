@@ -47,6 +47,10 @@ pub const KNOWN_TOOLS: &[&str] = &[
     "read_file", "write_file", "edit_file", "list_files", "grep", "bash",
     "task_output", "task_stop", "skill", "memory_write", "memory_search",
     "web_fetch", "web_search", "exit_plan_mode", "todo_write", "task", "finish",
+    // read-only инструменты знаний (библиотека, дайджесты, концепты, HF) —
+    // доступны исследовательским субагентам (explore, баг 23.07: «упёрся в бюджет»)
+    "library_search", "library_read", "digest_search", "digest_read",
+    "hf_collections", "concept_search", "concept_explain",
 ];
 
 /// Инструменты, способные менять состояние: файлы, память, todo-список,
@@ -60,10 +64,14 @@ pub const WRITE_TOOLS: &[&str] = &[
 const MAX_SUGGESTIONS: usize = 3;
 
 /// Системный промпт субагента `explore`.
-const EXPLORE_PROMPT: &str = "You are a fast, read-only codebase exploration agent. \
-Answer the user's question by searching and reading files; you cannot modify anything. \
-Prefer grep/list_files to narrow down before read_file. \
-Reply with a concise factual answer with file:line references.";
+const EXPLORE_PROMPT: &str = "You are a fast, read-only exploration agent. \
+Answer the user's question by searching and reading; you cannot modify anything. \
+For codebase questions prefer grep/list_files to narrow down before read_file. \
+For research and ML questions use the knowledge tools: library_search + library_read \
+(local 6 GB paper library), digest_search + digest_read (news digests), hf_collections, \
+concept_search + concept_explain (ML concept cards), memory_search (past context), \
+web_search + web_fetch. \
+Reply with a concise factual answer with file:line or source references.";
 
 /// Системный промпт субагента `plan`.
 const PLAN_PROMPT: &str = "You are a software architect producing an implementation plan. \
@@ -283,10 +291,13 @@ pub fn builtin_specs() -> Vec<AgentSpec> {
     vec![
         AgentSpec::new(
             "explore",
-            "Быстрый поиск по коду: ответы о кодовой базе со ссылками file:line (readonly).",
+            "Быстрый поиск по коду и базе знаний: ответы о кодовой базе и исследованиях со ссылками (readonly).",
             EXPLORE_PROMPT,
-            &["read_file", "list_files", "grep"],
-            12, true,
+            &["read_file", "list_files", "grep",
+              "library_search", "library_read", "digest_search", "digest_read",
+              "hf_collections", "concept_search", "concept_explain",
+              "memory_search", "web_fetch", "web_search"],
+            25, true,
         ),
         AgentSpec::new(
             "plan",
@@ -425,6 +436,9 @@ impl AgentBudget {
 pub fn default_budget(spec: &AgentSpec) -> AgentBudget {
     let (tokens, sec) = match spec.name.as_str() {
         "plan" => (500_000, 900),
+        // explore читает библиотеку и статьи (баг 23.07: упёрся в 250k на
+        // ресёрч-задаче) — бюджет на уровне plan
+        "explore" => (500_000, 900),
         "code_review" => (300_000, 600),
         "test_runner" => (400_000, 900),
         _ => (250_000, 600),
@@ -678,18 +692,38 @@ mod tests {
 
     /// Бюджеты взвешены по типу (урок живого прогона 20.07: plan на 200k
     /// оборвался на 10-м ходу без результата — токены растут квадратично,
-    /// каждый ход тащит накопленную историю).
+    /// каждый ход тащит накопленную историю; 23.07 explore упёрся в 250k
+    /// на ресёрч-задаче — поднят до уровня plan).
     #[test]
     fn default_budget_scales_by_spec_weight() {
         let by_name = |n: &str| builtin_specs().into_iter().find(|s| s.name == n).unwrap();
         let plan = default_budget(&by_name("plan"));
         assert_eq!(plan.max_turns, 25, "ходы — из спеки");
         assert_eq!(plan.max_tokens, 500_000);
-        assert_eq!(default_budget(&by_name("explore")).max_tokens, 250_000);
+        assert_eq!(default_budget(&by_name("explore")).max_tokens, 500_000);
+        assert_eq!(default_budget(&by_name("explore")).max_turns, 25);
         assert_eq!(default_budget(&by_name("code_review")).max_tokens, 300_000);
         assert_eq!(default_budget(&by_name("test_runner")).max_sec, 900);
         // монотонность: «тяжёлые» типы получают не меньше «лёгкого» explore
-        assert!(plan.max_tokens > default_budget(&by_name("explore")).max_tokens);
+        assert!(plan.max_tokens >= default_budget(&by_name("explore")).max_tokens);
+    }
+
+    /// Explore — исследовательский субагент (баг 23.07): read-only инструменты
+    /// знаний в тулсете, readonly-гарантия сохранена (ни одного пишущего).
+    #[test]
+    fn explore_has_knowledge_tools_and_stays_readonly() {
+        let spec = spec_by_name("explore");
+        for tool in ["library_search", "library_read", "digest_search", "digest_read",
+                     "hf_collections", "concept_search", "concept_explain",
+                     "memory_search", "web_fetch", "web_search"] {
+            assert!(spec.allows_tool(tool), "explore лишён «{tool}»");
+        }
+        assert!(spec.readonly);
+        for tool in &spec.allowed_tools {
+            assert!(!WRITE_TOOLS.contains(&tool.as_str()),
+                "explore (readonly) получил пишущий «{tool}»");
+        }
+        assert!(spec.system_prompt.contains("library_search"));
     }
 
     #[test]

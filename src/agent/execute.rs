@@ -45,6 +45,70 @@ fn resolve_skill_as_tool<'a>(name: &str, skills: &'a [skills::SkillSpec]) -> Opt
     skills.iter().find(|s| s.name.eq_ignore_ascii_case(&normalized))
 }
 
+/// Потолок задач в одном рое: защита от штампа параллельных API-вызовов.
+const SWARM_MAX_TASKS: usize = 8;
+
+/// Разбор аргументов инструмента swarm (чистая функция — для тестов):
+/// массив tasks (1..=8), у каждой prompt (обязателен) и agent (default explore).
+pub(crate) fn parse_swarm_tasks(args: &serde_json::Value, registry: &crate::agents::AgentRegistry)
+    -> Result<Vec<(crate::agents::AgentSpec, String)>, String> {
+    let arr = args["tasks"].as_array().ok_or("swarm: нужен массив tasks")?;
+    if arr.is_empty() {
+        return Err("swarm: пустой массив tasks — рою нечего делать".into());
+    }
+    if arr.len() > SWARM_MAX_TASKS {
+        return Err(format!(
+            "swarm: не больше {SWARM_MAX_TASKS} задач за раз (получено {}) — \
+             разбейте на несколько роёв", arr.len()));
+    }
+    let mut out = vec![];
+    for (i, item) in arr.iter().enumerate() {
+        let prompt = item["prompt"].as_str().unwrap_or("").trim().to_string();
+        if prompt.is_empty() {
+            return Err(format!("swarm: задача #{} без prompt", i + 1));
+        }
+        let agent = item["agent"].as_str().unwrap_or("explore");
+        let spec = registry.get(agent).map_err(|e| format!("swarm: {e}"))?;
+        out.push((spec.clone(), prompt));
+    }
+    Ok(out)
+}
+
+/// Ожидание фоновых задач и сбор результатов одним ответом (чистая функция —
+/// для тестов): опрос is_done два раза в секунду до завершения всех ids или
+/// таймаута; незавершившиеся честно помечаются, их можно добрать task_output.
+pub(crate) fn collect_bg_results(bg: &mut crate::background::BgRegistry, ids: &[u64],
+                      timeout: std::time::Duration) -> String {
+    let deadline = std::time::Instant::now() + timeout;
+    loop {
+        let all_done = ids.iter().all(|id| bg.is_done(*id) != Some(false));
+        if all_done || std::time::Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    let mut out = String::new();
+    let mut pending = 0usize;
+    for id in ids {
+        match bg.is_done(*id) {
+            None => out.push_str(&format!("[bg {id}] ERROR: задача не найдена\n\n")),
+            Some(done) => {
+                if !done {
+                    pending += 1;
+                }
+                out.push_str(&bg.output(*id));
+                out.push_str("\n\n");
+            }
+        }
+    }
+    if pending > 0 {
+        out.push_str(&format!(
+            "[swarm_wait] {pending} задач не завершились за таймаут — \
+             заберите их позже через task_output по id\n"));
+    }
+    out
+}
+
 impl Agent {
     /// Автоподхват скилла, вызванного как инструмент (живой кейс 23.07: модель
     /// позвала «agent_sessions» — это скилл agent-sessions, а не tool).
@@ -201,6 +265,14 @@ impl Agent {
         if !is_background {
             return self.run_subagent(spec, prompt);
         }
+        let id = self.spawn_bg_subagent(spec, prompt);
+        format!("[bg {id}] субагент «{}» запущен в фоне — продолжайте работу; \
+                 результат заберите через task_output", spec.name)
+    }
+
+    /// Общий запуск фонового субагента (task is_background и рой swarm):
+    /// поток в BgRegistry, возвращает id задачи.
+    fn spawn_bg_subagent(&mut self, spec: &crate::agents::AgentSpec, prompt: &str) -> u64 {
         // owned-значения для потока (self в фон унести нельзя)
         let sub_cfg = crate::subagent::SubConfig {
             base_url: self.sub.base_url.clone(),
@@ -217,7 +289,7 @@ impl Agent {
         let sandbox = self.env.sandbox;
         let label = format!("subagent {} — {}", spec.name,
             prompt.chars().take(60).collect::<String>());
-        let id = self.bg.spawn_fn(label, move || {
+        self.bg.spawn_fn(label, move || {
             match crate::subagent::run_agent(&sub_cfg, &ws, &spec2, &prompt2, budget, sandbox) {
                 Ok(res) => {
                     let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
@@ -226,9 +298,24 @@ impl Agent {
                 }
                 Err(e) => format!("ERROR: субагент «{}»: {e}", spec2.name),
             }
-        });
-        format!("[bg {id}] субагент «{}» запущен в фоне — продолжайте работу; \
-                 результат заберите через task_output", spec.name)
+        })
+    }
+
+    /// Запуск роя: все задачи в фон одним махом, ответ — карта bg-id для
+    /// последующего сбора через swarm_wait (или point-опроса task_output).
+    fn launch_swarm(&mut self, specs: &[(crate::agents::AgentSpec, String)]) -> String {
+        let mut ids = vec![];
+        let mut lines = vec![];
+        for (spec, prompt) in specs {
+            let id = self.spawn_bg_subagent(spec, prompt);
+            ids.push(id.to_string());
+            lines.push(format!("bg {id}: {} — {}", spec.name,
+                prompt.chars().take(50).collect::<String>()));
+        }
+        format!("[swarm] запущено {} задач в фоне:\n{}\nПродолжайте работу; \
+                 соберите все результаты одним вызовом swarm_wait {{\"ids\": [{}]}} \
+                 (или точечно task_output по id).",
+            specs.len(), lines.join("\n"), ids.join(", "))
     }
 
     /// Запуск peer-агента синхронно или в ФОНЕ (v0.6.6, is_background).
@@ -365,6 +452,73 @@ impl Agent {
                     SubGate::Allow => self.spawn_or_run_subagent(&spec, &prompt, is_bg),
                 };
                 let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
+                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                return out;
+            }
+            "swarm" => {
+                // рой субагентов (v0.7): параллельный fan-out одним вызовом.
+                // Правовая модель — как у task: не-readonly спеки (есть bash)
+                // гейтятся по режиму (DontAsk→Deny, Ask/SemiAuto→попап, Yolo→Allow)
+                let registry = crate::agents::AgentRegistry::with_builtins();
+                let parsed = parse_swarm_tasks(&args, &registry);
+                let specs = match parsed {
+                    Ok(s) => s,
+                    Err(e) => {
+                        self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Deny".into() });
+                        self.emit(AgentEvent::ToolResult { name: name.into(), preview: e.clone(), ok: false });
+                        return format!("ERROR: {e}");
+                    }
+                };
+                let any_write = specs.iter().any(|(s, _)| !s.readonly);
+                enum SwarmGate { Allow, Ask(String), Deny(String) }
+                let gate = if !any_write {
+                    SwarmGate::Allow
+                } else {
+                    match self.perms.mode() {
+                        Mode::DontAsk => SwarmGate::Deny(
+                            "рой с не-readonly субагентами (есть bash) заблокирован в режиме DontAsk — нужно подтверждение".into()),
+                        Mode::Ask | Mode::SemiAuto => SwarmGate::Ask(format!(
+                            "запустить рой из {} субагентов (есть bash)", specs.len())),
+                        Mode::Yolo => SwarmGate::Allow,
+                    }
+                };
+                let decision_label = match &gate {
+                    SwarmGate::Allow => format!("Allow (swarm {})", specs.len()),
+                    SwarmGate::Ask(_) => "Ask (swarm)".to_string(),
+                    SwarmGate::Deny(_) => "Deny (swarm)".to_string(),
+                };
+                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: decision_label });
+                let out = match gate {
+                    SwarmGate::Deny(reason) => format!("DENIED: {reason}"),
+                    SwarmGate::Ask(question) => {
+                        let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
+                        if allow {
+                            self.launch_swarm(&specs)
+                        } else {
+                            "DENIED: пользователь отклонил рой субагентов".to_string()
+                        }
+                    }
+                    SwarmGate::Allow => self.launch_swarm(&specs),
+                };
+                let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
+                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                return out;
+            }
+            "swarm_wait" => {
+                // сбор результатов роя одним ответом: ждём завершения всех ids
+                // (или таймаут) и возвращаем вывод каждой задачи
+                let ids: Vec<u64> = args["ids"].as_array()
+                    .map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect())
+                    .unwrap_or_default();
+                let timeout = std::time::Duration::from_secs(
+                    args["timeout"].as_u64().unwrap_or(600).min(900));
+                let out = if ids.is_empty() {
+                    "ERROR: swarm_wait: нужен массив ids (из ответа swarm)".to_string()
+                } else {
+                    collect_bg_results(&mut self.bg, &ids, timeout)
+                };
+                let ok = !out.starts_with("ERROR");
+                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
                 self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
                 return out;
             }

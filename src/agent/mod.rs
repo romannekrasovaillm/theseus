@@ -1073,6 +1073,58 @@ mod tests {
         assert_eq!(bare, "просто вопрос", "без замет промпт не должен меняться");
     }
 
+    /// Рой субагентов: разбор аргументов swarm (валидация + дефолтный агент).
+    #[test]
+    fn parse_swarm_tasks_validation() {
+        let reg = crate::agents::AgentRegistry::with_builtins();
+        let ok = execute::parse_swarm_tasks(
+            &serde_json::json!({"tasks": [{"prompt": "разведать"}, {"agent": "plan", "prompt": "спланировать"}]}),
+            &reg).expect("валидный рой");
+        assert_eq!(ok.len(), 2);
+        assert_eq!(ok[0].0.name, "explore", "агент по умолчанию — explore");
+        assert_eq!(ok[1].0.name, "plan");
+        assert_eq!(ok[0].1, "разведать");
+        // пустой массив
+        assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": []}), &reg).is_err());
+        // переполнение (>8)
+        let many: Vec<serde_json::Value> = (0..9).map(|i| serde_json::json!({"prompt": i.to_string()})).collect();
+        assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": many}), &reg).is_err());
+        // без prompt
+        assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": [{"agent": "plan"}]}), &reg).is_err());
+        // неизвестный агент
+        assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": [{"agent": "nope", "prompt": "x"}]}), &reg).is_err());
+    }
+
+    /// Рой: collect_bg_results дожидается всех задач, честно помечает таймаут
+    /// и несуществующие id.
+    #[test]
+    fn collect_bg_results_waits_and_reports() {
+        let mut bg = crate::background::BgRegistry::new();
+        let fast = bg.spawn_fn("fast".into(), || "быстрый ответ".to_string());
+        let slow = bg.spawn_fn("slow".into(), || {
+            std::thread::sleep(std::time::Duration::from_millis(400));
+            "медленный ответ".to_string()
+        });
+        let out = execute::collect_bg_results(&mut bg, &[fast, slow],
+            std::time::Duration::from_secs(5));
+        assert!(out.contains("быстрый ответ"), "{out}");
+        assert!(out.contains("медленный ответ"), "{out}");
+        assert!(!out.contains("не завершились"), "{out}");
+        // таймаут: незавершившаяся помечается, результат можно добрать позже
+        let mut bg2 = crate::background::BgRegistry::new();
+        let hang = bg2.spawn_fn("hang".into(), || {
+            std::thread::sleep(std::time::Duration::from_secs(3));
+            "поздний".to_string()
+        });
+        let out2 = execute::collect_bg_results(&mut bg2, &[hang],
+            std::time::Duration::from_millis(300));
+        assert!(out2.contains("не завершились"), "{out2}");
+        // несуществующий id — явная ошибка
+        let out3 = execute::collect_bg_results(&mut bg2, &[999],
+            std::time::Duration::from_millis(10));
+        assert!(out3.contains("не найдена"), "{out3}");
+    }
+
     /// Автоподхват скилла, вызванного как инструмент (живой кейс 23.07):
     /// «agent_sessions» → тело скилла agent-sessions вместо unknown tool.
     #[test]

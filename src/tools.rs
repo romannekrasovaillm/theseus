@@ -202,6 +202,23 @@ pub fn tool_specs() -> serde_json::Value {
                 "is_background":{"type":"boolean","description":"default false; true — run in background, returns bg id"}
             },"required":["prompt"]}}},
         {"type":"function","function":{
+            "name":"swarm",
+            "description":"Launch a swarm of background subagents in ONE call (parallel fan-out). Up to 8 tasks, each {prompt, agent?} with agent = explore | plan | code_review | test_runner (default explore). Returns bg ids immediately so you keep working; collect all results at once with swarm_wait.",
+            "parameters":{"type":"object","properties":{
+                "tasks":{"type":"array","description":"1-8 items: {prompt (required), agent (optional, default explore)}",
+                    "items":{"type":"object","properties":{
+                        "agent":{"type":"string"},
+                        "prompt":{"type":"string"}
+                    },"required":["prompt"]}}
+            },"required":["tasks"]}}},
+        {"type":"function","function":{
+            "name":"swarm_wait",
+            "description":"Wait for background tasks (from swarm or task is_background) and return ALL their results in one answer. Blocks until all finish or timeout.",
+            "parameters":{"type":"object","properties":{
+                "ids":{"type":"array","items":{"type":"integer"},"description":"bg ids returned by swarm"},
+                "timeout":{"type":"integer","description":"max seconds to wait (default 600, cap 900)"}
+            },"required":["ids"]}}},
+        {"type":"function","function":{
             "name":"finish",
             "description":"Call ONCE when the task is fully done. Provide an honest summary of what was achieved.",
             "parameters":{"type":"object","properties":{
