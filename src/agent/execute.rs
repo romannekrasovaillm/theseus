@@ -48,6 +48,51 @@ fn resolve_skill_as_tool<'a>(name: &str, skills: &'a [skills::SkillSpec]) -> Opt
 /// Потолок задач в одном рое: защита от штампа параллельных API-вызовов.
 const SWARM_MAX_TASKS: usize = 8;
 
+/// Достройка обрезанного JSON аргументов инструмента (живой кейс 24.07:
+/// «{"id": 1» без закрывающей скобки — тихий откат в {} дал «задачу 0»).
+/// Достраиваем кавычку и скобки по стеку; хвостовую запятую срезаем.
+/// Ключевые слова/числа, оборванные посередине («tru», «12.»), не ремонтируем
+/// — тогда None и штатная ошибка невалидного JSON. Чистая функция — для тестов.
+pub(crate) fn repair_truncated_json(text: &str) -> Option<serde_json::Value> {
+    let mut out = text.trim_end().to_string();
+    while out.ends_with(',') {
+        out.pop();
+        out = out.trim_end().to_string();
+    }
+    let mut in_string = false;
+    let mut escape = false;
+    let mut stack: Vec<char> = vec![];
+    for ch in out.chars() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        match ch {
+            '\\' if in_string => escape = true,
+            '"' => in_string = !in_string,
+            '{' | '[' if !in_string => stack.push(ch),
+            '}' if !in_string => {
+                if stack.pop() != Some('{') {
+                    return None;
+                }
+            }
+            ']' if !in_string => {
+                if stack.pop() != Some('[') {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    if in_string {
+        out.push('"');
+    }
+    for open in stack.iter().rev() {
+        out.push(if *open == '{' { '}' } else { ']' });
+    }
+    serde_json::from_str(&out).ok()
+}
+
 /// Разбор аргументов инструмента swarm (чистая функция — для тестов):
 /// массив tasks (1..=8), у каждой prompt (обязателен) и agent (default explore).
 pub(crate) fn parse_swarm_tasks(args: &serde_json::Value, registry: &crate::agents::AgentRegistry)
@@ -187,8 +232,30 @@ impl Agent {
 
     pub(crate) fn execute(&mut self, call: &ToolCall) -> String {
         let name = call.function.name.clone();
-        let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-            .unwrap_or(serde_json::json!({}));
+        // обрезанные аргументы (живой кейс 24.07: модель прислала «{"id": 1»
+        // без закрывающей скобки; тихий дефолт в {} дал фантомную «задачу 0»):
+        // достраиваем, а если нельзя — честная ошибка вместо пустых аргументов
+        let args: serde_json::Value = match serde_json::from_str(&call.function.arguments) {
+            Ok(v) => v,
+            Err(_) => match repair_truncated_json(&call.function.arguments) {
+                Some(v) => {
+                    self.emit(AgentEvent::HookNote(format!(
+                        "⚠ аргументы «{name}» были обрезаны моделью — достроены до валидного JSON")));
+                    v
+                }
+                None => {
+                    let short: String = call.function.arguments.chars().take(120).collect();
+                    self.emit(AgentEvent::ToolCall { name: name.clone(),
+                        args: call.function.arguments.clone(), decision: "Deny (bad json)".into() });
+                    let out = format!(
+                        "ERROR: невалидный JSON в аргументах инструмента «{name}»: «{short}». \
+                         Вызов НЕ выполнен — повторите с корректным JSON.");
+                    self.emit(AgentEvent::ToolResult { name: name.clone(),
+                        preview: out.chars().take(200).collect(), ok: false });
+                    return out;
+                }
+            },
+        };
 
         // doom-loop детектор (OpenDev #7): ≥3 идентичных (tool,args) в окне 20
         let fp = fingerprint(&name, &args);

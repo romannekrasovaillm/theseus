@@ -1079,10 +1079,47 @@ mod tests {
         assert_eq!(bare, "просто вопрос", "без замет промпт не должен меняться");
     }
 
+    /// Достройка обрезанного JSON (живой кейс 24.07 — «{"id": 1» без скобки).
+    #[test]
+    fn repair_truncated_json_cases() {
+        // обрезанная скобка — достраивается
+        let v = execute::repair_truncated_json(r#"{"id": 1"#).expect("скобка");
+        assert_eq!(v["id"], serde_json::json!(1));
+        // обрезанная строка + скобки — кавычка и стек
+        let v = execute::repair_truncated_json(r#"{"a": "tex"#).expect("строка");
+        assert_eq!(v["a"], serde_json::json!("tex"));
+        // вложенный массив без закрытия
+        let v = execute::repair_truncated_json(r#"{"ids": [1, 2"#).expect("массив");
+        assert_eq!(v["ids"], serde_json::json!([1, 2]));
+        // хвостовая запятая срезается
+        let v = execute::repair_truncated_json(r#"{"a": 1,"#).expect("запятая");
+        assert_eq!(v["a"], serde_json::json!(1));
+        // слово оборвано посередине — не ремонтируем
+        assert!(execute::repair_truncated_json(r#"{"a": tru"#).is_none());
+        // баланс нарушен изначально — None
+        assert!(execute::repair_truncated_json("}").is_none());
+    }
+
+    /// execute() на обрезанных аргументах: достройка работает (id парсится,
+    /// фантомной «задачи 0» нет); на мусоре — честная ошибка, без исполнения.
+    #[test]
+    fn execute_repairs_truncated_args_and_rejects_garbage() {
+        let ws = temp_ws("repair_args");
+        let mut agent = offline_agent(&ws);
+        // обрезанный JSON: id=1 достраивается → обработка идёт по id=1,
+        // а не по дефолтному 0 (пустая регистрация: «задача 1 не найдена»)
+        let out = agent.execute(&tool_call("c1", "task_output", r#"{"id": 1"#));
+        assert!(out.contains("задача 1 не найдена"), "{out}");
+        assert!(!out.contains("задача 0 не найдена"), "фантомный дефолт: {out}");
+        // мусор — честная ошибка без исполнения
+        let out2 = agent.execute(&tool_call("c2", "task_output", "{id: garbage"));
+        assert!(out2.starts_with("ERROR: невалидный JSON"), "{out2}");
+        assert!(out2.contains("НЕ выполнен"), "{out2}");
+    }
+
     /// Рой субагентов: разбор аргументов swarm (валидация + дефолтный агент).
     #[test]
-    fn parse_swarm_tasks_validation() {
-        let reg = crate::agents::AgentRegistry::with_builtins();
+    fn parse_swarm_tasks_validation() {        let reg = crate::agents::AgentRegistry::with_builtins();
         let ok = execute::parse_swarm_tasks(
             &serde_json::json!({"tasks": [{"prompt": "разведать"}, {"agent": "plan", "prompt": "спланировать"}]}),
             &reg).expect("валидный рой");
