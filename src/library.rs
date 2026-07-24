@@ -202,7 +202,8 @@ impl LibraryIndex {
         scored
     }
 
-    /// Ищет по txt-зеркалам (`file.pdf.txt` и прочие `*.txt`).
+    /// Ищет по текстовым документам библиотеки (`*.txt` зеркала PDF, а также
+    /// `*.md`/`*.markdown` — дайджесты и заметки; расширение обхода 24.07).
     ///
     /// Скор файла: [`SCORE_FILENAME`] за каждое слово запроса в имени плюс
     /// [`SCORE_TEXT_PER_MATCH`] за каждое вхождение слова в первые
@@ -237,7 +238,7 @@ impl LibraryIndex {
                     stack.push(path);
                     continue;
                 }
-                if !ft.is_file() || !name.to_lowercase().ends_with(".txt") {
+                if !ft.is_file() || !is_text_doc(&name.to_lowercase()) {
                     continue;
                 }
                 examined += 1;
@@ -265,6 +266,7 @@ impl LibraryIndex {
     /// * Для `file.pdf` читается зеркало `file.pdf.txt`; нет зеркала —
     ///   вежливая ошибка с подсказкой про `pdftotext`.
     /// * `docx` не читается в принципе — ошибка «используйте txt».
+    /// * `.md`/`.markdown` читаются как обычный текст (дайджесты библиотеки).
     pub fn read_excerpt(&self, path: &Path, max_chars: usize) -> Result<String> {
         let joined = if path.is_absolute() {
             path.to_path_buf()
@@ -284,7 +286,9 @@ impl LibraryIndex {
             .map(str::to_lowercase)
             .unwrap_or_default();
         let target = match ext.as_str() {
-            "txt" => normalized,
+            // md/markdown — обычный текст (дайджесты библиотеки, баг 24.07:
+            // library_read отказывал в «неподдерживаемое расширение «md»»)
+            "txt" | "md" | "markdown" => normalized,
             "pdf" => {
                 let mut mirror = normalized.into_os_string();
                 mirror.push(".txt");
@@ -300,7 +304,7 @@ impl LibraryIndex {
             }
             "docx" => bail!("docx не читается, используйте txt: {}", path.display()),
             other => bail!(
-                "неподдерживаемое расширение «{other}» ({}): читаются только .txt зеркала",
+                "неподдерживаемое расширение «{other}» ({}): читаются .txt/.md и txt-зеркала PDF",
                 path.display()
             ),
         };
@@ -354,8 +358,13 @@ impl LibraryIndex {
 /// Разбивает текст на слова-токены: lowercase, минимум два символа и хотя
 /// бы одна буква (чисто цифровые вроде «01» отбрасываются), без повторов,
 /// порядок сохраняется.
-fn tokenize(text: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
+/// Текстовый документ библиотеки для индексации: `.txt` (в т.ч. зеркала
+/// PDF) или `.md`/`.markdown` (дайджесты, заметки — расширение обхода 24.07).
+fn is_text_doc(name_lower: &str) -> bool {
+    name_lower.ends_with(".txt") || name_lower.ends_with(".md") || name_lower.ends_with(".markdown")
+}
+
+fn tokenize(text: &str) -> Vec<String> {    let mut out: Vec<String> = Vec::new();
     for raw in text.split(|c: char| !c.is_alphanumeric()) {
         let word = raw.to_lowercase();
         if word.chars().count() >= 2
@@ -656,6 +665,39 @@ mod tests {
         );
         let abs = abs.canonicalize().unwrap();
         assert_eq!(idx.read_excerpt(&abs, 100).unwrap(), "привет, мир grpo");
+    }
+
+    /// Индексатор покрывает и md-дайджесты (расширение обхода 24.07):
+    /// поиск по слову находит .md рядом с .txt-зеркалами.
+    #[test]
+    fn search_docs_finds_markdown_digests() {
+        let (tmp, idx) = make_index();
+        tmp.write("03_RL/paper.pdf.txt", "агентные скиллы и trigger-тесты");
+        tmp.write("08_Новостные_дайджесты/AINews/2026-07-14_Coding.md",
+            "# Дайджест\n\nагентные скиллы недели");
+        tmp.write("09_x/note.markdown", "агентные скиллы в markdown");
+        let hits = idx.search_docs("агентные скиллы", 10);
+        let paths: Vec<&PathBuf> = hits.iter().map(|h| &h.path).collect();
+        assert!(paths.iter().any(|p| p.ends_with("2026-07-14_Coding.md")),
+            "md-дайджест не найден: {paths:?}");
+        assert!(paths.iter().any(|p| p.ends_with("note.markdown")), "{paths:?}");
+        // is_text_doc: txt/md/markdown — да; docx/pdf/bin — нет
+        assert!(is_text_doc("a.txt") && is_text_doc("b.md") && is_text_doc("c.markdown"));
+        assert!(!is_text_doc("d.docx") && !is_text_doc("e.pdf") && !is_text_doc("f.bin"));
+    }
+
+    /// md/markdown — обычный текст (баг 24.07: library_read отказывал
+    /// дайджестам «неподдерживаемое расширение «md»»).
+    #[test]
+    fn read_excerpt_reads_markdown_as_text() {        let (tmp, idx) = make_index();
+        tmp.write("08_Новостные_дайджесты/AINews/2026-07-14_Coding_Agent.md",
+            "# Дайджест\n\nновости про агентов");
+        let got = idx.read_excerpt(
+            Path::new("08_Новостные_дайджесты/AINews/2026-07-14_Coding_Agent.md"), 100).unwrap();
+        assert!(got.contains("новости про агентов"), "{got}");
+        tmp.write("09_x/note.markdown", "markdown body");
+        assert!(idx.read_excerpt(Path::new("09_x/note.markdown"), 100)
+            .unwrap().contains("markdown body"));
     }
 
     #[test]
