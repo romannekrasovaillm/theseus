@@ -52,8 +52,12 @@ const SWARM_MAX_TASKS: usize = 8;
 /// «{"id": 1» без закрывающей скобки — тихий откат в {} дал «задачу 0»).
 /// Достраиваем кавычку и скобки по стеку; хвостовую запятую срезаем.
 /// Ключевые слова/числа, оборванные посередине («tru», «12.»), не ремонтируем
-/// — тогда None и штатная ошибка невалидного JSON. Чистая функция — для тестов.
-pub(crate) fn repair_truncated_json(text: &str) -> Option<serde_json::Value> {
+/// — тогда None и штатная ошибка невалидного JSON.
+/// Возвращает (значение, closed_open_string): флаг «пришлось закрывать
+/// незакрытую строку» — контент поля тогда почти наверняка усечён (живой
+/// кейс 24.07: write_file записал оборванный генератор отчёта, и модель об
+/// этом не знала — результат инструмента обязан предупредить).
+pub(crate) fn repair_truncated_json(text: &str) -> Option<(serde_json::Value, bool)> {
     let mut out = text.trim_end().to_string();
     while out.ends_with(',') {
         out.pop();
@@ -84,13 +88,15 @@ pub(crate) fn repair_truncated_json(text: &str) -> Option<serde_json::Value> {
             _ => {}
         }
     }
+    let mut closed_open_string = false;
     if in_string {
         out.push('"');
+        closed_open_string = true;
     }
     for open in stack.iter().rev() {
         out.push(if *open == '{' { '}' } else { ']' });
     }
-    serde_json::from_str(&out).ok()
+    serde_json::from_str(&out).ok().map(|v| (v, closed_open_string))
 }
 
 /// Разбор аргументов инструмента swarm (чистая функция — для тестов):
@@ -234,13 +240,26 @@ impl Agent {
         let name = call.function.name.clone();
         // обрезанные аргументы (живой кейс 24.07: модель прислала «{"id": 1»
         // без закрывающей скобки; тихий дефолт в {} дал фантомную «задачу 0»):
-        // достраиваем, а если нельзя — честная ошибка вместо пустых аргументов
+        // достраиваем, а если нельзя — честная ошибка вместо пустых аргументов.
+        // repair_note идёт в РЕЗУЛЬТАТ инструмента: модель иначе не узнает,
+        // что её content усечён (кейс 24.07: оборванный генератор отчёта)
+        let mut repair_note: Option<String> = None;
         let args: serde_json::Value = match serde_json::from_str(&call.function.arguments) {
             Ok(v) => v,
             Err(_) => match repair_truncated_json(&call.function.arguments) {
-                Some(v) => {
+                Some((v, closed_string)) => {
                     self.emit(AgentEvent::HookNote(format!(
                         "⚠ аргументы «{name}» были обрезаны моделью — достроены до валидного JSON")));
+                    repair_note = Some(if closed_string
+                        && matches!(name.as_str(), "write_file" | "edit_file" | "apply_patch")
+                    {
+                        "\n⚠ АРГУМЕНТЫ ОБРЕЗАНЫ ПО ЛИМИТУ ТОКЕНОВ: «content» почти наверняка \
+                         УСЕЧЁН. Проверьте конец файла (bash: tail -3 <путь>); если усечён — \
+                         перезапишите ЧАСТЯМИ: write_file первую часть, затем apply_patch/edit_file \
+                         с дополнением. Большие файлы пишите частями заранее.".to_string()
+                    } else {
+                        "\n[note: аргументы были обрезаны моделью и достроены харнессом]".to_string()
+                    });
                     v
                 }
                 None => {
@@ -302,6 +321,12 @@ impl Agent {
             serde_json::json!({"tool": name, "args": args, "ok": !out.starts_with("ERROR")}));
         let extra = crate::hooks_ext::collect_stdout(&post);
         let out = if extra.is_empty() { out } else { format!("{out}\n[hook stdout] {extra}") };
+        // заметка о починенных аргументах — в РЕЗУЛЬТАТ для модели (кейс 24.07:
+        // модель не узнала об усечении своего content и строила на битом файле)
+        let out = match repair_note {
+            Some(note) => format!("{out}{note}"),
+            None => out,
+        };
         // deny-repeat tracking
         if out.starts_with("DENIED") || out.starts_with("BLOCKED") {
             self.last_deny_fp = Some(fp);

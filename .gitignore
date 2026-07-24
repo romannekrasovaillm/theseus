@@ -44,3 +44,6 @@ config.local.toml
 /*_graph.json
 /*_graph.md
 /.test_write
+
+# Сгенерированные агентом скрипты в корне (create_review.py и т.п.)
+/create_*.py
