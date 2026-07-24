@@ -16,6 +16,9 @@ pub struct BgTask {
     pub done: Arc<Mutex<Option<i32>>>,
     /// потоковая задача (spawn_fn): результата — строка из замыкания, child нет
     pub threaded: bool,
+    /// флаг кооперативной остановки (v0.7): task_stop на потоковой задаче
+    /// выставляет его; субагент проверяет на границе хода и прерывается
+    pub cancel: Arc<std::sync::atomic::AtomicBool>,
 }
 
 /// Атомарная финализация задачи: выставить код завершения, если его ещё нет.
@@ -187,6 +190,7 @@ impl BgRegistry {
         self.tasks.insert(id, BgTask {
             id, command: command.to_string(), started: Instant::now(),
             out, child: Some(child), done, threaded: false,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
         self.snap_push(BgTaskInfo {
             id, kind: "bash".to_string(), label: command.to_string(),
@@ -199,7 +203,11 @@ impl BgRegistry {
     /// результат (фоновые субагенты и peer-вызовы, v0.6.6 — Тесей продолжает
     /// работу, не дожидаясь субагента). Процессного child нет: stop её не
     /// убивает — время жизни ограничивают собственные бюджеты/таймауты задачи.
-    pub fn spawn_fn(&mut self, label: String, f: impl FnOnce() -> String + Send + 'static) -> u64 {
+    /// `cancel` — флаг кооперативной остановки (v0.7): выставляется task_stop,
+    /// проверяется замыканием на границе хода (субагент) или игнорируется
+    /// (peer-вызов — тот прервётся по своему таймауту).
+    pub fn spawn_fn(&mut self, label: String, cancel: Arc<std::sync::atomic::AtomicBool>,
+                    f: impl FnOnce() -> String + Send + 'static) -> u64 {
         let out = Arc::new(Mutex::new(String::new()));
         let done = Arc::new(Mutex::new(None));
         self.next += 1;
@@ -231,8 +239,14 @@ impl BgRegistry {
         self.tasks.insert(id, BgTask {
             id, command: label, started: Instant::now(),
             out, child: None, done, threaded: true,
+            cancel,
         });
         id
+    }
+
+    /// Флаг кооперативной остановки потоковой задачи (для замыкания субагента).
+    pub fn cancel_flag(&self, id: u64) -> Option<Arc<std::sync::atomic::AtomicBool>> {
+        self.tasks.get(&id).map(|t| t.cancel.clone())
     }
 
     pub fn output(&mut self, id: u64) -> String {
@@ -298,9 +312,13 @@ impl BgRegistry {
             return format!("ERROR: задача {id} не найдена");
         };
         if t.threaded {
+            // кооперативная остановка (v0.7, живой кейс 24.07 «субагент завис
+            // на 25 минут»): выставляем флаг отмены — субагент проверяет его
+            // на границе хода и прерывается; peers прервутся по своему таймауту
+            t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             return format!(
-                "[bg {id}] потоковая задача (субагент/peer) не останавливается — \
-                 у неё свой бюджет/таймаут; дождитесь завершения");
+                "[bg {id}] флаг остановки выставлен: субагент прервётся на \
+                 границе хода (peer — по своему таймауту)");
         }
         let mut killed = false;
         if let Some(ch) = t.child.as_mut() {
@@ -364,7 +382,7 @@ mod tests {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut reg = BgRegistry::new();
         reg.set_counter(counter.clone());
-        let id = reg.spawn_fn("subagent — тест".into(), || {
+        let id = reg.spawn_fn("subagent — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
             std::thread::sleep(std::time::Duration::from_millis(80));
             "ok".to_string()
         });
@@ -418,7 +436,7 @@ mod tests {
         let snap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut reg = BgRegistry::new();
         reg.set_snapshot(snap.clone());
-        let id = reg.spawn_fn("subagent explore — что-то".into(), || {
+        let id = reg.spawn_fn("subagent explore — что-то".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
             std::thread::sleep(std::time::Duration::from_millis(50));
             "ok".to_string()
         });
@@ -451,7 +469,7 @@ mod tests {
     #[test]
     fn spawn_fn_lifecycle() {
         let mut reg = BgRegistry::new();
-        let id = reg.spawn_fn("subagent explore — тест".into(), || {
+        let id = reg.spawn_fn("subagent explore — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
             std::thread::sleep(std::time::Duration::from_millis(80));
             "ответ субагента".to_string()
         });
@@ -465,8 +483,27 @@ mod tests {
         let done = reg.output(id);
         assert!(done.contains("завершена"), "{done}");
         assert!(done.contains("ответ субагента"), "результат потерян: {done}");
-        // stop на потоковой — честный отказ, а не «уже завершена»
+        // stop на потоковой — кооперативный флаг (v0.7), не отказ
         let stop = reg.stop(id);
-        assert!(stop.contains("не останавливается"), "{stop}");
+        assert!(stop.contains("флаг остановки"), "{stop}");
+    }
+
+    /// Кооперативная остановка потоковой задачи (живой кейс 24.07 — субагент
+    /// висел 25 минут, task_stop отвечал «не останавливается»): stop выставляет
+    /// флаг отмены, замыкание может его прочитать через cancel_flag.
+    #[test]
+    fn stop_threaded_sets_cancel_flag() {
+        let mut reg = BgRegistry::new();
+        let id = reg.spawn_fn("subagent explore — долгий".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            "поздний".to_string()
+        });
+        let flag = reg.cancel_flag(id).expect("флаг есть");
+        assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
+        let out = reg.stop(id);
+        assert!(out.contains("флаг остановки выставлен"), "{out}");
+        assert!(flag.load(std::sync::atomic::Ordering::Relaxed),
+            "флаг обязан быть взведён после stop");
     }
 }

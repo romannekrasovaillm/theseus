@@ -248,7 +248,7 @@ impl Agent {
     /// по типу), итог с пометкой обрыва по бюджету и учётом ходов/токенов.
     fn run_subagent(&self, spec: &crate::agents::AgentSpec, prompt: &str) -> String {
         let budget = crate::agents::default_budget(spec);
-        match subagent::run_agent(&self.sub, &self.workspace, spec, prompt, budget, self.env.sandbox) {
+        match subagent::run_agent(&self.sub, &self.workspace, spec, prompt, budget, self.env.sandbox, None) {
             Ok(res) => {
                 let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
                 crate::tools::cap_pub(format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
@@ -287,10 +287,15 @@ impl Agent {
         let prompt2 = prompt.to_string();
         let budget = crate::agents::default_budget(spec);
         let sandbox = self.env.sandbox;
+        // флаг кооперативной остановки: task_stop выставит его, субагент
+        // прочитает на границе хода (живой кейс 24.07 — explore висел 25 минут)
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let cancel2 = cancel.clone();
         let label = format!("subagent {} — {}", spec.name,
             prompt.chars().take(60).collect::<String>());
-        self.bg.spawn_fn(label, move || {
-            match crate::subagent::run_agent(&sub_cfg, &ws, &spec2, &prompt2, budget, sandbox) {
+        self.bg.spawn_fn(label, cancel, move || {
+            match crate::subagent::run_agent(&sub_cfg, &ws, &spec2, &prompt2, budget, sandbox,
+                                             Some(&cancel2)) {
                 Ok(res) => {
                     let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
                     format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
@@ -337,7 +342,8 @@ impl Agent {
         let label = format!("peer {} — {}", pspec.name,
             task.chars().take(60).collect::<String>());
         let name2 = pspec.name.clone();
-        let id = self.bg.spawn_fn(label, move || {
+        let id = self.bg.spawn_fn(label,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move || {
             match crate::peers::peer_ask(&pspec, &task2, &ws, timeout) {
                 Ok(out) => out,
                 Err(e) => format!("ERROR: peer «{name2}» недоступен или упал: {e:#}"),

@@ -61,8 +61,12 @@ fn dispatch_sub(env: &mut ToolEnv, bg: &mut BgRegistry, workspace: &Path,
 
 /// Прогон субагента по спеке: изолированный agent-loop со своим бюджетом.
 /// `sandbox` — флаг ядерной песочницы родителя (пробрасывается в bash субагента).
+/// `cancel` — флаг кооперативной остановки из BgRegistry (task_stop): проверяется
+/// на границе каждого хода; взведён — субагент прерывается с честным маркером
+/// (живой кейс 24.07: explore висел 25 минут, task_stop был бессилен).
 pub fn run_agent(cfg: &SubConfig, workspace: &Path, spec: &AgentSpec,
-                 prompt: &str, budget: AgentBudget, sandbox: bool) -> Result<AgentResult> {
+                 prompt: &str, budget: AgentBudget, sandbox: bool,
+                 cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<AgentResult> {
     let mut api = ApiClient::new(&cfg.base_url, &cfg.api_key, &cfg.model,
                                  cfg.timeout_secs, cfg.extra_body.clone(), cfg.max_output_tokens)?;
     let mut env = ToolEnv::new(workspace);
@@ -75,6 +79,12 @@ pub fn run_agent(cfg: &SubConfig, workspace: &Path, spec: &AgentSpec,
     let tools = sub_toolset(spec);
     let mut guard = BudgetGuard::new(budget);
     loop {
+        // кооперативная остановка — до очередного обращения к модели
+        if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+            return Ok(AgentResult::from_guard(
+                format!("(субагент «{}» остановлен пользователем через task_stop)", spec.name),
+                &guard, true));
+        }
         // настенный лимит — перед очередным обращением к модели
         if let Err(e) = guard.check() {
             return Ok(AgentResult::from_guard(
@@ -115,9 +125,30 @@ mod tests {
     /// Тулсет субагента строго по спеке: только разрешённые инструменты и
     /// никогда — `task` (глубина делегирования 1); у readonly-спек в тулсете
     /// нет ни одного пишущего инструмента (WRITE_TOOLS).
+    /// Кооперативная остановка (живой кейс 24.07 — explore висел 25 минут):
+    /// взведённый флаг прерывает субагента до первого обращения к модели,
+    /// без единого API-вызова (base_url недостижим — не должен потребоваться).
     #[test]
-    fn sub_toolset_follows_spec_and_drops_task() {
-        for spec in builtin_specs() {
+    fn run_agent_stops_on_cancel_flag() {
+        let spec = crate::agents::AgentSpec::new("explore", "тест", "тестовый промпт",
+            &["read_file"], 5, true);
+        let cfg = SubConfig {
+            base_url: "http://127.0.0.1:1".into(),
+            api_key: "test".into(),
+            model: "test".into(),
+            timeout_secs: 1,
+            extra_body: serde_json::json!({}),
+            max_output_tokens: 16,
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(true);
+        let res = run_agent(&cfg, Path::new("/tmp"), &spec, "задача",
+            crate::agents::AgentBudget::default(), false, Some(&cancel)).expect("ok");
+        assert!(res.summary.contains("остановлен пользователем"), "{}", res.summary);
+        assert!(res.truncated, "обрыв помечается truncated");
+    }
+
+    #[test]
+    fn sub_toolset_follows_spec_and_drops_task() {        for spec in builtin_specs() {
             let tools = sub_toolset(&spec);
             let names: Vec<&str> = tools.as_array().expect("массив тулсета").iter()
                 .filter_map(|t| t["function"]["name"].as_str()).collect();

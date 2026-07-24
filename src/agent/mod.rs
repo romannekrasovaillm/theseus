@@ -1106,8 +1106,8 @@ mod tests {
     #[test]
     fn collect_bg_results_waits_and_reports() {
         let mut bg = crate::background::BgRegistry::new();
-        let fast = bg.spawn_fn("fast".into(), || "быстрый ответ".to_string());
-        let slow = bg.spawn_fn("slow".into(), || {
+        let fast = bg.spawn_fn("fast".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || "быстрый ответ".to_string());
+        let slow = bg.spawn_fn("slow".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
             std::thread::sleep(std::time::Duration::from_millis(400));
             "медленный ответ".to_string()
         });
@@ -1118,7 +1118,7 @@ mod tests {
         assert!(!out.contains("не завершились"), "{out}");
         // таймаут: незавершившаяся помечается, результат можно добрать позже
         let mut bg2 = crate::background::BgRegistry::new();
-        let hang = bg2.spawn_fn("hang".into(), || {
+        let hang = bg2.spawn_fn("hang".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
             std::thread::sleep(std::time::Duration::from_secs(3));
             "поздний".to_string()
         });
