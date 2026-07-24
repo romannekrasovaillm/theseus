@@ -368,6 +368,13 @@ fn fmt_mmss(secs: u64) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
+/// Строка лога — индикатор «(мышление: N символов)»? Для правила «один
+/// рендер»: за стрим-блоком только такие строки — финализация на месте,
+/// без переноса в конец (запрос 24.07 против двойного рендера/прыжка).
+fn line_is_reasoning_note(line: &LogLine) -> bool {
+    line.spans.iter().any(|s| s.content.contains("(мышление:"))
+}
+
 /// Живая панель фоновых задач в шапке (v0.7): « · explore 1:20 · peer kimi 3:45»
 /// — только бегущие, усечение до max_chars (чистая функция — для тестов).
 fn format_bg_panel(items: &[crate::background::BgTaskInfo], max_chars: usize) -> String {
@@ -390,7 +397,8 @@ fn format_bg_panel(items: &[crate::background::BgTaskInfo], max_chars: usize) ->
 }
 
 /// Плейсхолдер пустой строки ввода; `None`, когда ввод непустой.
-fn input_placeholder(input: &str) -> Option<&'static str> {    if input.is_empty() {
+fn input_placeholder(input: &str) -> Option<&'static str> {
+    if input.is_empty() {
         Some("задача или /команда…")
     } else {
         None
@@ -1267,15 +1275,27 @@ impl TuiApp {
                 self.push(line);
             }
             AgentEvent::AgentText(t) => {
-                // финальный текст — ВСЕГДА в конец лога (хронология, баг 22.07):
-                // стрим-блок снимается по индексу, итоговый markdown-рендер
-                // дописывается вниз. Рендер по старому индексу оставлял ответ
-                // ВЫШЕ строк, записанных во время стрима (Reasoning, инструменты,
-                // очередь) — пользователю приходилось скроллить вверх за ответом.
+                // Финальный текст — ОДИН рендер, без прыжка (запрос 24.07):
+                // если после стрим-блока только индикатор «мышление» — снимаем
+                // обе строки и кладём их обратно в том же порядке (индикатор
+                // выше, текст — на место стрима): визуально текст не двигается.
+                // Перенос в конец лога — только когда за стримом записались
+                // ДРУГИЕ строки (инструменты и т.п.) — хронология (баг 22.07).
                 if let Some(idx) = self.stream_line_idx.take() {
-                    let end = (idx + self.stream_block_len).min(self.log.len());
-                    if idx < end {
-                        self.log.drain(idx..end);
+                    let block_end = (idx + self.stream_block_len).min(self.log.len());
+                    if self.log[block_end..].iter().all(line_is_reasoning_note) {
+                        // снимаем сначала хвост-индикатор, потом стрим-блок;
+                        // индикатор возвращается выше текста (порядок скриншотов),
+                        // финальный текст ляжет на место стрима — без прыжка
+                        let trailing: Vec<LogLine> = self.log.drain(block_end..).collect();
+                        self.log.drain(idx..block_end);
+                        for l in trailing {
+                            self.log.push(l);
+                        }
+                    } else {
+                        if idx < block_end {
+                            self.log.drain(idx..block_end);
+                        }
                     }
                     if self.follow { self.scroll = self.log.len().saturating_sub(1); }
                 }
@@ -3394,6 +3414,30 @@ mod render_bug_tests {
         // частичный стрим-блок снят — дублей нет
         let partial = text.iter().filter(|t| t.contains("часть ответа")).count();
         assert_eq!(partial, 0, "частичный блок не снят: {text:?}");
+    }
+
+    /// Регрессия (запрос 24.07): финальный текст рендерится ОДИН раз и на
+    /// месте стрима — индикатор «мышление» переезжает выше текста, прыжка
+    /// в конец лога и двойного рендера нет.
+    #[test]
+    fn agent_text_finalizes_in_place_no_jump() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::AgentTextDelta("Ответ: ".into()));
+        app.on_event(AgentEvent::AgentTextDelta("42".into()));
+        app.on_event(AgentEvent::Reasoning(10));
+        app.on_event(AgentEvent::AgentText("Ответ: 42".into()));
+        let contents: Vec<String> = app.log.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        let hits: Vec<usize> = contents.iter().enumerate()
+            .filter(|(_, c)| c.contains("Ответ: 42"))
+            .map(|(i, _)| i).collect();
+        assert_eq!(hits.len(), 1, "ровно один рендер текста: {contents:?}");
+        // текст — последней строкой (на месте стрима, без уезда/дубля)
+        assert_eq!(hits[0], contents.len() - 1, "текст не на месте: {contents:?}");
+        assert_eq!(contents.len(), 2, "строки: индикатор + текст: {contents:?}");
+        // индикатор мышления — выше текста (порядок как в живых скриншотах)
+        assert!(contents[0].contains("(мышление:"), "{contents:?}");
     }
 
     /// Хронология стрим-блока (баг 21.07): желобок первой строки заморожен
