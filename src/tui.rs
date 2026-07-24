@@ -363,9 +363,34 @@ fn slash_completions(input: &str) -> Vec<slash::SlashCmd> {
         .collect()
 }
 
+/// Формат длительности mm:ss для таймеров панели и уведомлений.
+fn fmt_mmss(secs: u64) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
+}
+
+/// Живая панель фоновых задач в шапке (v0.7): « · explore 1:20 · peer kimi 3:45»
+/// — только бегущие, усечение до max_chars (чистая функция — для тестов).
+fn format_bg_panel(items: &[crate::background::BgTaskInfo], max_chars: usize) -> String {
+    let running: Vec<String> = items.iter()
+        .filter(|i| !i.done)
+        .map(|i| format!("{} {}", i.kind, fmt_mmss(i.started.elapsed().as_secs())))
+        .collect();
+    if running.is_empty() {
+        return String::new();
+    }
+    let joined = running.join(" · ");
+    let with_sep = format!(" · {joined}");
+    if with_sep.chars().count() <= max_chars {
+        with_sep
+    } else {
+        // хвост обрезаем с многоточием, не разрывая середину UTF-8
+        let head: String = with_sep.chars().take(max_chars.saturating_sub(1)).collect();
+        format!("{head}…")
+    }
+}
+
 /// Плейсхолдер пустой строки ввода; `None`, когда ввод непустой.
-fn input_placeholder(input: &str) -> Option<&'static str> {
-    if input.is_empty() {
+fn input_placeholder(input: &str) -> Option<&'static str> {    if input.is_empty() {
         Some("задача или /команда…")
     } else {
         None
@@ -937,6 +962,12 @@ pub struct TuiApp {
     /// число работающих фоновых задач из Controls.bg_running (обновляется в
     /// цикле run_tui): индикатор «фон: N» в шапке (v0.6.6)
     bg_running: usize,
+    /// снимок фоновых задач из Controls.bg_snapshot (обновляется в цикле
+    /// run_tui): живая панель «фон: explore 1:20 · peer kimi 3:45» (v0.7)
+    bg_items: Vec<crate::background::BgTaskInfo>,
+    /// id фоновых задач, о завершении которых уже сообщено в лог (v0.7:
+    /// уведомления о финишах без опроса — «непонятно, что происходит в фоне»)
+    announced_bg: std::collections::HashSet<u64>,
     /// курсор в поле ввода — символьный индекс (многострочный ввод v0.6.3):
     /// вставка/удаление идут по курсору, не только в конце строки
     cursor: usize,
@@ -1106,6 +1137,8 @@ impl TuiApp {
             sel: None, log_area: Rect::default(), last_tool_open: None,
             mode_code: crate::permissions::MODE_UNSET,
             bg_running: 0,
+            bg_items: Vec::new(),
+            announced_bg: std::collections::HashSet::new(),
             cursor: 0,
         }
     }
@@ -1439,12 +1472,13 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     }
     if app.bg_running > 0 {
         // фоновые агенты (субагенты/пиры/bash): свой индикатор с пульсом
-        // (v0.6.6) — виден и когда основной агент свободен
+        // (v0.6.6) — виден и когда основной агент свободен; v0.7 — живая
+        // панель с типом и таймером каждой бегущей задачи
         let tick = app.started_at.elapsed().as_millis() as u64 / 250;
         let pulse = ["⡀", "⣀", "⣠", "⣰"][(tick % 4) as usize];
         head.push(sep());
         head.push(Span::styled(
-            format!("{pulse} фон: {}", app.bg_running),
+            format!("{pulse} фон: {}{}", app.bg_running, format_bg_panel(&app.bg_items, 48)),
             role_style(&app.theme, ThemeRole::ToolName),
         ));
     }
@@ -1923,6 +1957,37 @@ fn render_skill_audit(app: &mut TuiApp, v: &serde_json::Value,
     }
 }
 
+/// `/bg`: таблица фоновых задач из разделяемого снимка (v0.7) — работает
+/// и пока агент занят (чтение реестра не требует доступа к агенту).
+fn cmd_bg(app: &mut TuiApp, controls: &Controls) {
+    let theme = app.theme.clone();
+    let items = controls.bg_snapshot.lock().unwrap().clone();
+    let lines = format_bg_table(&items);
+    for line in lines {
+        let role = if line.contains("работает") { ThemeRole::Warn }
+            else if line.starts_with("фоновых") { ThemeRole::Dim }
+            else { ThemeRole::Accent };
+        app.push(vec![Span::styled(line, role_style(&theme, role))]);
+    }
+}
+
+/// Строки таблицы /bg (чистая функция — для тестов): id · тип · время ·
+/// статус · метка; завершённые тоже показываем (их результаты можно забрать).
+fn format_bg_table(items: &[crate::background::BgTaskInfo]) -> Vec<String> {
+    if items.is_empty() {
+        return vec!["фоновых задач нет — рой и фоновые субагенты появятся здесь".to_string()];
+    }
+    let mut out = vec![format!("фоновые задачи ({}):", items.len())];
+    for i in items {
+        let status = if i.done { "завершена" } else { "работает" };
+        let label: String = i.label.chars().take(56).collect();
+        out.push(format!("  bg {:<3} {:<12} {:>6}  {:<10} {}",
+            i.id, i.kind, fmt_mmss(i.started.elapsed().as_secs()), status, label));
+    }
+    out.push("результаты завершённых: task_output {id} или swarm_wait".to_string());
+    out
+}
+
 /// `/memory`: сводка кросс-сессионной памяти (файл ~/.theseus/memory/MEMORY.md).
 fn cmd_memory(app: &mut TuiApp) {
     match std::env::var("HOME").ok().map(PathBuf::from) {
@@ -2101,6 +2166,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
             }
             "skills" => cmd_skills(app, args),
             "skill-search" => cmd_skill_search(app, args, controls),
+            "bg" => cmd_bg(app, controls),
             "memory" => cmd_memory(app),
             "sessions" => cmd_sessions(app),
             "trace" => cmd_trace(app),
@@ -2153,6 +2219,10 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                 app.sel = None;
                 app.completion_cycle = None;
                 app.ctx_est_tokens = None;
+                // сброс фонового слежения: снимок и announced начинаются заново
+                controls.bg_snapshot.lock().unwrap().clear();
+                app.bg_items.clear();
+                app.announced_bg.clear();
                 controls.reset_session.store(true, std::sync::atomic::Ordering::Relaxed);
                 app.push(vec![Span::styled(
                     format!("╭─ новая сессия: история очищена, транскрипт — в новые файлы (/{0}) ─╮", cmd.name),
@@ -2221,8 +2291,22 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
         app.agent_running = matches!(state, AState::Running(_));
         // индикатор режима разрешений (слева в заголовке ввода)
         app.mode_code = controls.mode_atomic.load(std::sync::atomic::Ordering::Relaxed);
-        // индикатор фоновых задач в шапке («фон: N»)
+        // индикатор фоновых задач в шапке («фон: N») и живая панель (v0.7)
         app.bg_running = controls.bg_running.load(std::sync::atomic::Ordering::Relaxed);
+        app.bg_items = controls.bg_snapshot.lock().unwrap().clone();
+        // уведомления о завершении фоновых задач в лог (v0.7): без опроса,
+        // один раз на задачу; /new|/clear сбрасывает announced_bg
+        let newly_done: Vec<crate::background::BgTaskInfo> = app.bg_items.iter()
+            .filter(|i| i.done && !app.announced_bg.contains(&i.id))
+            .cloned().collect();
+        for info in newly_done {
+            app.announced_bg.insert(info.id);
+            let secs = info.started.elapsed().as_secs();
+            app.push(vec![Span::styled(
+                format!("✅ bg {} ({}) завершена за {} — заберите результат: swarm_wait или task_output",
+                    info.id, info.kind, fmt_mmss(secs)),
+                role_style(&app.theme, ThemeRole::Ok))]);
+        }
         let pq = broker.peek();
         terminal.draw(|f| draw(f, &mut app, pq.as_deref()))?;
 
@@ -2765,6 +2849,47 @@ mod ui_helpers_tests {
         assert!(note.contains("по номеру"), "note: {note}");
     }
 
+    /// Живая панель «фон» (v0.7): только бегущие задачи, тип + таймер,
+    /// усечение по ширине, пусто когда бегущих нет.
+    #[test]
+    fn bg_panel_shows_only_running_with_timers() {
+        use crate::background::BgTaskInfo;
+        let mk = |id: u64, kind: &str, done: bool| BgTaskInfo {
+            id, kind: kind.to_string(), label: format!("lbl{id}"),
+            started: std::time::Instant::now(), done,
+        };
+        let items = vec![mk(1, "explore", false), mk(2, "peer kimi", false), mk(3, "bash", true)];
+        let panel = format_bg_panel(&items, 48);
+        assert!(panel.contains("explore"), "{panel}");
+        assert!(panel.contains("peer kimi"), "{panel}");
+        assert!(!panel.contains("bash"), "завершённая не показана: {panel}");
+        assert!(panel.starts_with(" · "), "{panel}");
+        // усечение по ширине с многоточием
+        let narrow = format_bg_panel(&items, 12);
+        assert!(narrow.chars().count() <= 12, "{narrow}");
+        assert!(narrow.ends_with('…'), "{narrow}");
+        // все завершены — панель пуста
+        assert_eq!(format_bg_panel(&[mk(4, "explore", true)], 48), "");
+    }
+
+    /// Таблица /bg (v0.7): пустой снимок, строки задач со статусами.
+    #[test]
+    fn bg_table_lists_tasks() {
+        use crate::background::BgTaskInfo;
+        assert_eq!(format_bg_table(&[]).len(), 1, "пусто — одна строка-подсказка");
+        let items = vec![
+            BgTaskInfo { id: 7, kind: "explore".into(), label: "subagent explore — x".into(),
+                started: std::time::Instant::now(), done: false },
+            BgTaskInfo { id: 8, kind: "peer kimi".into(), label: "peer kimi — y".into(),
+                started: std::time::Instant::now(), done: true },
+        ];
+        let lines = format_bg_table(&items);
+        assert!(lines[0].contains("фоновые задачи (2)"), "{lines:?}");
+        assert!(lines[1].contains("bg 7") && lines[1].contains("работает"), "{lines:?}");
+        assert!(lines[2].contains("bg 8") && lines[2].contains("завершена"), "{lines:?}");
+        assert!(lines.last().unwrap().contains("task_output"), "{lines:?}");
+    }
+
     /// Формат времени HH:MM: полночь, минуты, пояс +03:00, заворот назад.
     #[test]
     fn time_format_hhmm() {
@@ -2905,9 +3030,9 @@ mod ui_helpers_tests {
     /// Цикл: повторные Tab листают кандидатов по кругу и возвращаются к первому.
     #[test]
     fn complete_cycles_candidates() {
-        // по префиксу «t» два кандидата (theme, trace), общий префикс не длиннее
-        // введённого — цикл периода 2 без промежуточного расширения
-        let (first, c1) = slash_complete("/t", None).unwrap();
+        // по префиксу «c» два кандидата (compact, clear), общий префикс не
+        // длиннее введённого — цикл периода 2 без промежуточного расширения
+        let (first, c1) = slash_complete("/c", None).unwrap();
         let (second, c2) = slash_complete(&first, c1).unwrap();
         let (third, _) = slash_complete(&second, c2).unwrap();
         assert_ne!(first, second, "цикл обязан менять кандидата: {first} == {second}");

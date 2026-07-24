@@ -69,6 +69,9 @@ pub struct Controls {
     /// не порождая отдельного хода (урок: slash-вывод иначе невидим агенту —
     /// баг «загрузи скилл 2» резолвился по чужому списку)
     pub notes_slot: Arc<Mutex<Vec<String>>>,
+    /// снимок фоновых задач для живой панели TUI и уведомлений о завершении
+    /// (v0.7): BgRegistry пушит при спавне и помечает done при завершении
+    pub bg_snapshot: Arc<Mutex<Vec<crate::background::BgTaskInfo>>>,
 }
 
 impl Default for Controls {
@@ -82,6 +85,7 @@ impl Default for Controls {
             reset_session: Arc::new(AtomicBool::new(false)),
             bg_running: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             notes_slot: Arc::new(Mutex::new(Vec::new())),
+            bg_snapshot: Arc::new(Mutex::new(Vec::new())),
         }
     }
 }
@@ -711,6 +715,8 @@ impl Agent {
         self.todo_rejections = 0;
         // счётчик фоновых задач в разделяемый атомик (индикатор «фон: N» в TUI)
         self.bg.set_counter(self.controls.bg_running.clone());
+        // снимок фоновых задач для живой панели и уведомлений TUI (v0.7)
+        self.bg.set_snapshot(self.controls.bg_snapshot.clone());
         // сброс пер-задачного состояния: env.finished и детекторы живут в Agent,
         // который в TUI переиспользуется между вопросами. Без сброса второй вопрос
         // мгновенно «завершался» устаревшим env.finished от первой задачи

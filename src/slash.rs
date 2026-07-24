@@ -143,6 +143,13 @@ static BUILTIN: &[SlashCmd] = &[
         kind: SlashKind::Local,
     },
     SlashCmd {
+        name: "bg",
+        aliases: &["tasks"],
+        summary: "Фоновые задачи (субагенты, пиры, bash): тип, время, статус",
+        usage: "/bg",
+        kind: SlashKind::Local,
+    },
+    SlashCmd {
         name: "memory",
         aliases: &["mem"],
         summary: "Просмотр и редактирование памяти агента",
@@ -608,7 +615,7 @@ mod tests {
     fn help_index_lists_all_commands() {
         let index = help_index();
         let cmds = builtin_commands();
-        assert!(index.contains("Доступные команды (20):"), "индекс:\n{index}");
+        assert!(index.contains("Доступные команды (21):"), "индекс:\n{index}");
         for cmd in &cmds {
             assert!(index.contains(&format!("/{}", cmd.name)), "нет /{} в индексе:\n{index}", cmd.name);
         }
@@ -676,7 +683,7 @@ mod tests {
     #[test]
     fn builtin_registry_shape() {
         let cmds = builtin_commands();
-        assert_eq!(cmds.len(), 20);
+        assert_eq!(cmds.len(), 21);
         for cmd in &cmds {
             assert!(!cmd.name.is_empty());
             assert!(cmd.usage.starts_with(&format!("/{}", cmd.name)), "usage {} не начинается с имени", cmd.name);
