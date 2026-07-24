@@ -88,6 +88,40 @@ impl PatchOp {
     }
 }
 
+/// Нормализация «голых» маркеров операций (живой кейс 24.07): строка вида
+/// `*** Update File` или `*** Update File:` без пути склеивается со
+/// следующей непустой строкой-путём в канонический `*** Update File: <path>`.
+/// Маркеры с путём на той же строке не трогаем; если пути нет вовсе
+/// (следом `***` или конец) — оставляем как есть: сработает штатная ошибка.
+/// Чистая функция — для тестов.
+fn normalize_marker_lines(lines: &[&str]) -> Vec<String> {
+    const MARKERS: [&str; 3] = ["*** Add File", "*** Update File", "*** Delete File"];
+    let mut out: Vec<String> = Vec::with_capacity(lines.len());
+    let mut i = 0;
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+        let bare = MARKERS.iter().find(|m| {
+            trimmed == **m || trimmed == format!("{m}:").as_str()
+        });
+        if let Some(m) = bare {
+            // следующая непустая строка — путь (не маркер)
+            let mut j = i + 1;
+            while j < lines.len() && lines[j].trim().is_empty() {
+                j += 1;
+            }
+            if j < lines.len() && !lines[j].starts_with("***") {
+                out.push(format!("{m}: {}", lines[j].trim()));
+                i = j + 1;
+                continue;
+            }
+        }
+        out.push(line.to_string());
+        i += 1;
+    }
+    out
+}
+
 /// Распарсить текст патча в список операций.
 ///
 /// Проверяет только грамматику: обрамление `*** Begin/End Patch`, маркеры операций
@@ -97,7 +131,12 @@ impl PatchOp {
 /// Возвращает ошибку с номером строки патча (1-based) при любом нарушении формата:
 /// отсутствие обрамления, неизвестный маркер, пустая секция `Update` и т.п.
 pub fn parse_patch(text: &str) -> Result<Vec<PatchOp>> {
-    let lines: Vec<&str> = text.lines().collect();
+    let raw_lines: Vec<&str> = text.lines().collect();
+    // нормализация «голых» маркеров (живой кейс 24.07: модель написала
+    // «*** Update File» без двоеточия и вынесла путь на следующую строку —
+    // парсер отвечал «неизвестный маркер»): склеиваем маркер с путём
+    let owned = normalize_marker_lines(&raw_lines);
+    let lines: Vec<&str> = owned.iter().map(String::as_str).collect();
     if lines.len() < 2 {
         bail!("строка 1: патч пуст или слишком короткий; нужны маркеры '*** Begin Patch' и '*** End Patch'");
     }
@@ -400,6 +439,52 @@ fn seek_sequence(lines: &[String], pattern: &[String], start: usize) -> Option<u
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// «Голый» маркер Update без двоеточия: путь склеивается со следующей
+    /// строки (живой кейс 24.07 — apply_patch отвечал «неизвестный маркер»).
+    #[test]
+    fn bare_update_marker_takes_path_from_next_line() {
+        let text = "*** Begin Patch\n*** Update File\na.txt\n@@\n-old\n+new\n*** End Patch\n";
+        let ops = parse_patch(text).expect("голый маркер обязан парситься: {text}");
+        assert_eq!(ops.len(), 1);
+        match &ops[0] {
+            PatchOp::Update { path, chunks } => {
+                assert_eq!(path, Path::new("a.txt"));
+                assert_eq!(chunks.len(), 1);
+            }
+            other => panic!("ожидался Update: {other:?}"),
+        }
+    }
+
+    /// Вариант с двоеточием без пути (`*** Update File:`) — тоже склейка.
+    #[test]
+    fn colon_only_update_marker_takes_path_from_next_line() {
+        let text = "*** Begin Patch\n*** Update File:\nb/c.txt\n@@\n-x\n+y\n*** End Patch\n";
+        let ops = parse_patch(text).expect("вариант с двоеточием: {text}");
+        match &ops[0] {
+            PatchOp::Update { path, .. } => assert_eq!(path, Path::new("b/c.txt")),
+            other => panic!("ожидался Update: {other:?}"),
+        }
+    }
+
+    /// Канонические строки нормализация не трогает; голый маркер без пути
+    /// (следом другая операция) остаётся ошибкой.
+    #[test]
+    fn normalize_marker_lines_only_bares() {
+        let canonical = ["*** Begin Patch", "*** Update File: a.txt", "*** End Patch"];
+        let out = normalize_marker_lines(&canonical);
+        assert_eq!(out, canonical, "канонический вид не меняется: {out:?}");
+        // голый маркер без пути — дальше штатная ошибка парсера
+        let text = "*** Begin Patch\n*** Update File\n*** End Patch\n";
+        assert!(parse_patch(text).is_err(), "маркер без пути — ошибка");
+        // Delete без двоеточия тоже склеивается
+        let text = "*** Begin Patch\n*** Delete File\nold.txt\n*** End Patch\n";
+        let ops = parse_patch(text).expect("голый Delete: {text}");
+        match &ops[0] {
+            PatchOp::Delete { path } => assert_eq!(path, Path::new("old.txt")),
+            other => panic!("ожидался Delete: {other:?}"),
+        }
+    }
 
     static COUNTER: AtomicU32 = AtomicU32::new(0);
 
