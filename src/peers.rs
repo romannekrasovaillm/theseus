@@ -33,6 +33,11 @@ use std::time::{Duration, Instant};
 /// внутри argv (без shell — см. документацию модуля).
 pub const TASK_PLACEHOLDER: &str = "{task}";
 
+/// Плейсхолдер уникальной сессии в args (openclaw): фиксированный id давал
+/// конфликт «session changed while starting work» при пересечении/старении
+/// сессий (живой кейс 24.07). На каждый вызов — свой: `theseus-<pid>-<мс>`.
+pub const SESSION_PLACEHOLDER: &str = "{session}";
+
 /// Таймаут на `<binary> --version` при пробе агента.
 const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 /// Максимум символов в строке версии (первая строка вывода `--version`).
@@ -110,7 +115,7 @@ pub fn builtin_peers() -> Vec<PeerSpec> {
         // (живой кейс 22.07 — «Гермес завис»; замер зондом: ответ пришёл ~5.5 мин)
         spec("hermes", "hermes", &["-z", TASK_PLACEHOLDER], 600),
         spec("openclaw", "openclaw",
-            &["agent", "--local", "--session-id", "theseus",
+            &["agent", "--local", "--session-id", SESSION_PLACEHOLDER,
               "--model", "deepseek/deepseek-v4-flash", "--message", TASK_PLACEHOLDER],
             180),
     ]
@@ -170,6 +175,17 @@ pub fn probe_peers(specs: &[PeerSpec]) -> Vec<(PeerSpec, PeerStatus)> {
 pub fn peer_ask(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration) -> Result<String> {
     let mut cmd = Command::new(&spec.binary);
     cmd.args(render_args(&spec.args, task)).current_dir(cwd);
+    // openclaw — node-приложение: если дефолтный node старше минимума,
+    // запускаем с новейшим подходящим из nvm (живой кейс 24.07: падение
+    // «Node.js v22.22.1 устарела — нужна ≥22.22.3»)
+    if spec.name == "openclaw" {
+        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+            if let Some(bin_dir) = openclaw_node_bin_dir(&home) {
+                let path = std::env::var("PATH").unwrap_or_default();
+                cmd.env("PATH", format!("{}:{path}", bin_dir.display()));
+            }
+        }
+    }
     let cap = run_capture(&mut cmd, timeout)?;
     let Some(status) = cap.status else {
         bail!(
@@ -221,12 +237,79 @@ pub fn format_peers(probed: &[(PeerSpec, PeerStatus)]) -> String {
 /// плейсхолдера нет ни в одном аргументе — задача идёт последним аргументом.
 fn render_args(args: &[String], task: &str) -> Vec<String> {
     let has_placeholder = args.iter().any(|a| a.contains(TASK_PLACEHOLDER));
+    let session = unique_session_id();
     let mut rendered: Vec<String> =
-        args.iter().map(|a| a.replace(TASK_PLACEHOLDER, task)).collect();
+        args.iter().map(|a| a.replace(TASK_PLACEHOLDER, task)
+            .replace(SESSION_PLACEHOLDER, &session)).collect();
     if !has_placeholder {
         rendered.push(task.to_string());
     }
     rendered
+}
+
+/// Уникальный id сессии для openclaw (живой кейс 24.07: фиксированный
+/// «theseus» давал «session changed while starting work» при повторных/
+/// пересекающихся вызовах — сессия в openclaw stateful).
+fn unique_session_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    let millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis()).unwrap_or(0);
+    // seq — от коллизий вызовов в одну миллисекунду
+    format!("theseus-{}-{millis}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed))
+}
+
+/// Разбор «v22.23.1» / «22.23.1» в тройку версии (чистая функция — для тестов).
+fn parse_node_version(text: &str) -> Option<(u32, u32, u32)> {
+    let t = text.trim().trim_start_matches('v');
+    let mut parts = t.split('.');
+    Some((
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+        parts.next()?.parse().ok()?,
+    ))
+}
+
+/// Поддерживаемые диапазоны Node.js для openclaw (живой кейс 24.07, текст
+/// самого openclaw: «требует 22.22.3 (<23), 24.15.0+ или 25.9.0+»):
+/// v23 целиком не поддерживается — «новейший >= 22.22.3» не подходит!
+fn node_supported(ver: (u32, u32, u32)) -> bool {
+    match ver.0 {
+        22 => ver >= (22, 22, 3),
+        24 => ver >= (24, 15, 0),
+        25 => ver >= (25, 9, 0),
+        _ => false,
+    }
+}
+
+/// Новейший ПОДДЕРЖИВАЕМЫЙ openclaw'ом node в каталоге nvm
+/// (`<nvm_root>/<vX.Y.Z>/bin/node`). Чистая функция по ФС — для тестов.
+fn newest_nvm_node(nvm_root: &Path) -> Option<PathBuf> {
+    let mut candidates: Vec<((u32, u32, u32), PathBuf)> = std::fs::read_dir(nvm_root).ok()?
+        .flatten()
+        .filter_map(|e| {
+            let ver = parse_node_version(&e.file_name().to_string_lossy())?;
+            let bin = e.path().join("bin");
+            (node_supported(ver) && bin.join("node").is_file()).then_some((ver, bin))
+        })
+        .collect();
+    candidates.sort();
+    candidates.pop().map(|(_, bin)| bin)
+}
+
+/// Каталог bin подходящего node для openclaw: если дефолтный `node --version`
+/// вне поддерживаемых диапазонов — новейший поддерживаемый из nvm
+/// (подстановка в начало PATH). None — дефолтный годится или подходящего нет.
+fn openclaw_node_bin_dir(home: &Path) -> Option<PathBuf> {
+    if let Ok(out) = Command::new("node").arg("--version").output() {
+        if let Some(ver) = parse_node_version(&String::from_utf8_lossy(&out.stdout)) {
+            if node_supported(ver) {
+                return None;
+            }
+        }
+    }
+    newest_nvm_node(&home.join(".nvm/versions/node"))
 }
 
 /// Поиск исполняемого файла `binary` по списку каталогов (обход как у PATH).
@@ -411,9 +494,66 @@ mod tests {
         }
     }
 
+    /// Разбор версии Node: «v22.23.1» и «22.23.1» — в тройку; мусор — None.
     #[test]
-    fn render_args_substitutes_task_literally() {
-        let args = vec!["-p".to_string(), TASK_PLACEHOLDER.to_string()];
+    fn parse_node_version_variants() {
+        assert_eq!(parse_node_version("v22.23.1"), Some((22, 23, 1)));
+        assert_eq!(parse_node_version("22.22.3\n"), Some((22, 22, 3)));
+        assert_eq!(parse_node_version("v20.19.5"), Some((20, 19, 5)));
+        assert_eq!(parse_node_version("node"), None);
+        assert_eq!(parse_node_version("v22.14"), None);
+    }
+
+    /// nvm-скан (живой кейс 24.07): выбирается новейшая ПОДДЕРЖИВАЕМАЯ
+    /// openclaw'ом версия — v23 отбрасывается, несмотря на «новизну»
+    /// (openclaw: 22.22.3 (<23), 24.15.0+, 25.9.0+).
+    #[test]
+    fn newest_nvm_node_picks_newest_supported() {
+        let home = std::env::temp_dir().join(format!("theseus-nvm-test-{}", std::process::id()));
+        let nvm = home.join(".nvm/versions/node");
+        for v in ["v20.19.5", "v22.22.1", "v22.23.1", "v22.21.0", "v23.10.0"] {
+            std::fs::create_dir_all(nvm.join(v).join("bin")).unwrap();
+            std::fs::write(nvm.join(v).join("bin/node"), b"x").unwrap();
+        }
+        let best = newest_nvm_node(&nvm).expect("есть поддерживаемая");
+        assert_eq!(best, nvm.join("v22.23.1/bin"),
+            "v23.10.0 НЕ поддерживается — берём v22.23.1");
+        // нет каталога — None, без паники
+        assert!(newest_nvm_node(&home.join("no-such")).is_none());
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    /// Диапазоны версий openclaw: 22.22.3 (<23), 24.15.0+, 25.9.0+.
+    #[test]
+    fn node_supported_ranges() {
+        assert!(node_supported((22, 22, 3)));
+        assert!(node_supported((22, 23, 1)));
+        assert!(!node_supported((22, 22, 1)), "22.22.1 старая");
+        assert!(!node_supported((23, 10, 0)), "v23 целиком не поддерживается");
+        assert!(node_supported((24, 15, 0)));
+        assert!(!node_supported((24, 14, 9)));
+        assert!(node_supported((25, 9, 0)));
+        assert!(!node_supported((25, 8, 9)));
+        assert!(!node_supported((26, 0, 0)), "про будущие мажоры не знаем — строго");
+    }
+
+    /// Уникальная сессия openclaw на каждый вызов (живой кейс 24.07):
+    /// плейсхолдер подставлен, два вызова — разные id, префикс theseus-.
+    #[test]
+    fn render_args_unique_session_per_call() {
+        let args = vec!["--session-id".to_string(), SESSION_PLACEHOLDER.to_string(),
+                        "--message".to_string(), TASK_PLACEHOLDER.to_string()];
+        let a = render_args(&args, "задача");
+        let b = render_args(&args, "задача");
+        let sa = &a[1];
+        let sb = &b[1];
+        assert!(sa.starts_with("theseus-"), "{sa}");
+        assert_ne!(sa, sb, "сессии обязаны различаться между вызовами");
+        assert_eq!(a[3], "задача");
+    }
+
+    #[test]
+    fn render_args_substitutes_task_literally() {        let args = vec!["-p".to_string(), TASK_PLACEHOLDER.to_string()];
         let task = "$(rm -rf ~); echo hi | cat";
         let rendered = render_args(&args, task);
         assert_eq!(rendered, vec!["-p".to_string(), task.to_string()]);
