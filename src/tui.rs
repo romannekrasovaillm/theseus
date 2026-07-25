@@ -375,6 +375,29 @@ fn line_is_reasoning_note(line: &LogLine) -> bool {
     line.spans.iter().any(|s| s.content.contains("(мышление:"))
 }
 
+/// Ширина бейджа «в самое низ» в ячейках (« ▼ »).
+const JUMP_BADGE_W: u16 = 3;
+
+/// Текст бейджа «в самое низ» (v0.7): стрелка возврата к свежему в логе.
+fn jump_badge_text() -> &'static str {
+    " ▼ "
+}
+
+/// Видимость бейджа «в самое низ»: ручной скролл вверх (не follow) и лог
+/// длиннее экрана (scroll > 0). Дёшево, без офскрин-рендера высот.
+fn jump_badge_visible(follow: bool, scroll: usize, log_len: usize) -> bool {
+    !follow && scroll > 0 && log_len > 0
+}
+
+/// Попадание клика в бейдж «в самое низ» (v0.7): строка совпадает, колонка —
+/// внутри ширины бейджа (чистая функция — для тестов).
+fn jump_badge_hit(btn: Option<(u16, u16)>, col: u16, row: u16) -> bool {
+    match btn {
+        Some((bx, by)) => row == by && col >= bx && col < bx + JUMP_BADGE_W,
+        None => false,
+    }
+}
+
 /// Живая панель фоновых задач в шапке (v0.7): « · explore 1:20 · peer kimi 3:45»
 /// — только бегущие, усечение до max_chars (чистая функция — для тестов).
 fn format_bg_panel(items: &[crate::background::BgTaskInfo], max_chars: usize) -> String {
@@ -973,6 +996,9 @@ pub struct TuiApp {
     /// снимок фоновых задач из Controls.bg_snapshot (обновляется в цикле
     /// run_tui): живая панель «фон: explore 1:20 · peer kimi 3:45» (v0.7)
     bg_items: Vec<crate::background::BgTaskInfo>,
+    /// экранные координаты бейджа «▼ в самое низ» на нижней рамке лога
+    /// (v0.7): Some((x, y)), когда виден (ручной скролл вверх); кликабелен
+    jump_btn: Option<(u16, u16)>,
     /// id фоновых задач, о завершении которых уже сообщено в лог (v0.7:
     /// уведомления о финишах без опроса — «непонятно, что происходит в фоне»)
     announced_bg: std::collections::HashSet<u64>,
@@ -1147,6 +1173,7 @@ impl TuiApp {
             bg_running: 0,
             bg_items: Vec::new(),
             announced_bg: std::collections::HashSet::new(),
+            jump_btn: None,
             cursor: 0,
         }
     }
@@ -1583,6 +1610,22 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     f.render_widget(
         Paragraph::new(body).block(log_block).wrap(Wrap { trim: false }).scroll((pin, 0)),
         chunks[1]);
+
+    // бейдж «▼ в самое низ» на нижней рамке лога (v0.7): виден при ручном
+    // скролле вверх, кликабелен — мгновенный возврат к самому свежему;
+    // не перекрывает текст лога (рисуется поверх рамки)
+    app.jump_btn = if jump_badge_visible(app.follow, app.scroll, app.log.len()) {
+        let y = chunks[1].y + chunks[1].height.saturating_sub(1);
+        let x = chunks[1].x + chunks[1].width.saturating_sub(JUMP_BADGE_W + 2);
+        f.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                jump_badge_text().to_string(),
+                role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD)))),
+            Rect::new(x, y, JUMP_BADGE_W, 1));
+        Some((x, y))
+    } else {
+        None
+    };
 
     // панель совпадений slash-команд: имя + summary; при голом «/» — весь
     // список (обрезка по высоте терминала со строкой «…ещё N»)
@@ -2243,6 +2286,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                 controls.bg_snapshot.lock().unwrap().clear();
                 app.bg_items.clear();
                 app.announced_bg.clear();
+                app.jump_btn = None;
                 controls.reset_session.store(true, std::sync::atomic::Ordering::Relaxed);
                 app.push(vec![Span::styled(
                     format!("╭─ новая сессия: история очищена, транскрипт — в новые файлы (/{0}) ─╮", cmd.name),
@@ -2358,7 +2402,13 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                     }
                     // выделение в логе: Down начинает, Drag тянет, Up копирует
                     MouseEventKind::Down(MouseButton::Left) => {
-                        if point_in_rect(m.column, m.row, app.log_area) {
+                        // бейдж «▼ в самое низ» (v0.7): клик по стрелке на нижней
+                        // рамке — мгновенный возврат к свежему, без выделения
+                        if jump_badge_hit(app.jump_btn, m.column, m.row) {
+                            app.follow = true;
+                            app.sel = None;
+                            app.jump_btn = None;
+                        } else if point_in_rect(m.column, m.row, app.log_area) {
                             app.sel = Some(Sel { anchor: (m.column, m.row), current: (m.column, m.row) });
                             app.follow = false;
                         } else {
@@ -2890,6 +2940,26 @@ mod ui_helpers_tests {
         assert!(narrow.ends_with('…'), "{narrow}");
         // все завершены — панель пуста
         assert_eq!(format_bg_panel(&[mk(4, "explore", true)], 48), "");
+    }
+
+    /// Бейдж «▼ в самое низ» (v0.7): виден при ручном скролле вверх,
+    /// скрыт в follow и на коротком логе; клик — строго по прямоугольнику.
+    #[test]
+    fn jump_badge_visibility_and_hit() {
+        // виден: ручной скролл вверх по длинному логу
+        assert!(jump_badge_visible(false, 10, 500));
+        // скрыт: follow (уже внизу), короткий лог, верх самого верха
+        assert!(!jump_badge_visible(true, 10, 500));
+        assert!(!jump_badge_visible(false, 0, 500));
+        assert!(!jump_badge_visible(false, 10, 0));
+        // клик: внутри ширины — да, рядом/ниже/без бейджа — нет
+        let btn = Some((100, 40));
+        assert!(jump_badge_hit(btn, 100, 40));
+        assert!(jump_badge_hit(btn, 102, 40));
+        assert!(!jump_badge_hit(btn, 103, 40), "за правым краем бейджа");
+        assert!(!jump_badge_hit(btn, 99, 40), "левее бейджа");
+        assert!(!jump_badge_hit(btn, 101, 41), "строкой ниже");
+        assert!(!jump_badge_hit(None, 100, 40), "бейдж скрыт — кликать нечего");
     }
 
     /// Таблица /bg (v0.7): пустой снимок, строки задач со статусами.
