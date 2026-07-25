@@ -50,7 +50,7 @@ pub const KNOWN_TOOLS: &[&str] = &[
     // read-only инструменты знаний (библиотека, дайджесты, концепты, HF) —
     // доступны исследовательским субагентам (explore, баг 23.07: «упёрся в бюджет»)
     "library_search", "library_read", "digest_search", "digest_read",
-    "hf_collections", "concept_search", "concept_explain",
+    "hf_collections", "concept_search", "concept_explain", "concept_reindex",
 ];
 
 /// Инструменты, способные менять состояние: файлы, память, todo-список,

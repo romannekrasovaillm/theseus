@@ -9,10 +9,15 @@
 //! библиотеки индекс с регистронезависим поиском, компактным рендером карточки
 //! для контекста модели ([`ConceptIndex::explain`]) и обходом графа
 //! related-связей ([`ConceptIndex::related`]).
+//!
+//! [`ConceptCache`] добавляет регулярную переиндексацию: раз в
+//! [`DEFAULT_REINDEX_TTL`] снимает дешёвый отпечаток каталога ([`fingerprint`])
+//! и перестраивает индекс, только когда библиотека реально изменилась.
 
 use std::collections::{hash_map::Entry, BTreeMap, HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use anyhow::{bail, Result};
 
@@ -407,10 +412,119 @@ impl ConceptIndex {
     }
 }
 
+/// Период по умолчанию между проверками изменений библиотеки концептов.
+pub const DEFAULT_REINDEX_TTL: Duration = Duration::from_secs(300);
+
+/// Дешёвый отпечаток библиотеки карточек: число файлов `*.md`, максимальный
+/// mtime (миллисекунды) и суммарный размер, свёрнутые в FNV-1a.
+///
+/// Позволяет заметить добавление, удаление и правку карточек одним обходом
+/// каталога без чтения файлов (~0,5 с на 124 тыс. карточек против секунд
+/// полной пересборки). Теоретически возможен пропуск правки, сохранившей
+/// размер файла в ту же миллисекунду, — на практике пренебрежимо.
+pub fn fingerprint(root: &Path) -> u64 {
+    let mut paths = Vec::new();
+    collect_markdown(root, &mut paths);
+    let mut count = 0u64;
+    let mut max_mtime_ms = 0u64;
+    let mut total_len = 0u64;
+    for path in &paths {
+        let Ok(meta) = fs::metadata(path) else {
+            continue;
+        };
+        count += 1;
+        total_len = total_len.wrapping_add(meta.len());
+        let mtime_ms = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+            .map(|d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+            .unwrap_or(0);
+        max_mtime_ms = max_mtime_ms.max(mtime_ms);
+    }
+    let mut bytes = [0u8; 24];
+    bytes[..8].copy_from_slice(&count.to_le_bytes());
+    bytes[8..16].copy_from_slice(&max_mtime_ms.to_le_bytes());
+    bytes[16..].copy_from_slice(&total_len.to_le_bytes());
+    crate::filewatcher::fnv1a64(&bytes)
+}
+
+/// Индекс концептов с регулярной переиндексацией (TTL + отпечаток каталога).
+///
+/// При каждом обращении через [`ConceptCache::current`] проверяет, не истёк ли
+/// TTL с прошлой проверки; если истёк — снимает дешёвый [`fingerprint`] и
+/// перестраивает индекс только при изменении библиотеки. Так свежие карточки
+/// подхватываются без перезапуска агента, а типичная проверка стоит один обход
+/// каталога раз в TTL и не читает файлы. Вся работа синхронная: агентный цикл
+/// однопоточный, блокировки не нужны.
+#[derive(Debug)]
+pub struct ConceptCache {
+    /// Текущий индекс.
+    index: ConceptIndex,
+    /// Момент последней проверки отпечатка.
+    checked_at: Instant,
+    /// Период между проверками.
+    ttl: Duration,
+    /// Отпечаток библиотеки на момент последней пересборки.
+    fingerprint: u64,
+    /// Счётчик реальных пересборок (диагностика и тесты).
+    builds: u64,
+}
+
+impl ConceptCache {
+    /// Строит индекс сразу: первое обращение не ждёт TTL.
+    pub fn new(root: &Path, ttl: Duration) -> ConceptCache {
+        ConceptCache {
+            index: ConceptIndex::build(root),
+            checked_at: Instant::now(),
+            ttl,
+            fingerprint: fingerprint(root),
+            builds: 1,
+        }
+    }
+
+    /// Текущий индекс; при истёкшем TTL сначала проверяет отпечаток и при
+    /// изменении библиотеки перестраивает индекс синхронно (редкий случай).
+    pub fn current(&mut self, root: &Path) -> &ConceptIndex {
+        if self.checked_at.elapsed() >= self.ttl {
+            self.checked_at = Instant::now();
+            let fp = fingerprint(root);
+            if fp != self.fingerprint {
+                self.rebuild(root, fp);
+            }
+        }
+        &self.index
+    }
+
+    /// Индекс как есть, без проверок свежести.
+    pub fn index(&self) -> &ConceptIndex {
+        &self.index
+    }
+
+    /// Принудительная пересборка индекса (тул `concept_reindex`).
+    pub fn force_rebuild(&mut self, root: &Path) {
+        let fp = fingerprint(root);
+        self.rebuild(root, fp);
+        self.checked_at = Instant::now();
+    }
+
+    /// Сколько раз индекс реально перестраивался.
+    pub fn builds(&self) -> u64 {
+        self.builds
+    }
+
+    /// Пересобирает индекс и обновляет отпечаток.
+    fn rebuild(&mut self, root: &Path, fp: u64) {
+        self.index = ConceptIndex::build(root);
+        self.fingerprint = fp;
+        self.builds += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     /// Временная библиотека карточек во временном каталоге; чистится при Drop.
     struct TestLib {
@@ -746,6 +860,60 @@ sources: [arxiv.1707.06347]
         assert_eq!(index.get("dup").unwrap().title, "Первая");
         assert_eq!(by_type.get("a_type"), Some(&1));
         assert!(!by_type.contains_key("b_type"));
+    }
+
+    #[test]
+    fn fingerprint_changes_on_add_remove_and_modify() {
+        let lib = TestLib::new();
+        lib.write_card("task/one.md", &minimal_card("one", "task"));
+        let fp1 = fingerprint(&lib.root);
+        // добавление файла меняет отпечаток
+        lib.write_card("task/two.md", &minimal_card("two", "task"));
+        let fp2 = fingerprint(&lib.root);
+        assert_ne!(fp1, fp2);
+        // правка содержимого (другой размер) тоже меняет отпечаток
+        lib.write_card("task/two.md", &format!("{}\nдополнение к телу", minimal_card("two", "task")));
+        let fp3 = fingerprint(&lib.root);
+        assert_ne!(fp2, fp3);
+        // удаление файла возвращает отпечаток к исходному составу
+        fs::remove_file(lib.root.join("task/two.md")).unwrap();
+        let fp4 = fingerprint(&lib.root);
+        assert_ne!(fp3, fp4);
+        assert_eq!(fp4, fp1, "состав как в начале — отпечаток совпал");
+    }
+
+    #[test]
+    fn cache_initial_build_and_force_rebuild() {
+        let lib = TestLib::new();
+        lib.write_card("task/one.md", &minimal_card("one", "task"));
+        let mut cache = ConceptCache::new(&lib.root, Duration::from_secs(3600));
+        assert_eq!(cache.builds(), 1);
+        assert!(cache.current(&lib.root).get("one").is_some());
+        // TTL час — новая карточка без принудительной пересборки не подхватится
+        lib.write_card("task/two.md", &minimal_card("two", "task"));
+        assert!(cache.current(&lib.root).get("two").is_none());
+        assert_eq!(cache.builds(), 1);
+        // принудительная пересборка подхватывает её сразу
+        cache.force_rebuild(&lib.root);
+        assert_eq!(cache.builds(), 2);
+        assert!(cache.index().get("two").is_some());
+    }
+
+    #[test]
+    fn cache_reindexes_after_ttl_only_on_changes() {
+        let lib = TestLib::new();
+        lib.write_card("task/one.md", &minimal_card("one", "task"));
+        // TTL = 0: каждый вызов current() снимает отпечаток
+        let mut cache = ConceptCache::new(&lib.root, Duration::ZERO);
+        assert!(cache.current(&lib.root).get("one").is_some());
+        // без изменений библиотеки пересборки не происходит
+        let _ = cache.current(&lib.root);
+        let _ = cache.current(&lib.root);
+        assert_eq!(cache.builds(), 1);
+        // изменение библиотеки → пересборка на следующем же обращении
+        lib.write_card("task/two.md", &minimal_card("two", "task"));
+        assert!(cache.current(&lib.root).get("two").is_some());
+        assert_eq!(cache.builds(), 2);
     }
 
     /// Мягкий тест на реальной библиотеке: при отсутствии каталога — skip.

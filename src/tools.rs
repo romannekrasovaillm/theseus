@@ -70,6 +70,10 @@ pub fn tool_specs() -> serde_json::Value {
                 "slug":{"type":"string"}
             },"required":["slug"]}}},
         {"type":"function","function":{
+            "name":"concept_reindex",
+            "description":"Force a rebuild of the ML concept card index. The index already auto-refreshes when the library changes (checked every few minutes on use); call this only to rebuild immediately after adding or editing cards.",
+            "parameters":{"type":"object","properties":{}}}},
+        {"type":"function","function":{
             "name":"library_search",
             "description":"Search the ML papers library (recipes_taxonomy, ~14k arXiv PDFs + docs on LLM/RL/agents). Returns paths with snippets; follow up with library_read.",
             "parameters":{"type":"object","properties":{
@@ -233,6 +237,9 @@ pub struct TodoItem {
     pub status: String,
 }
 
+/// Корень библиотеки карточек ML-концептов.
+const CONCEPTS_ROOT: &str = "/home/roman/library/concepts";
+
 pub struct ToolEnv {
     pub workspace: PathBuf,
     pub todos: Vec<TodoItem>,
@@ -243,8 +250,9 @@ pub struct ToolEnv {
     pub finished: Option<String>,
     /// kernel sandbox (landlock) для bash (v0.3.1)
     pub sandbox: bool,
-    /// Индекс концептов ML-библиотеки (ленивая одноразовая загрузка, v0.5)
-    concepts: std::sync::OnceLock<crate::ml_concepts::ConceptIndex>,
+    /// Кэш индекса концептов ML-библиотеки: ленивая инициализация при первом
+    /// обращении + регулярная переиндексация по TTL (v0.5)
+    concepts: Option<crate::ml_concepts::ConceptCache>,
     /// Индекс recipes_taxonomy (ленивый; None — корень недоступен)
     library: std::sync::OnceLock<Option<crate::library::LibraryIndex>>,
 }
@@ -257,16 +265,24 @@ impl ToolEnv {
             todo_list: crate::todo::TodoList::new(),
             finished: None,
             sandbox: false,
-            concepts: std::sync::OnceLock::new(),
+            concepts: None,
             library: std::sync::OnceLock::new(),
         }
     }
 
-    /// Ленивый индекс концептов (/home/roman/library/concepts)
-    fn concept_index(&self) -> &crate::ml_concepts::ConceptIndex {
-        self.concepts.get_or_init(|| {
-            crate::ml_concepts::ConceptIndex::build(Path::new("/home/roman/library/concepts"))
-        })
+    /// Индекс концептов: ленивая загрузка + регулярная переиндексация.
+    /// Раз в DEFAULT_REINDEX_TTL снимается дешёвый отпечаток каталога;
+    /// пересборка — только когда карточки реально изменились.
+    fn concept_index(&mut self) -> &crate::ml_concepts::ConceptIndex {
+        let root = Path::new(CONCEPTS_ROOT);
+        self.concepts
+            .get_or_insert_with(|| {
+                crate::ml_concepts::ConceptCache::new(
+                    root,
+                    crate::ml_concepts::DEFAULT_REINDEX_TTL,
+                )
+            })
+            .current(root)
     }
 
     /// Ленивый индекс ML-библиотеки (recipes_taxonomy); None — корень недоступен
@@ -333,6 +349,25 @@ impl ToolEnv {
                         Ok(concept_not_found_message(slug, &near))
                     }
                 }
+            }
+            "concept_reindex" => {
+                let root = Path::new(CONCEPTS_ROOT);
+                let cache = self.concepts.get_or_insert_with(|| {
+                    crate::ml_concepts::ConceptCache::new(
+                        root,
+                        crate::ml_concepts::DEFAULT_REINDEX_TTL,
+                    )
+                });
+                cache.force_rebuild(root);
+                let (total, by_type) = cache.index().stats();
+                let types: Vec<String> =
+                    by_type.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+                Ok(format!(
+                    "индекс концептов перестроен: {total} карточек, {} типов ({}); пересборок за сессию: {}",
+                    by_type.len(),
+                    types.join(", "),
+                    cache.builds()
+                ))
             }
             "library_search" => {
                 let Some(idx) = self.library_index() else {
