@@ -47,3 +47,6 @@ config.local.toml
 
 # Сгенерированные агентом скрипты в корне (create_review.py и т.п.)
 /create_*.py
+
+# Каталог сборки (артефакты)
+/build/
