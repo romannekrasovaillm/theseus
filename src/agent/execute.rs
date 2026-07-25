@@ -75,16 +75,8 @@ pub(crate) fn repair_truncated_json(text: &str) -> Option<(serde_json::Value, bo
             '\\' if in_string => escape = true,
             '"' => in_string = !in_string,
             '{' | '[' if !in_string => stack.push(ch),
-            '}' if !in_string => {
-                if stack.pop() != Some('{') {
-                    return None;
-                }
-            }
-            ']' if !in_string => {
-                if stack.pop() != Some('[') {
-                    return None;
-                }
-            }
+            '}' if !in_string && stack.pop() != Some('{') => return None,
+            ']' if !in_string && stack.pop() != Some('[') => return None,
             _ => {}
         }
     }
