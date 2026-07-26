@@ -1262,13 +1262,30 @@ impl TuiApp {
         if !matches!(ev, AgentEvent::AgentTextDelta(_)) {
             self.stream_open = false;
         }
-        // финализация прерванного стрима — ТОЛЬКО по вставке пользователя
-        // (преемпция Ctrl+S / очередь): частичный блок остаётся как есть,
-        // следующая дельта начнёт НОВЫЙ блок ПОСЛЕ вставки, а не в старой
-        // позиции над ней (баг «перемешивания времени» 20.07).
-        // Reasoning/Status НЕ сбрасывают: они идут между дельтами и AgentText
-        // в нормальном ходе, и сброс ломал бы замену стрим-блока (дубли).
-        if matches!(ev, AgentEvent::UserMsg(_)) {
+        // Сброс «осиротевшего» стрима (баги 20.07 и 26.07) — только по
+        // событиям, которые ГАРАНТИРУЮТ конец ответа без AgentText:
+        //  * UserMsg — преемпция Ctrl+S/очередь (баг 20.07): частичный блок
+        //    остаётся как есть, продолжение начнёт новый блок ниже;
+        //  * ToolCall/ToolResult/PermAsk — фаза инструментов; по грамматике
+        //    событий AgentText идёт РАНЬШЕ них, значит это tool-only ход со
+        //    stray-дельтами (resp.content=None, баг 26.07);
+        //  * HookNote/Accounting/Finished/Error/Compact — ход/ран завершён.
+        // Без сброса следующие дельты рендерились бы в СТАРУЮ позицию над
+        // строками инструментов — инверсия хронологии + телепорт финала.
+        // Status/Reasoning НЕ сбрасывают: они идут между дельтами и AgentText
+        // в нормальном ходе (живая регрессия — дубли фраз), их сброс ломал бы
+        // замену стрим-блока. GoalSet/PlanChanged/TodoRejected/
+        // MemoryConsolidated не означают конца ответа — тоже не сбрасывают.
+        if matches!(ev, AgentEvent::UserMsg(_)
+                    | AgentEvent::ToolCall { .. }
+                    | AgentEvent::ToolResult { .. }
+                    | AgentEvent::PermAsk { .. }
+                    | AgentEvent::HookNote(_)
+                    | AgentEvent::Accounting { .. }
+                    | AgentEvent::Finished(_)
+                    | AgentEvent::Error(_)
+                    | AgentEvent::Compact { .. })
+            && self.stream_line_idx.is_some() {
             self.stream_line_idx = None;
             self.stream_block_len = 0;
             self.stream_text.clear();
@@ -3563,6 +3580,46 @@ mod render_bug_tests {
             "старая часть должна остаться выше вставки: {text:?}");
         assert!(pos_second > pos_interject,
             "продолжение ушло ВЫШЕ вставки — перемешивание времени: {text:?}");
+    }
+
+    /// «Осиротевший» стрим (баг 26.07): tool-only ход со stray-дельтой
+    /// (resp.content=None — AgentText НЕ придёт) не должен удерживать
+    /// stream_line_idx: блок следующего текстового хода рендерится в КОНЦЕ
+    /// лога, а не над строками инструментов (инверсия + телепорт финала).
+    #[test]
+    fn orphan_stream_from_tool_only_turn_does_not_capture_next_block() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::UserMsg("задача".into()));
+        // ход 1: stray-дельта (пустой контент), мышление, вызов инструмента;
+        // AgentText в этом ходу не будет (resp.content = None)
+        app.on_event(AgentEvent::AgentTextDelta(String::new()));
+        app.on_event(AgentEvent::Reasoning(100));
+        app.on_event(AgentEvent::ToolCall {
+            name: "read_file".into(), args: "{\"path\":\"a.txt\"}".into(),
+            decision: "Allow".into() });
+        // ToolCall обязан сбросить осиротевший стрим
+        assert!(app.stream_line_idx.is_none(), "осиротевший стрим не сброшен");
+        assert!(app.stream_text.is_empty() && app.stream_block_len == 0);
+        // ход 2: нормальный текстовый — блок стартует ПОСЛЕ строки инструмента
+        app.on_event(AgentEvent::AgentTextDelta("текст ответа".into()));
+        let text: Vec<String> = app.log.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        let pos_tool = text.iter().position(|t| t.contains("read_file")).unwrap();
+        let pos_answer = text.iter().position(|t| t.contains("текст ответа")).unwrap();
+        assert!(pos_answer > pos_tool,
+            "стрим-блок встал ВЫШЕ инструмента (инверсия хронологии): {text:?}");
+        // финал — один рендер, на месте стрима в конце лога (без телепорта/дубля)
+        app.on_event(AgentEvent::Reasoning(50));
+        app.on_event(AgentEvent::AgentText("текст ответа".into()));
+        let text: Vec<String> = app.log.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        assert_eq!(text.iter().filter(|t| t.contains("текст ответа")).count(), 1,
+            "двойной рендер: {text:?}");
+        let pos_tool = text.iter().position(|t| t.contains("read_file")).unwrap();
+        let pos_answer = text.iter().rposition(|t| t.contains("текст ответа")).unwrap();
+        assert!(pos_answer > pos_tool, "финал уехал выше инструмента: {text:?}");
     }
 
     /// Индикатор фоновых агентов (v0.6.6): в шапке виден «фон: N» с пульсом,
