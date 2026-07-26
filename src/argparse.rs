@@ -6,7 +6,7 @@
 //! игнорирования битых значений возвращается [`ArgError`] с подсказкой.
 //!
 //! Поддерживаемые флаги (как в `main.rs`):
-//! `-w`/`--workspace`, `-p`/`--prompt`, `--yolo`, `-m`/`--model`,
+//! `-w`/`--workspace`, `-p`/`--prompt`, `--yolo`, `--max`, `-m`/`--model`,
 //! `--base-url`, `--context-limit`, `--max-turns`, `--resume`,
 //! `--sessions`, `--fix`, `--inject-after-sec`, `--inject-text`, `--init`,
 //! `-h`/`--help`, плюс подкоманда `doctor` первым позиционным аргументом.
@@ -36,6 +36,7 @@ const USAGE: &str = "theseus — собственный агентный хар�
   -w, --workspace DIR        рабочий каталог (по умолчанию: текущий)
   -p, --prompt TEXT          headless-режим без TUI (или первая задача для TUI)
       --yolo                 авто-разрешение всех действий (кроме hard-deny)
+      --max                  максимальные права: hard-deny, confinement и sandbox off
   -m, --model NAME           модель (по умолчанию deepseek-v4-pro)
       --base-url URL         API-эндпоинт (по умолчанию https://api.deepseek.com/v1)
       --context-limit N      жёсткий лимит контекста в токенах (перекрывает конфиг)
@@ -65,6 +66,7 @@ const KNOWN_FLAGS: &[&str] = &[
     "-p",
     "--prompt",
     "--yolo",
+    "--max",
     "-m",
     "--model",
     "--base-url",
@@ -92,6 +94,8 @@ pub struct Args {
     pub prompt: Option<String>,
     /// Авто-разрешение всех действий, кроме hard-deny (`--yolo`).
     pub yolo: bool,
+    /// Максимальные права (`--max`): hard-deny, confinement и sandbox off.
+    pub max: bool,
     /// Имя модели (`-m`/`--model`).
     pub model: Option<String>,
     /// API-эндпоинт (`--base-url`).
@@ -128,6 +132,7 @@ impl Args {
             workspace: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             prompt: None,
             yolo: false,
+            max: false,
             model: None,
             base_url: None,
             context_limit: None,
@@ -210,6 +215,7 @@ pub fn parse(argv: &[String]) -> Result<Args, ArgError> {
             "-w" | "--workspace" => args.workspace = PathBuf::from(take_value(&mut it, flag)?),
             "-p" | "--prompt" => args.prompt = Some(take_value(&mut it, flag)?.to_string()),
             "--yolo" => args.yolo = true,
+            "--max" => args.max = true,
             "-m" | "--model" => args.model = Some(take_value(&mut it, flag)?.to_string()),
             "--base-url" => args.base_url = Some(take_value(&mut it, flag)?.to_string()),
             "--context-limit" => {
@@ -329,6 +335,7 @@ mod tests {
         assert_eq!(a.workspace, std::env::current_dir().unwrap());
         assert!(a.prompt.is_none());
         assert!(!a.yolo);
+        assert!(!a.max);
         assert!(a.model.is_none());
         assert!(a.base_url.is_none());
         assert!(a.context_limit.is_none());
@@ -392,6 +399,16 @@ mod tests {
         assert!(a.init);
         assert!(!a.help);
         assert!(!a.doctor);
+    }
+
+    #[test]
+    fn max_flag_sets_max_and_leaves_yolo_false() {
+        let a = parse_ok(&["--max"]);
+        assert!(a.max);
+        assert!(!a.yolo);
+        // --max и --yolo независимы: можно указать оба (max строже по правам)
+        let both = parse_ok(&["--max", "--yolo"]);
+        assert!(both.max && both.yolo);
     }
 
     #[test]
@@ -580,6 +597,7 @@ mod tests {
             "-w", "/tmp/ws",
             "-p", "собери отчёт",
             "--yolo",
+            "--max",
             "-m", "deepseek-v4-pro",
             "--base-url", "http://127.0.0.1:8080/v1",
             "--context-limit", "65536",
@@ -594,6 +612,7 @@ mod tests {
         assert_eq!(a.workspace, PathBuf::from("/tmp/ws"));
         assert_eq!(a.prompt.as_deref(), Some("собери отчёт"));
         assert!(a.yolo);
+        assert!(a.max);
         assert_eq!(a.model.as_deref(), Some("deepseek-v4-pro"));
         assert_eq!(a.base_url.as_deref(), Some("http://127.0.0.1:8080/v1"));
         assert_eq!(a.context_limit, Some(65_536));

@@ -332,7 +332,7 @@ impl Agent {
     /// по типу), итог с пометкой обрыва по бюджету и учётом ходов/токенов.
     fn run_subagent(&self, spec: &crate::agents::AgentSpec, prompt: &str) -> String {
         let budget = crate::agents::default_budget(spec);
-        match subagent::run_agent(&self.sub, &self.workspace, spec, prompt, budget, self.env.sandbox, None) {
+        match subagent::run_agent(&self.sub, &self.workspace, spec, prompt, budget, self.env.sandbox_effective(), None) {
             Ok(res) => {
                 let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
                 crate::tools::cap_pub(format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
@@ -370,7 +370,7 @@ impl Agent {
         let spec2 = spec.clone();
         let prompt2 = prompt.to_string();
         let budget = crate::agents::default_budget(spec);
-        let sandbox = self.env.sandbox;
+        let sandbox = self.env.sandbox_effective();
         // флаг кооперативной остановки: task_stop выставит его, субагент
         // прочитает на границе хода (живой кейс 24.07 — explore висел 25 минут)
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -468,7 +468,7 @@ impl Agent {
                         "peer_ask заблокирован в режиме DontAsk — запрос к внешнему агенту требует подтверждения".into()),
                     Mode::Ask | Mode::SemiAuto => PeerGate::Ask(format!(
                         "выполнить задачу у внешнего агента «{agent}»: {task}")),
-                    Mode::Yolo => PeerGate::Allow,
+                    Mode::Yolo | Mode::Max => PeerGate::Allow,
                 };
                 let decision_label = match &gate {
                     PeerGate::Allow => "Allow",
@@ -520,7 +520,7 @@ impl Agent {
                             "субагент «{}» (есть bash) заблокирован в режиме DontAsk — нужно подтверждение", spec.name)),
                         Mode::Ask | Mode::SemiAuto => SubGate::Ask(format!(
                             "запустить субагента «{}» (есть bash): {prompt}", spec.name)),
-                        Mode::Yolo => SubGate::Allow,
+                        Mode::Yolo | Mode::Max => SubGate::Allow,
                     }
                 };
                 let decision_label = match &gate {
@@ -569,7 +569,7 @@ impl Agent {
                             "рой с не-readonly субагентами (есть bash) заблокирован в режиме DontAsk — нужно подтверждение".into()),
                         Mode::Ask | Mode::SemiAuto => SwarmGate::Ask(format!(
                             "запустить рой из {} субагентов (есть bash)", specs.len())),
-                        Mode::Yolo => SwarmGate::Allow,
+                        Mode::Yolo | Mode::Max => SwarmGate::Allow,
                     }
                 };
                 let decision_label = match &gate {

@@ -250,6 +250,10 @@ pub struct ToolEnv {
     pub finished: Option<String>,
     /// kernel sandbox (landlock) для bash (v0.3.1)
     pub sandbox: bool,
+    /// Общий атомик режима (тот же, что у PermissionEngine): в режиме
+    /// максимальных прав (MODE_MAX) ядерный sandbox обходится — см.
+    /// [`ToolEnv::sandbox_effective`].
+    mode_override: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
     /// Кэш индекса концептов ML-библиотеки: ленивая инициализация при первом
     /// обращении + регулярная переиндексация по TTL (v0.5)
     concepts: Option<crate::ml_concepts::ConceptCache>,
@@ -265,9 +269,25 @@ impl ToolEnv {
             todo_list: crate::todo::TodoList::new(),
             finished: None,
             sandbox: false,
+            mode_override: None,
             concepts: None,
             library: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Подключить общий атомик режима (обход sandbox в Max — /mode и --max).
+    pub fn set_mode_override(&mut self, atomic: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>) {
+        self.mode_override = atomic;
+    }
+
+    /// Эффективный флаг sandbox для запуска bash/субагентов: в режиме
+    /// максимальных прав (Mode::Max через общий атомик) ядерный sandbox
+    /// обходится — иначе слои прав обходятся, а ядро продолжало бы резать.
+    pub fn sandbox_effective(&self) -> bool {
+        self.sandbox
+            && self.mode_override.as_ref().is_none_or(|a| {
+                a.load(std::sync::atomic::Ordering::Relaxed) != crate::permissions::MODE_MAX
+            })
     }
 
     /// Индекс концептов: ленивая загрузка + регулярная переиндексация.
@@ -688,7 +708,7 @@ impl ToolEnv {
     fn bash(&self, args: &serde_json::Value) -> Result<String> {
         let cmd = args["command"].as_str().unwrap_or("");
         let timeout = Duration::from_secs(args["timeout_secs"].as_u64().unwrap_or(120).min(600));
-        run_bash(cmd, &self.workspace, timeout, self.sandbox)
+        run_bash(cmd, &self.workspace, timeout, self.sandbox_effective())
     }
 
     fn todo_write(&mut self, args: &serde_json::Value) -> Result<String> {
@@ -1155,6 +1175,33 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// sandbox_effective: sandbox включён всегда, КРОМЕ режима максимальных
+    /// прав (MODE_MAX через общий атомик — /mode max или запуск с --max).
+    #[test]
+    fn sandbox_effective_bypassed_only_in_max_mode() {
+        let dir = std::env::temp_dir().join(format!("theseus_tools_sbx_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut env = ToolEnv::new(&dir);
+        env.sandbox = true;
+        // без атомика — конфиг решает: sandbox on
+        assert!(env.sandbox_effective());
+        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_ASK));
+        env.set_mode_override(Some(atomic.clone()));
+        use std::sync::atomic::Ordering;
+        for code in [crate::permissions::MODE_ASK, crate::permissions::MODE_SEMI,
+                     crate::permissions::MODE_YOLO, crate::permissions::MODE_DONTASK] {
+            atomic.store(code, Ordering::Relaxed);
+            assert!(env.sandbox_effective(), "код {code}: sandbox должен остаться");
+        }
+        atomic.store(crate::permissions::MODE_MAX, Ordering::Relaxed);
+        assert!(!env.sandbox_effective(), "Max: sandbox обязан обходиться");
+        // sandbox=false в конфиге — выключен при любом режиме
+        env.sandbox = false;
+        atomic.store(crate::permissions::MODE_ASK, Ordering::Relaxed);
+        assert!(!env.sandbox_effective());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn edit_exact_match() {

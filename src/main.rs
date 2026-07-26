@@ -19,6 +19,7 @@ const USAGE: &str = "theseus — собственный агентный хар�
   -w, --workspace DIR   рабочий каталог (по умолчанию: текущий)
   -p, --prompt TEXT     headless-режим без TUI
       --yolo            авто-разрешение всех действий (кроме hard-deny)
+      --max             максимальные права: hard-deny, confinement и sandbox off
   -m, --model NAME      модель (по умолчанию deepseek-v4-pro)
       --base-url URL    API-эндпоинт (по умолчанию https://api.deepseek.com/v1)
       --context-limit N жёсткий лимит контекста в токенах (перекрывает конфиг)
@@ -43,6 +44,7 @@ fn mode_code(mode: Mode) -> u8 {
         Mode::SemiAuto => theseus::permissions::MODE_SEMI,
         Mode::Yolo => theseus::permissions::MODE_YOLO,
         Mode::DontAsk => theseus::permissions::MODE_DONTASK,
+        Mode::Max => theseus::permissions::MODE_MAX,
     }
 }
 
@@ -89,7 +91,8 @@ fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    let mode = if args.yolo { Mode::Yolo }
+    let mode = if args.max { Mode::Max }
+               else if args.yolo { Mode::Yolo }
                else if args.prompt.is_some() { Mode::DontAsk }  // headless без yolo — авто-запреты
                else { Mode::Ask };
     // общий атомик режима: /mode в TUI переключает его в рантайме (и посреди хода);
@@ -163,6 +166,7 @@ mod tests {
         assert_eq!(mode_code(Mode::SemiAuto), theseus::permissions::MODE_SEMI);
         assert_eq!(mode_code(Mode::Yolo), theseus::permissions::MODE_YOLO);
         assert_eq!(mode_code(Mode::DontAsk), theseus::permissions::MODE_DONTASK);
+        assert_eq!(mode_code(Mode::Max), theseus::permissions::MODE_MAX);
     }
 
     /// Справка бинарника перечисляет реально поддерживаемые флаги
@@ -170,7 +174,7 @@ mod tests {
     /// описаны только в расширенной справке argparse).
     #[test]
     fn usage_lists_all_public_flags() {
-        for flag in ["--context-limit", "--resume", "--sessions", "--max-turns", "--yolo"] {
+        for flag in ["--context-limit", "--resume", "--sessions", "--max-turns", "--yolo", "--max"] {
             assert!(USAGE.contains(flag), "в USAGE нет флага {flag}");
         }
     }

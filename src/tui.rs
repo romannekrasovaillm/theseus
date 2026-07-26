@@ -1678,6 +1678,8 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         crate::permissions::MODE_SEMI => (" Авто-правки ", ThemeRole::Accent),
         crate::permissions::MODE_YOLO => (" Автомат ", ThemeRole::Ok),
         crate::permissions::MODE_ASK => (" Совет ", ThemeRole::Warn),
+        // Максимум — красный бейдж: максимальные права обязаны бросаться в глаза
+        crate::permissions::MODE_MAX => (" Максимум ", ThemeRole::Error),
         _ => (" ", ThemeRole::Dim),
     };
     let mut title_spans: Vec<Span> = Vec::new();
@@ -2200,28 +2202,35 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                 app.push(vec![Span::styled(format!("модель: {model_info}"), accent)]);
             }
             "mode" => {
-                use crate::permissions::{MODE_ASK, MODE_SEMI, MODE_YOLO};
+                use crate::permissions::{MODE_ASK, MODE_MAX, MODE_SEMI, MODE_YOLO};
                 let arg = args.split_whitespace().next().unwrap_or("");
                 let (code, label) = match arg {
                     "ask" => (MODE_ASK, "Совет"),
                     "semi" => (MODE_SEMI, "Авто-правки"),
                     "yolo" => (MODE_YOLO, "Автомат"),
+                    "max" => (MODE_MAX, "Максимум"),
                     _ => {
                         let cur = controls.mode_atomic.load(std::sync::atomic::Ordering::Relaxed);
                         let label = match cur {
                             MODE_SEMI => "Авто-правки",
                             MODE_YOLO => "Автомат",
+                            MODE_MAX => "Максимум",
                             MODE_ASK => "Совет",
                             _ => "из запуска (по флагу)",
                         };
                         app.push(vec![Span::styled(
-                            format!("режим разрешений: {label}. Переключить: /mode ask (Совет) | /mode semi (Авто-правки) | /mode yolo (Автомат)"), accent)]);
+                            format!("режим разрешений: {label}. Переключить: /mode ask (Совет) | /mode semi (Авто-правки) | /mode yolo (Автомат) | /mode max (Максимум)"), accent)]);
                         return false;
                     }
                 };
                 controls.mode_atomic.store(code, std::sync::atomic::Ordering::Relaxed);
                 app.push(vec![Span::styled(format!("⚡ режим разрешений → {label}"),
                     accent.add_modifier(Modifier::BOLD))]);
+                if code == MODE_MAX {
+                    app.push(vec![Span::styled(
+                        "⚠ МАКСИМАЛЬНЫЕ ПРАВА: hard-deny, confinement на workspace, .git-защита и ядерный sandbox ВЫКЛЮЧЕНЫ — агент может читать, писать и выполнять всё на этом хосте. Вернуться: /mode ask".to_string(),
+                        role_style(&app.theme, ThemeRole::Error).add_modifier(Modifier::BOLD))]);
+                }
             }
             "theme" => {
                 let arg = args.split_whitespace().next().unwrap_or("");

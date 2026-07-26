@@ -20,6 +20,11 @@ pub enum Mode {
     Yolo,
     /// авто-запрет всего не-авто (для CI/headless без yolo)
     DontAsk,
+    /// максимальные права: hard-deny, confinement на workspace и .git-защита
+    /// ВЫКЛЮЧЕНЫ — чтение/запись/bash по всему хосту без вопросов; ядерный
+    /// sandbox для bash тоже обходится (см. `ToolEnv::sandbox_effective`).
+    /// Пользовательские `permission_rules` из конфига продолжают действовать.
+    Max,
 }
 
 impl Mode {
@@ -30,6 +35,7 @@ impl Mode {
             Mode::SemiAuto => "Авто-правки",
             Mode::Yolo => "Автомат",
             Mode::DontAsk => "headless",
+            Mode::Max => "Максимум",
         }
     }
 }
@@ -75,6 +81,8 @@ pub const MODE_YOLO: u8 = 2;
 /// THS-QA-01: headless-режим DontAsk (в /mode не предлагается — только запуск
 /// с `-p` без `--yolo`); раньше в атомик не мапился и был недостижим из CLI.
 pub const MODE_DONTASK: u8 = 3;
+/// Режим максимальных прав (`Mode::Max`): hard-deny/confinement/sandbox off.
+pub const MODE_MAX: u8 = 4;
 /// «Не задано» — используется режим из конструктора.
 pub const MODE_UNSET: u8 = 255;
 
@@ -107,11 +115,17 @@ impl PermissionEngine {
                 MODE_SEMI => Mode::SemiAuto,
                 MODE_YOLO => Mode::Yolo,
                 MODE_DONTASK => Mode::DontAsk,
+                MODE_MAX => Mode::Max,
                 MODE_ASK => Mode::Ask,
                 _ => self.mode,
             },
             None => self.mode,
         }
+    }
+
+    /// Хэндл общего атомика режима (для `ToolEnv`: обход sandbox в Max).
+    pub fn mode_override_handle(&self) -> Option<std::sync::Arc<std::sync::atomic::AtomicU8>> {
+        self.mode_override.clone()
     }
 
     pub fn grant_always(&mut self, key: String) {
@@ -132,6 +146,10 @@ impl PermissionEngine {
 
     /// Решение для файловых инструментов
     pub fn file_write(&self, path: &str) -> Decision {
+        // Max: запись куда угодно без вопросов — включая вне workspace и .git
+        if self.mode() == Mode::Max {
+            return Decision::Allow;
+        }
         let p = Path::new(path);
         if self.protected(p) {
             return Decision::Deny(format!("запись в защищённый путь (.git): {path}"));
@@ -179,7 +197,7 @@ impl PermissionEngine {
 
     pub fn file_read(&self, path: &str) -> Decision {
         let p = Path::new(path);
-        if self.in_workspace(p) || self.mode() == Mode::Yolo {
+        if self.in_workspace(p) || matches!(self.mode(), Mode::Yolo | Mode::Max) {
             Decision::Allow
         } else {
             Decision::Ask(format!("чтение вне рабочего дерева: {path}"))
@@ -198,6 +216,10 @@ impl PermissionEngine {
     /// v0.4: поверх — каноникализация + PolicyEngine из execpolicy: решение по
     /// подкомандам с учётом кавычек/пайпов; итог — худшее из двух проходов.
     pub fn bash(&self, command: &str) -> Decision {
+        // Max: всё разрешено без слоёв — hard-deny и whitelist-проверки выключены
+        if self.mode() == Mode::Max {
+            return Decision::Allow;
+        }
         let cmd = command.trim();
         let mut decision = Decision::Allow;
         // legacy-сплит v0.2 (оставлен для совместимости поведения и тестов)
@@ -270,7 +292,7 @@ impl PermissionEngine {
             // белый список применяем только к «чистым» командам (урок Codex)
             if cmd.contains('$') || cmd.contains('`') {
                 return match self.mode() {
-                    Mode::Yolo => Decision::Allow,
+                    Mode::Yolo | Mode::Max => Decision::Allow,
                     Mode::DontAsk => Decision::Deny(format!("подстановка в команде (dontAsk): {cmd}")),
                     Mode::Ask | Mode::SemiAuto => Decision::Ask(format!("команда с подстановкой: {cmd}")),
                 };
@@ -295,7 +317,7 @@ impl PermissionEngine {
         }
         // слой 4: режим
         match self.mode() {
-            Mode::Yolo => Decision::Allow,
+            Mode::Yolo | Mode::Max => Decision::Allow,
             Mode::DontAsk => Decision::Deny(format!("не в белом списке (dontAsk): {cmd}")),
             Mode::Ask | Mode::SemiAuto => Decision::Ask(format!("выполнить команду: {cmd}")),
         }
@@ -315,7 +337,9 @@ const fn ep_mode(mode: Mode) -> execpolicy::Mode {
     match mode {
         Mode::Ask | Mode::SemiAuto => execpolicy::Mode::Ask,
         Mode::DontAsk => execpolicy::Mode::DontAsk,
-        Mode::Yolo => execpolicy::Mode::Yolo,
+        // Max сюда не доходит: bash() возвращает Allow до слоёв; на всякий
+        // случай мапим в Yolo (allow всё, кроме явных Deny-правил конфига)
+        Mode::Yolo | Mode::Max => execpolicy::Mode::Yolo,
     }
 }
 
@@ -566,6 +590,33 @@ mod tests {
         assert!(matches!(e.file_write("/etc/passwd"), Decision::Deny(_)));
         assert!(matches!(e.file_write("../escape.txt"), Decision::Deny(_)));
         assert!(matches!(e.file_write(".git/config"), Decision::Deny(_)));
+    }
+
+    /// Режим максимальных прав: hard-deny, confinement на workspace и
+    /// .git-защита выключены — всё Allow, без вопросов.
+    #[test]
+    fn max_mode_allows_everything() {
+        let e = engine(Mode::Max);
+        // hard-deny паттерны не срабатывают (в Yolo — Deny!)
+        assert!(matches!(e.bash("rm -rf /"), Decision::Allow));
+        assert!(matches!(e.bash("mkfs /dev/sda"), Decision::Allow));
+        // подстановка и произвольные команды — без вопросов
+        assert!(matches!(e.bash("echo $(rm -rf ~)"), Decision::Allow));
+        assert!(matches!(e.bash("make install"), Decision::Allow));
+        // чтение и запись по всему хосту, включая .git
+        assert!(matches!(e.file_read("/etc/shadow"), Decision::Allow));
+        assert!(matches!(e.file_write("/etc/passwd"), Decision::Allow));
+        assert!(matches!(e.file_write(".git/config"), Decision::Allow));
+        assert_eq!(Mode::Max.label(), "Максимум");
+    }
+
+    /// Max доезжает до движка через общий атомик (переключение /mode в рантайме).
+    #[test]
+    fn max_mode_via_override_atomic() {
+        let e = engine(Mode::Ask)
+            .with_mode_override(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(MODE_MAX)));
+        assert_eq!(e.mode(), Mode::Max);
+        assert!(matches!(e.bash("rm -rf /"), Decision::Allow));
     }
 
     #[test]

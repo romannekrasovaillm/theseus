@@ -360,6 +360,8 @@ impl Agent {
             .map(|h| Memory::open(&h.join(".theseus")));
         let mut tool_env = ToolEnv::new(workspace);
         tool_env.sandbox = cfg.sandbox;
+        // общий атомик режима — для обхода sandbox в Max (ToolEnv::sandbox_effective)
+        tool_env.set_mode_override(perms.mode_override_handle());
         Ok(Agent {
             api,
             perms,
