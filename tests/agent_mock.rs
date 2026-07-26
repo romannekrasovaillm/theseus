@@ -358,3 +358,60 @@ fn turn_limit_extends_on_expert_confirm() -> Result<()> {
     assert!(out3.contains("достигнут лимит ходов (1)"), "out3: {out3}");
     Ok(())
 }
+
+/// Пустой ответ модели (reasoning-only: ни контента, ни тулов) не пишется в
+/// историю пустым assistant-сообщением — иначе DeepSeek отвечает 400
+/// «Invalid assistant message: content or tool_calls must be set»
+/// (баг 26.07: сессия умерла молча, каждый следующий запрос падал тем же 400).
+#[test]
+fn empty_model_response_not_persisted_to_history() -> Result<()> {
+    let ws = TempWs::new("empty_resp");
+    let handle = MockLlm::with_scenarios(vec![
+        Scenario::new(), // «пустой» ответ: только finish_reason stop
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"после пустого ответа"}"#),
+        Scenario::new().reply_text("ок"),
+    ])
+    .serve_on_ephemeral()?;
+
+    let mut agent = mock_agent(&handle.base_url, ws.path(), 4);
+    let out = agent.run("проверка пустого ответа")?;
+    eprintln!("empty_model_response_not_persisted: {out}");
+
+    let requests = handle.requests();
+    assert!(requests.len() >= 2, "ожидалось >=2 запросов к моку: {}", requests.len());
+    for (i, req) in requests.iter().enumerate() {
+        for m in req["messages"].as_array().unwrap() {
+            if m["role"] == "assistant" {
+                let has_content = m["content"].as_str().is_some_and(|c| !c.is_empty());
+                let has_calls = m["tool_calls"].as_array().is_some_and(|c| !c.is_empty());
+                assert!(has_content || has_calls,
+                    "запрос #{i}: пустое assistant-сообщение в истории → 400: {m}");
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Ошибка API без ретрая (HTTP 400) обязана всплывать событием Error —
+/// а не тихой смертью в `?` без единой строки в TUI (баг 26.07).
+#[test]
+fn api_error_surfaces_error_event() -> Result<()> {
+    let ws = TempWs::new("err_visible");
+    // expect_tool_call на несуществующий инструмент → мок отвечает HTTP 400
+    let handle = MockLlm::with_scenarios(vec![
+        Scenario::new().expect_tool_call("definitely_missing_tool"),
+    ])
+    .serve_on_ephemeral()?;
+
+    let (tx, rx) = std::sync::mpsc::channel();
+    let cfg = mock_config(&handle.base_url);
+    let perms = PermissionEngine::new(Mode::Yolo, cfg.permission.clone(), ws.path());
+    let mut agent = Agent::new(cfg, perms, ws.path(), 4, Some(tx))?;
+    let out = agent.run("любая задача");
+    assert!(out.is_err(), "HTTP 400 обязан вернуть ошибку: {out:?}");
+
+    let events: Vec<String> = rx.try_iter().map(|ev| format!("{ev:?}")).collect();
+    assert!(events.iter().any(|e| e.starts_with("Error") && e.contains("400")),
+        "нет Error-события про HTTP 400: {events:?}");
+    Ok(())
+}

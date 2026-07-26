@@ -676,20 +676,31 @@ impl Agent {
         out
     }
 
+    /// Assistant-реплика для истории или `None`, если она пуста: DeepSeek
+    /// отвергает assistant-сообщение без content и tool_calls
+    /// (400 «content or tool_calls must be set» — баг 26.07: reasoning-only
+    /// ответ отравил историю, и ВСЕ следующие запросы сессии падали с 400).
+    fn assistant_history_message(resp: &ChatResponse) -> Option<Message> {
+        let content = resp.content.clone().filter(|c| !c.is_empty());
+        if content.is_none() && resp.tool_calls.is_empty() {
+            return None;
+        }
+        Some(Message::assistant(content,
+            if resp.tool_calls.is_empty() { None } else { Some(resp.tool_calls.clone()) }))
+    }
+
     /// Сборка сообщений прерванного преемпцией хода: частичный ответ ассистента
     /// и заглушка tool на каждый несостоявшийся вызов. Контракт DeepSeek: у
     /// каждого tool_call в истории обязан быть ответ tool, иначе следующий ход
     /// падает с 400 «insufficient tool messages» — преемпция ломала сессию.
     /// Стрим мог оборваться в фазе thinking (ни контента, ни вызовов) — тогда
-    /// assistant-реплику НЕ добавляем вовсе: DeepSeek требует «content or
-    /// tool_calls must be set» (живой тест 19.07 поймал этот 400 на ходе 2).
+    /// assistant-реплику НЕ добавляем вовсе (см. assistant_history_message;
+    /// живой тест 19.07 поймал этот 400 на ходе 2).
     fn preempted_turn_messages(resp: &ChatResponse) -> Vec<Message> {
-        let content = resp.content.clone().filter(|c| !c.is_empty());
-        if content.is_none() && resp.tool_calls.is_empty() {
+        let Some(head) = Self::assistant_history_message(resp) else {
             return Vec::new();
-        }
-        let mut out = vec![Message::assistant(content,
-            if resp.tool_calls.is_empty() { None } else { Some(resp.tool_calls.clone()) })];
+        };
+        let mut out = vec![head];
         for c in &resp.tool_calls {
             out.push(Message::tool(c.id.clone(),
                 "[interrupted: preempted by user before execution]"));
@@ -791,6 +802,13 @@ impl Agent {
             let flow = self.run_turn(messages, &tools, turn, t0, turn_span);
             if let Err(e) = &flow {
                 self.trace.attr(turn_span, "error", &format!("{e:#}"));
+                // ошибка хода (API 4xx/5xx после ретраев, сеть) обязана быть
+                // видна пользователю, а не умирать тихо в `?` — плюс снимок
+                // сессии для resume (баг 26.07: HTTP 400 «Invalid assistant
+                // message» — сессия умерла без единой строки в TUI)
+                self.emit(AgentEvent::Error(format!("{e:#}")));
+                self.emit_accounting();
+                self.save_session(messages);
             }
             self.trace.close_span(turn_span);
             match flow? {
@@ -946,8 +964,13 @@ impl Agent {
                 self.last_text_fp = fp;
             }
         }
-        messages.push(Message::assistant(resp.content.clone(),
-            if resp.tool_calls.is_empty() { None } else { Some(resp.tool_calls.clone()) }));
+        // reasoning-only ответ (ни текста, ни тулов) в историю НЕ пишем —
+        // иначе следующий запрос DeepSeek отвергает 400 «Invalid assistant
+        // message: content or tool_calls must be set» (баг 26.07: сессия
+        // молча умерла, каждый новый ран падал тем же 400)
+        if let Some(msg) = Self::assistant_history_message(&resp) {
+            messages.push(msg);
+        }
 
         if resp.tool_calls.is_empty() {
             messages.push(Message::user(
@@ -1596,5 +1619,41 @@ mod tests {
         let empty_text = ChatResponse { content: Some(String::new()), ..Default::default() };
         assert!(Agent::preempted_turn_messages(&empty_text).is_empty(),
             "пустая строка контента — тоже «ничего»");
+    }
+
+    /// История не принимает пустые assistant-сообщения (баг 26.07): ответ
+    /// reasoning-only (ни контента, ни тулов) → None; текст/тулы — Some.
+    /// Иначе DeepSeek убивает сессию 400 «content or tool_calls must be set».
+    #[test]
+    fn assistant_history_message_skips_empty() {
+        // reasoning-only ответ — сообщения нет вовсе
+        assert!(Agent::assistant_history_message(&ChatResponse::default()).is_none());
+        // пустая строка контента — тоже «пусто»
+        let empty_text = ChatResponse { content: Some(String::new()), ..Default::default() };
+        assert!(Agent::assistant_history_message(&empty_text).is_none());
+        // нормальный текст — есть сообщение с контентом
+        let text = ChatResponse { content: Some("ответ".into()), ..Default::default() };
+        let msg = Agent::assistant_history_message(&text).expect("текст обязан дать сообщение");
+        assert_eq!(msg.role, "assistant");
+        assert_eq!(msg.content.as_deref(), Some("ответ"));
+        assert!(msg.tool_calls.is_none());
+        // только тулы (без контента) — валидно для API: tool_calls set
+        let tools_only = ChatResponse {
+            content: None,
+            tool_calls: vec![tool_call("c1", "bash", r#"{"command":"ls"}"#)],
+            ..Default::default()
+        };
+        let msg = Agent::assistant_history_message(&tools_only).expect("тулы — валидная реплика");
+        assert!(msg.content.is_none());
+        assert_eq!(msg.tool_calls.as_ref().map(Vec::len), Some(1));
+        // пустая строка контента + тулы — контент фильтруется в None, тулы остаются
+        let empty_text_tools = ChatResponse {
+            content: Some(String::new()),
+            tool_calls: vec![tool_call("c2", "grep", r#"{"pattern":"x"}"#)],
+            ..Default::default()
+        };
+        let msg = Agent::assistant_history_message(&empty_text_tools).expect("тулы — валидная реплика");
+        assert!(msg.content.is_none(), "пустой контент не уходит в историю");
+        assert_eq!(msg.tool_calls.as_ref().map(Vec::len), Some(1));
     }
 }
