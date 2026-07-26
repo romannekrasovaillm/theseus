@@ -196,8 +196,11 @@ fn tui_theme(name: &str) -> Option<Theme> {
                 .with_role(ThemeRole::Dim, ansi(Color16::BrightBlack))
                 .with_role(ThemeRole::Error, ansi(Color16::Red))
                 .with_role(ThemeRole::Warn, ansi(Color16::Yellow))
-                .with_role(ThemeRole::Ok, ansi(Color16::Green))
-                .with_role(ThemeRole::UserText, ansi(Color16::Green))
+                // Мягкий синий #89B4FA (catppuccino blue): высокий контраст
+                // на тёмном фоне без «кислотности» чистого зелёного — комфортен
+                // для глаз при долгом чтении (замена зелёного 26.07).
+                .with_role(ThemeRole::Ok, ColorSpec::Rgb(137, 180, 250))
+                .with_role(ThemeRole::UserText, ColorSpec::Rgb(137, 180, 250))
                 .with_role(ThemeRole::AgentText, ansi(Color16::BrightWhite))
                 .with_role(ThemeRole::ToolName, ansi(Color16::Yellow))
                 .with_role(ThemeRole::StatusBar, ansi(Color16::Cyan))
@@ -3010,8 +3013,8 @@ mod ui_helpers_tests {
         assert_eq!(role_color(&dark, ThemeRole::Dim), Color::DarkGray);
         assert_eq!(role_color(&dark, ThemeRole::Error), Color::Red);
         assert_eq!(role_color(&dark, ThemeRole::Warn), Color::Yellow);
-        assert_eq!(role_color(&dark, ThemeRole::Ok), Color::Green);
-        assert_eq!(role_color(&dark, ThemeRole::UserText), Color::Green);
+        assert_eq!(role_color(&dark, ThemeRole::Ok), Color::Rgb(137, 180, 250));
+        assert_eq!(role_color(&dark, ThemeRole::UserText), Color::Rgb(137, 180, 250));
         assert_eq!(role_color(&dark, ThemeRole::AgentText), Color::White);
         assert_eq!(role_color(&dark, ThemeRole::ToolName), Color::Yellow);
         assert_eq!(role_color(&dark, ThemeRole::StatusBar), Color::Cyan);
