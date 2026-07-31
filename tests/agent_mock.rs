@@ -415,3 +415,35 @@ fn api_error_surfaces_error_event() -> Result<()> {
         "нет Error-события про HTTP 400: {events:?}");
     Ok(())
 }
+
+/// Переключение модели в рантайме (/model): switch_model с новыми кредами —
+/// следующий API-вызов идёт с новым id модели (а субагенты следуют за ней).
+#[test]
+fn switch_model_applies_to_next_request() -> Result<()> {
+    let ws = TempWs::new("model_switch");
+    let handle = MockLlm::with_scenarios(vec![
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"до переключения"}"#),
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"после переключения"}"#),
+        Scenario::new().reply_text("ок"),
+    ])
+    .serve_on_ephemeral()?;
+
+    let mut agent = mock_agent(&handle.base_url, ws.path(), 3);
+    let _ = agent.run("первый запрос")?;
+    // переключаемся на другую модель (креды явные — env не нужен; URL тот же мок)
+    let creds = theseus::models::Credentials {
+        url: handle.base_url.clone(),
+        key: "test-key-2".into(),
+        model: "glm-5.2".into(),
+    };
+    agent.switch_model(&creds, 131_072)?;
+    let _ = agent.run("второй запрос")?;
+
+    let requests = handle.requests();
+    assert!(requests.len() >= 2, "ожидалось >=2 запросов: {}", requests.len());
+    assert_eq!(requests[0]["model"].as_str().unwrap_or(""), "mock-model",
+        "первый запрос — исходная модель");
+    assert_eq!(requests[1]["model"].as_str().unwrap_or(""), "glm-5.2",
+        "второй запрос обязан идти в новую модель");
+    Ok(())
+}

@@ -130,7 +130,7 @@ impl Default for PermissionConfig {
     }
 }
 
-fn default_model() -> String { "deepseek-v4-pro".into() }
+fn default_model() -> String { "deepseek-v4-flash".into() }
 fn default_context_limit() -> usize { 120_000 }
 fn default_max_output() -> usize { 8_192 }
 fn default_timeout() -> u64 { 600 }
@@ -370,7 +370,7 @@ pub fn write_example_config() -> Result<PathBuf> {
     let p = dir.join("config.toml");
     if !p.exists() {
         std::fs::write(&p, r#"# theseus config
-model = "deepseek-v4-pro"
+model = "deepseek-v4-flash"
 # base_url = "https://api.deepseek.com/v1"
 # api_key задаётся через env DEEPSEEK_API_KEY (не храните ключ в файле)
 context_limit_tokens = 120000
@@ -507,7 +507,7 @@ mod tests {
     fn defaults_preserved_without_files() {
         let dir = temp_dir("defaults");
         let cfg = Config::load_from_paths(&dir.join("g.toml"), &dir.join("w.toml"), None, None).unwrap();
-        assert_eq!(cfg.model, "deepseek-v4-pro");
+        assert_eq!(cfg.model, "deepseek-v4-flash");
         assert_eq!(cfg.max_output_tokens, 8_192);
         assert_eq!(cfg.api_timeout_secs, 600);
         assert_eq!(cfg.compact_mask_pct, 70);
@@ -517,7 +517,7 @@ mod tests {
         assert!(!cfg.permission.bash_deny_patterns.is_empty());
         // thinking по умолчанию (режим «вообще без конфига», как раньше)
         assert!(cfg.extra_body.is_object());
-        // реестр: deepseek-v4-pro → URL провайдера и лимит 131_072
+        // реестр: deepseek-v4-flash → URL провайдера и лимит 131_072
         assert_eq!(cfg.base_url.as_deref(), Some(expected_url("deepseek").as_str()));
         assert_eq!(cfg.context_limit_tokens, 131_072);
         let _ = std::fs::remove_dir_all(&dir);

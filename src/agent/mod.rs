@@ -72,6 +72,10 @@ pub struct Controls {
     /// снимок фоновых задач для живой панели TUI и уведомлений о завершении
     /// (v0.7): BgRegistry пушит при спавне и помечает done при завершении
     pub bg_snapshot: Arc<Mutex<Vec<crate::background::BgTaskInfo>>>,
+    /// запрос переключения модели из TUI (/model): id модели из реестра
+    /// (deepseek-v4-pro | deepseek-v4-flash | glm-5.2); применяется на
+    /// границе хода — следующий API-вызов уже идёт в новую модель
+    pub model_slot: Arc<Mutex<Option<String>>>,
 }
 
 impl Default for Controls {
@@ -86,6 +90,7 @@ impl Default for Controls {
             bg_running: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             notes_slot: Arc::new(Mutex::new(Vec::new())),
             bg_snapshot: Arc::new(Mutex::new(Vec::new())),
+            model_slot: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -407,6 +412,21 @@ impl Agent {
             compact_summary_pct: cfg.compact_summary_pct,
             session_history: Vec::new(),
         })
+    }
+
+    /// Переключение модели в рантайме (/model в TUI): ApiClient пересобирается
+    /// с новыми кредами (таймаут/extra_body/max_output — из sub-конфига),
+    /// лимит контекста — из реестра. Sub-конфиг следует за главной моделью,
+    /// чтобы субагенты не продолжали ходить в старую.
+    pub fn switch_model(&mut self, creds: &crate::models::Credentials, context_limit: usize) -> Result<()> {
+        self.api = ApiClient::new(&creds.url, &creds.key, &creds.model,
+            self.sub.timeout_secs, self.sub.extra_body.clone(), self.sub.max_output_tokens)?;
+        self.model = creds.model.clone();
+        self.context_limit = context_limit;
+        self.sub.base_url = creds.url.clone();
+        self.sub.api_key = creds.key.clone();
+        self.sub.model = creds.model.clone();
+        Ok(())
     }
 
     fn emit(&self, ev: AgentEvent) {
@@ -858,6 +878,27 @@ impl Agent {
         }
         // пользовательские вставки посреди хода (библиотека: push-back — норма, SWE-chat 44%)
         self.drain_prompt_slot(messages);
+        // переключение модели из TUI (/model): применяется на границе хода —
+        // следующий API-вызов уже идёт в новую модель (ключ — из env провайдера)
+        // (take в отдельном let — иначе guard держит заём self на весь блок)
+        let model_switch = self.controls.model_slot.lock().unwrap().take();
+        if let Some(id) = model_switch {
+            match crate::models::resolve(&id) {
+                Ok(creds) => {
+                    let limit = crate::models::find_model(&id)
+                        .map(|m| m.context_limit)
+                        .unwrap_or(self.context_limit);
+                    match self.switch_model(&creds, limit) {
+                        Ok(()) => self.emit(AgentEvent::HookNote(format!(
+                            "⚡ модель → {id} ({})", creds.url))),
+                        Err(e) => self.emit(AgentEvent::Error(format!(
+                            "не удалось переключить модель на {id}: {e:#}"))),
+                    }
+                }
+                Err(e) => self.emit(AgentEvent::Error(format!(
+                    "не удалось переключить модель на {id}: {e:#}"))),
+            }
+        }
         self.maybe_compact(messages, Some(turn_span))?;
         let est = est_tokens(messages).max(self.last_prompt);
         self.emit(AgentEvent::Status {

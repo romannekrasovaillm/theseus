@@ -258,7 +258,7 @@ const EXAMPLE_CONFIG: &str = "\
 # defaults < ~/.theseus/config.toml < ./.theseus/config.toml < CLI-оверрайды.
 
 # Модель провайдера.
-model = \"deepseek-v4-pro\"
+model = \"deepseek-v4-flash\"
 
 # Базовый URL OpenAI-совместимого API; ключ лучше держать в env DEEPSEEK_API_KEY.
 # base_url = \"https://api.deepseek.com/v1\"
@@ -628,7 +628,7 @@ mod tests {
         assert!(res.detail.contains(&path.display().to_string()));
         // пример обязан быть валидным TOML и нести defaults из crate::config
         let doc: toml::Value = toml::from_str(&text).unwrap();
-        assert_eq!(doc["model"].as_str().unwrap(), "deepseek-v4-pro");
+        assert_eq!(doc["model"].as_str().unwrap(), "deepseek-v4-flash");
         assert_eq!(doc["context_limit_tokens"].as_integer().unwrap(), 120_000);
         assert_eq!(doc["max_output_tokens"].as_integer().unwrap(), 8_192);
         assert_eq!(doc["api_timeout_secs"].as_integer().unwrap(), 600);

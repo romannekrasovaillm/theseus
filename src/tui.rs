@@ -1805,6 +1805,35 @@ fn push_lines(app: &mut TuiApp, text: &str, role: ThemeRole) {
     }
 }
 
+/// Быстрый выбор модели в /model (порядок = нумерация в меню).
+const MODEL_CHOICES: [(&str, &str); 3] = [
+    ("deepseek-v4-pro", "DeepSeek V4 Pro — фронтир-ризонинг"),
+    ("deepseek-v4-flash", "DeepSeek V4 Flash — быстрый и дешёвый (дефолт)"),
+    ("glm-5.2", "GLM-5.2 (Zhipu, ключ ZHIPU_API_KEY)"),
+];
+
+/// Разрешение аргумента /model: номер из меню, алиас или точный id из тройки.
+fn resolve_model_choice(arg: &str) -> Option<&'static str> {
+    let a = arg.trim().to_lowercase();
+    match a.as_str() {
+        "1" | "pro" | "v4pro" | "v4-pro" | "deepseek-v4-pro" => Some("deepseek-v4-pro"),
+        "2" | "flash" | "v4flash" | "v4-flash" | "deepseek-v4-flash" => Some("deepseek-v4-flash"),
+        "3" | "glm" | "glm5.2" | "glm-5.2" => Some("glm-5.2"),
+        _ => None,
+    }
+}
+
+/// Строки меню /model (чистая функция — для тестов): текущая модель +
+/// пронумерованные варианты + подсказка переключения.
+fn model_menu_lines(model_info: &str) -> Vec<String> {
+    let mut out = vec![format!("модель сейчас: {model_info}")];
+    for (i, (id, desc)) in MODEL_CHOICES.iter().enumerate() {
+        out.push(format!("  {}. {id} — {desc}", i + 1));
+    }
+    out.push("переключить: /model 1|2|3 или /model pro|flash|glm".to_string());
+    out
+}
+
 /// `/skills [фильтр]`: список скиллов из каталогов workspace и домашнего.
 fn cmd_skills(app: &mut TuiApp, filter: &str) {
     let theme = app.theme.clone();
@@ -2148,7 +2177,7 @@ fn cmd_trace(app: &mut TuiApp) {
 
 /// Slash-команды TUI (v0.4): разбор через реестр [`crate::slash`].
 /// true = выход из приложения.
-fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &str) -> bool {
+fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
     let theme = app.theme.clone();
     let accent = role_style(&theme, ThemeRole::Accent);
     let error = role_style(&theme, ThemeRole::Error);
@@ -2199,7 +2228,32 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls, model_info: &
                     accent)]);
             }
             "model" => {
-                app.push(vec![Span::styled(format!("модель: {model_info}"), accent)]);
+                let arg = args.split_whitespace().next().unwrap_or("");
+                if arg.is_empty() {
+                    // меню выбора: текущая модель + три быстрых варианта
+                    for line in model_menu_lines(&app.model_info) {
+                        app.push(vec![Span::styled(line, accent)]);
+                    }
+                } else {
+                    match resolve_model_choice(arg) {
+                        Some(id) => {
+                            // слот агенту: применится на границе хода (следующий API-вызов)
+                            *controls.model_slot.lock().unwrap() = Some(id.to_string());
+                            let url = crate::models::find_model(id)
+                                .and_then(|m| crate::models::find_provider(&m.provider))
+                                .map(|p| p.effective_base_url())
+                                .unwrap_or_default();
+                            app.model_info = format!("{id} @ {url}");
+                            app.push(vec![Span::styled(
+                                format!("⚡ модель → {id} (применится на следующем ходу)"),
+                                accent.add_modifier(Modifier::BOLD))]);
+                        }
+                        None => {
+                            app.push(vec![Span::styled(
+                                format!("неизвестная модель «{arg}» — варианты: /model 1|2|3 или pro|flash|glm"), error)]);
+                        }
+                    }
+                }
             }
             "mode" => {
                 use crate::permissions::{MODE_ASK, MODE_MAX, MODE_SEMI, MODE_YOLO};
@@ -2366,7 +2420,7 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
     // метаданные старта: модель для welcome-блока, лимит контекст-бара из
     // конфига (сигнатуру run_tui не трогаем), часовой пояс префиксов времени —
     // один вызов `date` на сессию
-    app.model_info = model_info.clone();
+    app.model_info = model_info;
     app.ctx_limit = context_limit_from_config();
     app.tz_offset_secs = local_utc_offset_secs();
 
@@ -2538,7 +2592,7 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         save_history(&history, hist_path.as_deref());
                         // slash-команды через реестр crate::slash (v0.4)
                         if text.starts_with('/') {
-                            if handle_slash(&text, &mut app, &controls, &model_info) { break; }
+                            if handle_slash(&text, &mut app, &controls) { break; }
                             continue;
                         }
                         if let AState::Idle(mut a) = state {
@@ -2585,7 +2639,7 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         history.push(&text);
                         save_history(&history, hist_path.as_deref());
                         if text.starts_with('/') {
-                            if handle_slash(&text, &mut app, &controls, &model_info) { break; }
+                            if handle_slash(&text, &mut app, &controls) { break; }
                             continue;
                         }
                         if let AState::Idle(mut a) = state {
@@ -2869,6 +2923,32 @@ mod ui_helpers_tests {
         assert_eq!(context_bar_role(84), ThemeRole::Warn);
         assert_eq!(context_bar_role(85), ThemeRole::Error);
         assert_eq!(context_bar_role(150), ThemeRole::Error);
+    }
+
+    /// /model: алиасы и номера резолвятся в id из тройки выбора,
+    /// неизвестное — None; меню содержит все три модели и подсказку.
+    #[test]
+    fn model_choice_resolution_and_menu() {
+        for (arg, expected) in [
+            ("1", "deepseek-v4-pro"), ("pro", "deepseek-v4-pro"),
+            ("v4-pro", "deepseek-v4-pro"), ("deepseek-v4-pro", "deepseek-v4-pro"),
+            ("2", "deepseek-v4-flash"), ("flash", "deepseek-v4-flash"),
+            ("deepseek-v4-flash", "deepseek-v4-flash"),
+            ("3", "glm-5.2"), ("glm", "glm-5.2"), ("GLM-5.2", "glm-5.2"),
+        ] {
+            assert_eq!(resolve_model_choice(arg), Some(expected), "аргумент: {arg}");
+        }
+        assert_eq!(resolve_model_choice("kimi-k3"), None);
+        assert_eq!(resolve_model_choice(""), None);
+        assert_eq!(resolve_model_choice("9"), None);
+        // меню: текущая модель + три пронумерованных варианта + подсказка
+        let menu = model_menu_lines("deepseek-v4-flash @ https://api.deepseek.com/v1");
+        assert!(menu[0].contains("deepseek-v4-flash"), "текущая модель: {menu:?}");
+        assert_eq!(menu.len(), 1 + MODEL_CHOICES.len() + 1, "строк меню: {menu:?}");
+        assert!(menu[1].contains("1. deepseek-v4-pro"), "{menu:?}");
+        assert!(menu[2].contains("2. deepseek-v4-flash"), "{menu:?}");
+        assert!(menu[3].contains("3. glm-5.2"), "{menu:?}");
+        assert!(menu[4].contains("/model 1|2|3"), "{menu:?}");
     }
 
     /// Slash-completion: «/» + непустой префикс без пробелов, регистронезависимо.

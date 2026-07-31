@@ -20,7 +20,7 @@ const USAGE: &str = "theseus — собственный агентный хар�
   -p, --prompt TEXT     headless-режим без TUI
       --yolo            авто-разрешение всех действий (кроме hard-deny)
       --max             максимальные права: hard-deny, confinement и sandbox off
-  -m, --model NAME      модель (по умолчанию deepseek-v4-pro)
+  -m, --model NAME      модель (по умолчанию deepseek-v4-flash)
       --base-url URL    API-эндпоинт (по умолчанию https://api.deepseek.com/v1)
       --context-limit N жёсткий лимит контекста в токенах (перекрывает конфиг)
       --max-turns N     лимит ходов агента (по умолчанию 40)

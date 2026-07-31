@@ -178,6 +178,15 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             ),
         },
         ProviderInfo {
+            name: "zhipu".into(),
+            base_url: "https://api.z.ai/api/paas/v4".into(),
+            env_key: Some("ZHIPU_API_KEY".into()),
+            wire_api: WireApi::Chat,
+            default_headers: Vec::new(),
+            base_url_env: Some("ZHIPU_BASE_URL".into()),
+            risk_note: None,
+        },
+        ProviderInfo {
             name: "openai-compatible".into(),
             base_url: "http://localhost:8000/v1".into(),
             env_key: Some("OPENAI_API_KEY".into()),
@@ -189,7 +198,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
     ]
 }
 
-/// Встроенные модели всех провайдеров (8 шт.).
+/// Встроенные модели всех провайдеров (10 шт.).
 ///
 /// Модели `openai-compatible` в реестр не входят: их идентификаторы и лимиты
 /// задаются конфигом пользователя под конкретный эндпоинт.
@@ -207,6 +216,17 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             true,
             true,
             Some(CostHint { input_usd_per_mtok: 0.60, output_usd_per_mtok: 1.80 }),
+        ),
+        model(
+            "deepseek-v4-flash",
+            deepseek,
+            131_072,
+            32_768,
+            true,
+            true,
+            // ценовая подсказка уточняется — flash-позиционирование: быстрее
+            // и дешевле v4-pro; точные цифры смотрите у провайдера
+            None,
         ),
         model(
             "deepseek-chat",
@@ -272,6 +292,17 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             false,
             true,
             Some(CostHint { input_usd_per_mtok: 8.40, output_usd_per_mtok: 8.40 }),
+        ),
+        // --- Zhipu (api.z.ai, GLM) ---
+        model(
+            "glm-5.2",
+            "zhipu",
+            131_072,
+            32_768,
+            true,
+            true,
+            // ценовая подсказка уточняется — смотрите тарифы z.ai
+            None,
         ),
     ]
 }
@@ -485,16 +516,18 @@ mod tests {
     fn registry_is_internally_consistent() {
         let providers = builtin_providers();
         let names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
-        for expected in ["deepseek", "kimi", "moonshot", "openai-compatible"] {
+        for expected in ["deepseek", "kimi", "moonshot", "zhipu", "openai-compatible"] {
             assert!(names.contains(&expected), "нет провайдера {expected}");
         }
         for p in &providers {
             assert!(p.base_url.starts_with("http"), "{}: base_url", p.name);
-            assert!(p.base_url.ends_with("/v1"), "{}: base_url без /v1", p.name);
+            // версия API в хвосте пути: /v1 у большинства, /v4 у zhipu (z.ai)
+            assert!(p.base_url.ends_with("/v1") || p.base_url.ends_with("/v4"),
+                "{}: base_url без версии API в хвосте", p.name);
             assert!(p.requires_key(), "{}: ожидался env_key", p.name);
         }
         let models = builtin_models();
-        assert_eq!(models.len(), 8);
+        assert_eq!(models.len(), 10);
         let mut seen = HashSet::new();
         for m in &models {
             assert!(seen.insert(m.id.as_str()), "дубликат id {}", m.id);
@@ -521,6 +554,24 @@ mod tests {
         assert!(find_provider("deepseek").unwrap().risk_note.is_none());
         assert!(find_provider("kimi").unwrap().risk_note.is_none());
         assert!(find_provider("нет-такого").is_none());
+    }
+
+    /// Flash и GLM-5.2 в реестре с правильными провайдерами и env-ключами
+    /// (быстрый выбор /model: pro | flash | glm).
+    #[test]
+    fn flash_and_glm_registered_with_providers() {
+        let flash = find_model("deepseek-v4-flash").expect("flash в реестре");
+        assert_eq!(flash.provider, "deepseek");
+        assert!(flash.supports_thinking && flash.supports_tools);
+        let deepseek = find_provider("deepseek").unwrap();
+        assert_eq!(deepseek.env_key.as_deref(), Some("DEEPSEEK_API_KEY"));
+
+        let glm = find_model("glm-5.2").expect("glm-5.2 в реестре");
+        assert_eq!(glm.provider, "zhipu");
+        assert!(glm.supports_thinking && glm.supports_tools);
+        let zhipu = find_provider("zhipu").expect("провайдер zhipu");
+        assert_eq!(zhipu.env_key.as_deref(), Some("ZHIPU_API_KEY"));
+        assert_eq!(zhipu.base_url, "https://api.z.ai/api/paas/v4");
     }
 
     #[test]
