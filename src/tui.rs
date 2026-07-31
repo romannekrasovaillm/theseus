@@ -2120,22 +2120,174 @@ fn cmd_memory(app: &mut TuiApp) {
 }
 
 /// `/sessions`: список файлов сессий workspace (`.theseus/session-*`), как `--sessions` в CLI.
-fn cmd_sessions(app: &mut TuiApp) {
-    let theme = app.theme.clone();
+/// Роль строки превью сессии (для маркеров в логе).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PreviewRole {
+    User,
+    Assistant,
+    Tool,
+}
+
+/// Одна строка из произвольного текста: пробелы/переводы схлопнуты,
+/// длина ≤ max символов (усечение с «…»).
+fn one_line(text: &str, max: usize) -> String {
+    let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut chars = collapsed.chars();
+    let taken: String = chars.by_ref().take(max).collect();
+    if chars.next().is_some() { format!("{taken}…") } else { taken }
+}
+
+/// Внутренние реплики харнесса (нуджи «call finish» и REMINDER-детекторы):
+/// в превью сессий это шум — пользователь их не писал.
+fn is_harness_nudge(text: &str) -> bool {
+    text.starts_with("If the user's request is already fully answered")
+        || text.starts_with("REMINDER:")
+}
+
+/// Карточка сессии для пикера /sessions: заголовок — первая user-реплика
+/// (≤70 символов), превью — до 2 первых содержательных строк (user/assistant).
+fn session_card(messages: &[crate::api::Message]) -> (String, Vec<String>) {
+    let mut title = String::new();
+    let mut preview: Vec<String> = Vec::new();
+    for m in messages {
+        if m.role == "system" { continue; }
+        let Some(text) = m.content.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { continue };
+        if is_harness_nudge(text) { continue; }
+        if title.is_empty() && m.role == "user" {
+            title = one_line(text, 70);
+            continue;
+        }
+        if preview.len() < 2 && matches!(m.role.as_str(), "user" | "assistant") {
+            preview.push(format!("{} {}", if m.role == "user" { "❯" } else { "◆" }, one_line(text, 80)));
+        }
+        if !title.is_empty() && preview.len() == 2 { break; }
+    }
+    if title.is_empty() { title = "(без заголовка)".to_string(); }
+    (title, preview)
+}
+
+/// Хвост сессии для рендера после /resume: последние `max_msgs` реплик с
+/// непустым контентом (system и внутренние нуджи пропускаем), каждая —
+/// одной строкой с ролью.
+fn resume_preview(messages: &[crate::api::Message], max_msgs: usize) -> Vec<(PreviewRole, String)> {
+    let mut rows: Vec<(PreviewRole, String)> = Vec::new();
+    for m in messages {
+        let Some(text) = m.content.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { continue };
+        if is_harness_nudge(text) { continue; }
+        let role = match m.role.as_str() {
+            "user" => PreviewRole::User,
+            "assistant" => PreviewRole::Assistant,
+            "tool" => PreviewRole::Tool,
+            _ => continue,
+        };
+        rows.push((role, one_line(text, 100)));
+    }
+    rows.split_off(rows.len().saturating_sub(max_msgs))
+}
+
+/// Файлы сессий workspace (.theseus/session-*.json), свежие первые
+/// (имя session-<unixts>.json — лексикографический порядок обратный).
+fn session_files() -> Vec<PathBuf> {
     let dir = workspace_guess().join(".theseus");
     let mut files: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten()
         .flatten()
-        .filter(|e| e.file_name().to_string_lossy().starts_with("session-"))
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().into_owned();
+            n.starts_with("session-") && n.ends_with(".json")
+        })
         .map(|e| e.path())
         .collect();
     files.sort();
+    files.reverse();
+    files
+}
+
+/// Дата сессии из имени файла `session-<unixts>.json` (UTC), «?.?.?» — если
+/// метку разобрать не удалось.
+fn session_date(path: &Path) -> String {
+    path.file_name()
+        .and_then(|n| n.to_string_lossy().strip_prefix("session-").map(String::from))
+        .and_then(|s| s.strip_suffix(".json").map(String::from))
+        .and_then(|s| s.parse::<u64>().ok())
+        .map(crate::agent::utc_date)
+        .unwrap_or_else(|| "????-??-??".to_string())
+}
+
+/// `/sessions`: пикер прежних сессий — номер, дата, заголовок и первые
+/// строки; загрузка — /resume N (v0.8, запрос пользователя 26.07).
+fn cmd_sessions(app: &mut TuiApp) {
+    let theme = app.theme.clone();
+    let files = session_files();
     if files.is_empty() {
-        app.push(vec![Span::styled(format!("сессий нет в {}", dir.display()), role_style(&theme, ThemeRole::Dim))]);
+        app.push(vec![Span::styled(
+            format!("сессий нет в {}", workspace_guess().join(".theseus").display()),
+            role_style(&theme, ThemeRole::Dim))]);
         return;
     }
-    app.push(vec![Span::styled(format!("сессии ({}):", files.len()), role_style(&theme, ThemeRole::Accent))]);
-    for f in files.iter().take(10) {
-        app.push(vec![Span::styled(format!("  {}", f.display()), role_style(&theme, ThemeRole::Dim))]);
+    let shown = files.len().min(10);
+    app.push(vec![Span::styled(
+        format!("сессии ({} из {}; свежие первые) — загрузить: /resume N",
+            shown, files.len()),
+        role_style(&theme, ThemeRole::Accent))]);
+    for (i, f) in files.iter().take(shown).enumerate() {
+        let line = match Agent::load_session(f) {
+            Ok(messages) => {
+                let (title, preview) = session_card(&messages);
+                let mut lines = vec![
+                    Span::styled(format!("  {}. {} · {}", i + 1, session_date(f), title),
+                        role_style(&theme, ThemeRole::AgentText)),
+                ];
+                for p in preview {
+                    lines.push(Span::styled(format!("     {p}"), role_style(&theme, ThemeRole::Dim)));
+                }
+                lines
+            }
+            Err(e) => vec![
+                Span::styled(format!("  {}. {} · (битый файл: {e})", i + 1, session_date(f)),
+                    role_style(&theme, ThemeRole::Warn)),
+            ],
+        };
+        for l in line { app.push(vec![l]); }
+    }
+}
+
+/// Загрузка прежней сессии прямо в TUI (слот /resume N, v0.8): история — в
+/// агента (`load_history`), в лог — шапка и хвост из последних реплик,
+/// чтобы было видно, где остановились. Системный промпт обновится на
+/// следующем ходу автоматически (ветка messages[0] в run_with).
+fn resume_into_tui(app: &mut TuiApp, agent: &mut Agent, path: &Path) {
+    let theme = app.theme.clone();
+    let dim = role_style(&theme, ThemeRole::Dim);
+    let accent = role_style(&theme, ThemeRole::Accent);
+    match Agent::load_session(path) {
+        Ok(messages) if !messages.is_empty() => {
+            let (title, _) = session_card(&messages);
+            let total = messages.len();
+            agent.load_history(messages.clone());
+            app.begin_block(BlockKind::Notice);
+            app.push(vec![Span::styled(
+                format!("📂 сессия восстановлена: «{title}» (сообщений: {total}, {})",
+                    path.display()),
+                accent.add_modifier(Modifier::BOLD))]);
+            for (role, text) in resume_preview(&messages, 6) {
+                let (mark, style) = match role {
+                    PreviewRole::User => ("❯ ", role_style(&theme, ThemeRole::UserText)),
+                    PreviewRole::Assistant => ("◆ ", role_style(&theme, ThemeRole::AgentText)),
+                    PreviewRole::Tool => ("↳ ", dim),
+                };
+                let mut line = app.gutter_sub();
+                line.push(Span::styled(mark, style));
+                line.push(Span::styled(text, style));
+                app.push(line);
+            }
+            app.push(vec![Span::styled(
+                "— история в контексте: продолжайте обычным сообщением".to_string(), dim)]);
+        }
+        Ok(_) => app.push(vec![Span::styled(
+            format!("сессия пуста: {}", path.display()), dim)]),
+        Err(e) => app.push(vec![Span::styled(
+            format!("не удалось загрузить {}: {e}", path.display()),
+            role_style(&theme, ThemeRole::Error))]),
     }
 }
 
@@ -2315,6 +2467,30 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
             "bg" => cmd_bg(app, controls),
             "memory" => cmd_memory(app),
             "sessions" => cmd_sessions(app),
+            "resume" => {
+                let arg = args.split_whitespace().next().unwrap_or("");
+                if arg.is_empty() {
+                    // без номера — показать пикер
+                    cmd_sessions(app);
+                    return false;
+                }
+                match arg.parse::<usize>() {
+                    Ok(n) if n >= 1 => {
+                        let files = session_files();
+                        match files.get(n - 1) {
+                            Some(path) if n <= 10 => {
+                                *controls.resume_slot.lock().unwrap() = Some(path.clone());
+                                app.push(vec![Span::styled(
+                                    format!("⏳ загружаю сессию #{n} ({})…", path.display()), accent)]);
+                            }
+                            _ => app.push(vec![Span::styled(
+                                format!("нет сессии №{n} — показаны первые 10, см. /sessions"), error)]),
+                        }
+                    }
+                    _ => app.push(vec![Span::styled(
+                        "использование: /resume [N] (N — номер из /sessions; из CLI: theseus --resume <файл>)".to_string(), error)]),
+                }
+            }
             "trace" => cmd_trace(app),
             "yolo" => {
                 // переключателя режима разрешений в рантайме нет: режим
@@ -2434,6 +2610,17 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
 
     loop {
         while let Ok(ev) = rx.try_recv() { app.on_event(ev); }
+        // загрузка прежней сессии из /resume N (v0.8): слот обслуживаем только
+        // на свободном агенте — историю нельзя менять посреди хода; занят —
+        // вернём в слот, сработает сразу после завершения
+        let resume_req = controls.resume_slot.lock().unwrap().take();
+        if let Some(path) = resume_req {
+            if let AState::Idle(agent) = &mut state {
+                resume_into_tui(&mut app, agent, &path);
+            } else {
+                *controls.resume_slot.lock().unwrap() = Some(path);
+            }
+        }
         // спиннер «работаю…» показываем только пока агент выполняет задачу
         app.agent_running = matches!(state, AState::Running(_));
         // индикатор режима разрешений (слева в заголовке ввода)
@@ -2949,6 +3136,61 @@ mod ui_helpers_tests {
         assert!(menu[2].contains("2. deepseek-v4-flash"), "{menu:?}");
         assert!(menu[3].contains("3. glm-5.2"), "{menu:?}");
         assert!(menu[4].contains("/model 1|2|3"), "{menu:?}");
+    }
+
+    /// Пикер сессий: заголовок — первая user-реплика (одной строкой, с усечением),
+    /// превью — до двух первых содержательных строк; system пропускается.
+    #[test]
+    fn session_card_title_and_preview() {
+        let messages = vec![
+            crate::api::Message::system("sys"),
+            crate::api::Message::user("первая задача\nс продолжением на второй строке"),
+            crate::api::Message::assistant(Some("ответ ассистента с деталями".to_string()), None),
+            crate::api::Message::tool("c1", "результат инструмента"),
+            crate::api::Message::user("вторая задача"),
+        ];
+        let (title, preview) = session_card(&messages);
+        assert_eq!(title, "первая задача с продолжением на второй строке");
+        assert_eq!(preview.len(), 2, "две строки превью: {preview:?}");
+        assert!(preview[0].starts_with("◆ "), "превью ассистента: {preview:?}");
+        assert!(preview[0].contains("ответ ассистента"));
+        assert!(preview[1].starts_with("❯ "), "превью юзера: {preview:?}");
+        // без user-реплик — заглушка
+        let (t2, _) = session_card(&[crate::api::Message::system("sys")]);
+        assert_eq!(t2, "(без заголовка)");
+        // внутренние нуджи харнесса в превью не показываем
+        let with_nudge = vec![
+            crate::api::Message::system("sys"),
+            crate::api::Message::user("настоящая задача"),
+            crate::api::Message::assistant(Some("ответ".to_string()), None),
+            crate::api::Message::user(
+                "If the user's request is already fully answered (a greeting or a direct answer counts as complete), call finish(summary) now."),
+            crate::api::Message::user("REMINDER: много чтений подряд без продвижения"),
+        ];
+        let (t3, p3) = session_card(&with_nudge);
+        assert_eq!(t3, "настоящая задача");
+        assert!(p3.iter().all(|p| !p.contains("fully answered") && !p.contains("REMINDER")),
+            "нуджи не должны попадать в превью: {p3:?}");
+    }
+
+    /// Хвост для /resume: последние max_msgs содержательных реплик с ролями,
+    /// system и пустые контент пропускаются; порядок хронологический.
+    #[test]
+    fn resume_preview_tail_and_roles() {
+        let mut messages = vec![crate::api::Message::system("sys")];
+        for i in 1..=10 {
+            messages.push(crate::api::Message::user(format!("задача {i}")));
+            messages.push(crate::api::Message::assistant(Some(format!("ответ {i}")), None));
+        }
+        messages.push(crate::api::Message::tool("c1", "хвост инструмента"));
+        let rows = resume_preview(&messages, 4);
+        assert_eq!(rows.len(), 4, "ровно 4 хвостовые реплики: {rows:?}");
+        assert_eq!(rows[0], (PreviewRole::Assistant, "ответ 9".to_string()));
+        assert_eq!(rows[1], (PreviewRole::User, "задача 10".to_string()));
+        assert_eq!(rows[2], (PreviewRole::Assistant, "ответ 10".to_string()));
+        assert_eq!(rows[3], (PreviewRole::Tool, "хвост инструмента".to_string()));
+        // усечение длинных текстов до одной строки
+        assert!(rows.iter().all(|(_, t)| !t.contains('\n')));
     }
 
     /// Slash-completion: «/» + непустой префикс без пробелов, регистронезависимо.

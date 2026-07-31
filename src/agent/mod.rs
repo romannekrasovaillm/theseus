@@ -76,6 +76,9 @@ pub struct Controls {
     /// (deepseek-v4-pro | deepseek-v4-flash | glm-5.2); применяется на
     /// границе хода — следующий API-вызов уже идёт в новую модель
     pub model_slot: Arc<Mutex<Option<String>>>,
+    /// запрос загрузки прежней сессии из TUI (/resume N): путь к файлу
+    /// session-*.json; обслуживается циклом run_tui только на свободном агенте
+    pub resume_slot: Arc<Mutex<Option<std::path::PathBuf>>>,
 }
 
 impl Default for Controls {
@@ -91,6 +94,7 @@ impl Default for Controls {
             notes_slot: Arc::new(Mutex::new(Vec::new())),
             bg_snapshot: Arc::new(Mutex::new(Vec::new())),
             model_slot: Arc::new(Mutex::new(None)),
+            resume_slot: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -215,7 +219,7 @@ fn agents_md(workspace: &Path) -> Option<String> {
 
 /// Дата UTC в формате YYYY-MM-DD из секунд эпохи — без внешних крейтов
 /// (civil-from-days алгоритм Говарда Хиннанта, как в memory.rs принята строковая дата).
-fn utc_date(ts: u64) -> String {
+pub(crate) fn utc_date(ts: u64) -> String {
     let days = (ts / 86_400) as i64;
     let z = days + 719_468;
     let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
@@ -412,6 +416,13 @@ impl Agent {
             compact_summary_pct: cfg.compact_summary_pct,
             session_history: Vec::new(),
         })
+    }
+
+    /// Загрузить историю прежней сессии (resume в TUI из /resume N):
+    /// системный промпт обновится на следующем run() (ветка messages[0]
+    /// в run_with), счётчики/детекторы хода не трогаем — они пер-задачные.
+    pub fn load_history(&mut self, messages: Vec<Message>) {
+        self.session_history = messages;
     }
 
     /// Переключение модели в рантайме (/model в TUI): ApiClient пересобирается
