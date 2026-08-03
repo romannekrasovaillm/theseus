@@ -57,12 +57,16 @@ pub struct CostHint {
 /// Описание провайдера LLM: куда слать запросы и как аутентифицироваться.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderInfo {
-    /// короткое имя: `"deepseek"` | `"kimi"` | `"moonshot"` | `"openai-compatible"`
+    /// короткое имя: `"deepseek"` | `"kimi"` | `"moonshot"` | `"zhipu"` | `"openai-compatible"`
     pub name: String,
     /// базовый URL API (без завершающего слеша), напр. `https://api.deepseek.com/v1`
     pub base_url: String,
     /// имя env-переменной с API-ключом (`None` — ключ не нужен, локальный эндпоинт)
     pub env_key: Option<String>,
+    /// запасные имена env-переменных ключа (пробуются, если `env_key` не задан):
+    /// пользователи ставят ключ под разными именами (GLM_API_KEY, ZAI_API_KEY...)
+    #[serde(default)]
+    pub env_key_aliases: Vec<String>,
     /// проводной API: chat/completions или responses
     pub wire_api: WireApi,
     /// дополнительные HTTP-заголовки по умолчанию (подмешиваются в каждый запрос)
@@ -150,6 +154,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             name: "deepseek".into(),
             base_url: "https://api.deepseek.com/v1".into(),
             env_key: Some("DEEPSEEK_API_KEY".into()),
+            env_key_aliases: vec!["THESEUS_API_KEY".into()],
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("DEEPSEEK_BASE_URL".into()),
@@ -159,6 +164,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             name: "kimi".into(),
             base_url: "https://api.kimi.com/v1".into(),
             env_key: Some("KIMI_API_KEY".into()),
+            env_key_aliases: vec![],
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("KIMI_BASE_URL".into()),
@@ -168,6 +174,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             name: "moonshot".into(),
             base_url: "https://api.moonshot.ai/v1".into(),
             env_key: Some("MOONSHOT_API_KEY".into()),
+            env_key_aliases: vec![],
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("MOONSHOT_BASE_URL".into()),
@@ -181,6 +188,9 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             name: "zhipu".into(),
             base_url: "https://api.z.ai/api/paas/v4".into(),
             env_key: Some("ZHIPU_API_KEY".into()),
+            // GLM-ключ пользователи ставят под разными именами (кейс 03.08:
+            // GLM_API_KEY/ZAI_API_KEY в env, а харнесс ждал только ZHIPU_API_KEY)
+            env_key_aliases: vec!["GLM_API_KEY".into(), "ZAI_API_KEY".into()],
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("ZHIPU_BASE_URL".into()),
@@ -190,6 +200,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             name: "openai-compatible".into(),
             base_url: "http://localhost:8000/v1".into(),
             env_key: Some("OPENAI_API_KEY".into()),
+            env_key_aliases: vec![],
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("OPENAI_BASE_URL".into()),
@@ -379,11 +390,26 @@ fn registry_provider(model: &ModelInfo) -> Result<ProviderInfo> {
 }
 
 /// Общее ядро `resolve*`: ключ из env + эффективный URL провайдера.
+/// Если основная переменная не задана, пробуются алиасы провайдера
+/// (`env_key_aliases` — GLM_API_KEY/ZAI_API_KEY для zhipu и т.п.); в тексте
+/// ошибки — все принятые имена и подсказка про окружение процесса.
 fn resolve_parts(model: &ModelInfo, provider: &ProviderInfo, api_key_env: &str) -> Result<Credentials> {
-    let raw = env::var(api_key_env)
-        .with_context(|| format!("нет API-ключа: задайте env-переменную {api_key_env}"))?;
+    let mut tried = vec![api_key_env.to_string()];
+    let mut raw = env::var(api_key_env).ok();
+    for alias in &provider.env_key_aliases {
+        if raw.is_some() { break; }
+        if alias == api_key_env { continue; }
+        tried.push(alias.clone());
+        raw = env::var(alias).ok();
+    }
+    let raw = raw.with_context(|| format!(
+        "нет API-ключа: задайте env-переменную {}. Если переменная выставлена \
+         ПОСЛЕ запуска Тесея — перезапустите его: окружение захватывается при \
+         старте процесса и позже не пополняется",
+        tried.join(" или ")))?;
     let key = raw.trim();
-    ensure!(!key.is_empty(), "env-переменная {api_key_env} задана, но пустая");
+    ensure!(!key.is_empty(), "env-переменная {} задана, но пустая",
+        tried.last().map(String::as_str).unwrap_or(api_key_env));
     Ok(Credentials {
         url: provider.effective_base_url(),
         key: key.to_string(),
@@ -613,6 +639,45 @@ mod tests {
             let err = resolve_with_env("kimi-k2", "THESEUS_TEST_MODELS_EMPTY").unwrap_err();
             assert!(format!("{err:#}").contains("пустая"));
         });
+    }
+
+    /// Алиасы env-ключа (кейс 03.08): zhipu принимает ключ и из GLM_API_KEY /
+    /// ZAI_API_KEY, а не только из ZHIPU_API_KEY; приоритет — у основного имени.
+    #[test]
+    fn resolve_falls_back_to_env_key_aliases() {
+        with_env_vars(
+            &[("ZHIPU_API_KEY", None), ("GLM_API_KEY", Some(" glm-key ")), ("ZAI_API_KEY", None)],
+            || {
+                let creds = resolve("glm-5.2").unwrap();
+                assert_eq!(creds.key, "glm-key"); // пробелы обрезаны
+                assert_eq!(creds.url, "https://api.z.ai/api/paas/v4");
+            },
+        );
+        // основное имя сильнее алиаса
+        with_env_vars(
+            &[("ZHIPU_API_KEY", Some("main-key")), ("GLM_API_KEY", Some("alias-key"))],
+            || {
+                let creds = resolve("glm-5.2").unwrap();
+                assert_eq!(creds.key, "main-key");
+            },
+        );
+    }
+
+    /// Ошибка без ключа перечисляет все принятые имена и подсказывает про
+    /// окружение процесса (переменная, выставленная после запуска, не доезжает).
+    #[test]
+    fn resolve_error_lists_all_key_names_and_restart_hint() {
+        with_env_vars(
+            &[("ZHIPU_API_KEY", None), ("GLM_API_KEY", None), ("ZAI_API_KEY", None)],
+            || {
+                let err = resolve("glm-5.2").unwrap_err();
+                let msg = format!("{err:#}");
+                assert!(msg.contains("ZHIPU_API_KEY"), "msg: {msg}");
+                assert!(msg.contains("GLM_API_KEY"), "msg: {msg}");
+                assert!(msg.contains("ZAI_API_KEY"), "msg: {msg}");
+                assert!(msg.contains("перезапустите"), "подсказка про перезапуск: {msg}");
+            },
+        );
     }
 
     #[test]
