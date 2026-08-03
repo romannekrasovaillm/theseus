@@ -43,10 +43,8 @@ const CHAT_TEMPERATURE: f64 = 0.2;
 /// бюджета на блок <think> — при 1024 ответ иногда не начинался вовсе
 /// (живой кейс 18.07: два запроса вернули один лишь «<think»).
 const CHAT_MAX_TOKENS: u32 = 3072;
-/// Усечённый потолок при CPU-фолбэке: v10-модель игнорирует
-/// `enable_thinking=false` (проверено живьём 20.07: kwargs работает на старой
-/// GGUF, не на v10), а на CPU это ~5 ток/с — 3072 токена = 10+ минут ожидания.
-/// 768 × 5 ток/с ≈ 2.5 минуты худшего случая.
+/// Усечённый потолок при CPU-фолбэке: на CPU это ~5 ток/с — 3072 токена =
+/// 10+ минут ожидания. 768 × 5 ток/с ≈ 2.5 минуты худшего случая.
 const CHAT_MAX_TOKENS_CPU: u32 = 768;
 
 /// Срезать thinking-блоки из ответа модели: `<think>...</think>` целиком и
@@ -233,10 +231,9 @@ pub fn is_available(cfg: &AriadnaConfig) -> bool {
     cfg.server_bin.is_file() && cfg.gguf_path.is_file()
 }
 
-/// Аргументы командной строки llama-server. `--jinja` обязателен: только с
-/// ним `chat_template_kwargs.enable_thinking=false` из chat-запроса реально
-/// применяется к GRPO-шаблону — без него kwargs молча игнорируются, и модель
-/// думает 2500+ токенов на trivial-вопрос (баг 20.07: 10 минут на CPU).
+/// Аргументы командной строки llama-server. `--jinja` включён для корректного
+/// применения chat-шаблона Qwen (важно для v1/v10, баг 20.07: без шаблона
+/// модель думает 2500+ токенов на trivial-вопрос, 10 минут на CPU).
 fn server_args(cfg: &AriadnaConfig) -> Vec<String> {
     vec![
         "--model".to_string(), cfg.gguf_path.display().to_string(),
@@ -314,12 +311,13 @@ pub fn ensure_server(cfg: &AriadnaConfig) -> Result<ServerGuard> {
 ///
 /// Сервер должен быть поднят заранее (см. [`ensure_server`]) — функция
 /// сама сервер не стартует. Тело запроса: модель `ariadna`,
-/// `temperature` 0.2, `max_tokens` 3072, плюс `chat_template_kwargs.
-/// enable_thinking=false` — иначе GRPO-модель генерирует многосотенные
-/// thinking-токены на простые вопросы (живой замер: 2500+ токенов на
-/// однострочный вопрос, ~10 минут генерации). kwargs применяются только
-/// если сервер запущен с `--jinja` (добавлен в [`server_args`], баг 20.07);
-/// неподдерживаемые сервером kwargs игнорируются без ошибок.
+/// `temperature` 0.2, `max_tokens` 3072.
+///
+/// Важно (живой тест 02.08): `chat_template_kwargs.enable_thinking=false`
+/// НЕ отправляется — он ломает обе модели (v1 SFT и v10 GRPO): вместо
+/// ответа модель выдаёт бесконечный цикл пустых «<think></think>».
+/// Без kwargs обе модели отвечают нормально. Стоп-секвенс оставлен как
+/// страховка против вырожденного цикла.
 ///
 /// # Errors
 /// Ошибка транспорта (сервер недоступен), не-2xx статус (в текст ошибки
@@ -338,11 +336,10 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
         "messages": messages,
         "temperature": CHAT_TEMPERATURE,
         "max_tokens": max_tokens,
-        "chat_template_kwargs": { "enable_thinking": false },
-        // стоп-секвенс против вырожденного цикла v10: модель генерирует
-        // бесконечные пустые «<think></think>» подряд (баг 20.07, доказано
-        // прямым запросом — enable_thinking его не лечит). Срезаем цикл на
-        // втором блоке: остаток сводится к честному маркеру вместо 10 минут.
+        // стоп-секвенс против вырожденного цикла: модель (v1/v10) генерирует
+        // бесконечные пустые «<think></think>» подряд (баг 20.07, живой тест
+        // 02.08). Срезаем цикл на втором блоке: остаток сводится к честному
+        // маркеру вместо 10 минут генерации.
         "stop": ["</think>\n\n<think>"],
     });
     let client = http_client(CHAT_TIMEOUT)?;
@@ -359,15 +356,24 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
     let value: serde_json::Value =
         resp.json().with_context(|| format!("разбор JSON ответа {url}"))?;
     // Индексация Value не паникует: промах даёт Null, as_str → None.
-    let content = value["choices"][0]["message"]["content"]
-        .as_str()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "в ответе llama-server нет choices[0].message.content: {}",
-                truncate(&value.to_string(), ERR_BODY_MAX_CHARS)
-            )
-        })?;
-    Ok(strip_think_blocks(content))
+    // Fallback на reasoning_content (паттерн ~/bin/ask_expert.sh:97-102):
+    // Qwen с thinking-режимом иногда отдаёт пустой content и кладёт текст
+    // в reasoning_content — берём его, если content пуст (живой кейс 02.08).
+    let content = value["choices"][0]["message"]["content"].as_str();
+    let content = match content {
+        Some(c) if !c.trim().is_empty() => c.to_string(),
+        _ => value["choices"][0]["message"]["reasoning_content"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+    };
+    if content.trim().is_empty() {
+        anyhow::bail!(
+            "в ответе llama-server пустые content и reasoning_content: {}",
+            truncate(&value.to_string(), ERR_BODY_MAX_CHARS)
+        );
+    }
+    Ok(strip_think_blocks(&content))
 }
 
 /// Разовая задача для «Ариадны»: гарантирует сервер и выполняет один
@@ -382,25 +388,39 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
 ///
 /// # Errors
 /// Сумма ошибок [`ensure_server`] и [`chat`].
-pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String> {    let guard = ensure_server(cfg)?;
+pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String> {
+    let guard = ensure_server(cfg)?;
     // CPU-фолбэк порождённого сервера (баг 20.07: ggml_cuda_init упал,
     // генерация ~5 ток/с, агент висел 10 минут) — усечённый бюджет токенов
-    // (v10 игнорирует enable_thinking, стопить можно только потолком) + пометка
+    // (thinking стопить можно только потолком) + пометка
     let on_cpu = guard.log_path()
         .and_then(|p| std::fs::read_to_string(p).ok())
         .is_some_and(|c| cpu_fallback(&c));
     let max_tokens = if on_cpu { CHAT_MAX_TOKENS_CPU } else { CHAT_MAX_TOKENS };
-    let answer = chat_with_max_tokens(cfg,
-        &[ChatMessage::system(system), ChatMessage::user(task)], max_tokens)?;
+    // v10 (GRPO) ломается от ЛЮБОГО system-сообщения: отвечает «<think>» + EOS
+    // (живой тест 02.08) — для неё шлём только user. v1 (SFT) system понимает.
+    let messages = if model_is_v10(cfg) {
+        vec![ChatMessage::user(task)]
+    } else {
+        vec![ChatMessage::system(system), ChatMessage::user(task)]
+    };
+    let answer = chat_with_max_tokens(cfg, &messages, max_tokens)?;
     if on_cpu {
         return Ok(format!(
             "{answer}\n[system: Ариадна работает на CPU — GPU недоступен \
              (ggml_cuda_init failed); бюджет ответа усечён до {CHAT_MAX_TOKENS_CPU} \
              токенов против бегущего thinking у v10. Рекомендуется поднять \
-             сервер на GPU или использовать GGUF с рабочим enable_thinking]"
+             сервер на GPU]"
         ));
     }
     Ok(answer)
+}
+
+/// `true`, если конфиг указывает на GRPO-модель v10 (имя файла GGUF содержит
+/// «v10»). Для v10 неприменимы system-сообщения и `enable_thinking`-kwargs
+/// (живой тест 02.08) — поведение запроса зависит от версии модели.
+fn model_is_v10(cfg: &AriadnaConfig) -> bool {
+    cfg.gguf_path.to_string_lossy().contains("v10")
 }
 
 /// CPU-фолбэк по логу сервера: ggml_cuda_init упал → «no usable GPU found».
@@ -415,16 +435,16 @@ fn cpu_fallback(log_content: &str) -> bool {
 pub const ARIADNA_SYSTEM_RU: &str =
     "Ты — Ариадна, локальный быстрый ML-помощник (Qwen3.5-4B). \
      Отвечай по-русски, кратко и по делу, сразу текстом ответа, без преамбул \
-     и без блоков <think>. Задача сформулирована в императиве — выполняй её \
-     прямо, без уточняющих вопросов. Если ответ по-русски сформулировать не \
-     получается — переключись на английский, но обязательно ответь текстом.";
+     и без блоков рассуждений. Задача сформулирована в императиве — выполняй \
+     её прямо, без уточняющих вопросов. Если ответ по-русски сформулировать \
+     не получается — переключись на английский, но обязательно ответь текстом.";
 
 /// Фолбэк-промпт на случай потери ответа: короткий императив на английском —
 /// доказанный вживую способ вывести модель из «пустого» thinking (скрин 23.07).
 pub const ARIADNA_SYSTEM_EN: &str =
     "You are Ariadna, a fast local ML helper (Qwen3.5-4B). Answer briefly and \
      directly, in English. Output the answer text immediately — no preamble, \
-     no <think> blocks. Do the task directly, do not ask clarifying questions.";
+     no reasoning blocks. Do the task directly, do not ask clarifying questions.";
 
 /// Фрагмент маркера потери ответа из [`strip_think_blocks`] (thinking съел текст).
 const LOST_ANSWER_MARKER: &str = "только thinking-блок";
@@ -565,11 +585,14 @@ mod tests {
         }
 
         /// Конфиг на мок (пути бинаря/модели дефолтные: до их проверки дело не доходит).
+        /// GGUF — v1-путь (без «v10»), чтобы run_task слал system+user
+        /// (v10 system не получает вовсе — живой тест 02.08).
         fn config(&self) -> AriadnaConfig {
             AriadnaConfig {
                 host: "127.0.0.1".to_string(),
                 port: self.port,
                 startup_timeout: Duration::from_secs(2),
+                gguf_path: PathBuf::from("/home/roman/models/ariadna-grpo/model-Q4_K_M.gguf"),
                 ..AriadnaConfig::default()
             }
         }
@@ -788,14 +811,14 @@ mod tests {
     }
 
     /// Аргументы llama-server (баг 20.07): `--jinja` обязателен — без него
-    /// `chat_template_kwargs.enable_thinking=false` игнорируется GRPO-шаблоном,
-    /// и модель «думает» 2500+ токенов на trivial-вопрос (10 минут на CPU).
+    /// chat-шаблон Qwen применяется неверно, и модель «думает» 2500+ токенов
+    /// на trivial-вопрос (10 минут на CPU).
     #[test]
     fn server_args_contain_jinja_and_model() {
         let cfg = AriadnaConfig::default();
         let args = server_args(&cfg);
         assert!(args.iter().any(|a| a == "--jinja"),
-            "без --jinja enable_thinking не работает: {args:?}");
+            "без --jinja шаблон Qwen не применяется: {args:?}");
         let model_pos = args.iter().position(|a| a == "--model").expect("--model");
         assert!(args[model_pos + 1].contains("ariadna"));
         let port_pos = args.iter().position(|a| a == "--port").expect("--port");
@@ -1039,7 +1062,28 @@ mod tests {
         let mock = MockLlama::start(ChatMode::EmptyChoices);
         let err = chat(&mock.config(), &[ChatMessage::user("x")]).expect_err("пустые choices — ошибка");
         let msg = format!("{err:#}");
-        assert!(msg.contains("choices[0].message.content"), "msg: {msg}");
+        assert!(msg.contains("пустые content и reasoning_content"), "msg: {msg}");
+    }
+
+    /// v10 (GRPO) не получает system-сообщение: любой system ломает модель
+    /// (живой тест 02.08 — «<think>» + EOS). Только user-сообщение.
+    #[test]
+    fn run_task_v10_sends_user_only() {
+        let mock = MockLlama::start(ChatMode::Ok);
+        let mut cfg = mock.config();
+        cfg.gguf_path = PathBuf::from("/home/roman/models/ariadna-grpo/qwen35-4b-ariadna-grpo-v10.Q4_K_M.gguf");
+        let out = run_task(&cfg, "Ты — Ариадна.", "Найди выход из лабиринта").expect("run_task v10");
+        assert_eq!(out, MOCK_REPLY);
+        let requests = mock.chat_requests();
+        assert_eq!(requests.len(), 1);
+        let body: Value = serde_json::from_str(&requests[0].body).expect("тело — JSON");
+        let messages = body["messages"].as_array().expect("messages — массив");
+        assert_eq!(messages.len(), 1, "v10: только user, без system: {}", requests[0].body);
+        assert_eq!(messages[0]["role"], json!("user"));
+        assert_eq!(messages[0]["content"], json!("Найди выход из лабиринта"));
+        // kwargs enable_thinking=false в тело не попадают (ломают v10/v1)
+        assert!(body.get("chat_template_kwargs").is_none(),
+            "chat_template_kwargs не должен отправляться: {}", requests[0].body);
     }
 
     /// Промпты Ариадны (скрин 23.07): русский первичен + явный фолбэк
@@ -1050,7 +1094,7 @@ mod tests {
         assert!(ARIADNA_SYSTEM_RU.contains("английский"), "фолбэк на EN объявлен: {ARIADNA_SYSTEM_RU}");
         assert!(ARIADNA_SYSTEM_RU.contains("обязательно ответь текстом"));
         assert!(ARIADNA_SYSTEM_EN.contains("in English"), "EN-фолбэк: {ARIADNA_SYSTEM_EN}");
-        assert!(ARIADNA_SYSTEM_EN.contains("no <think> blocks"));
+        assert!(ARIADNA_SYSTEM_EN.contains("no reasoning blocks"));
     }
 
     /// Императивная рамка: задача заворачивается в прямое указание (вопросы
