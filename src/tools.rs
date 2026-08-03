@@ -1121,11 +1121,29 @@ fn urlencode(s: &str) -> String {
 pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(timeout_secs.max(5)))
-        .user_agent("theseus/0.3.1")
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64) theseus/0.3.1")
         .build()?;
     let mut out = String::new();
 
-    // 1) DuckDuckGo Instant Answer JSON
+    // 1) DuckDuckGo Lite (POST) — полноценный HTML-поиск, не блокирует ботов.
+    let body = format!("q={}&kl=&df=", urlencode(query));
+    if let Ok(resp) = client.post("https://lite.duckduckgo.com/lite/")
+        .header("Content-Type", "application/x-www-form-urlencoded")
+        .body(body)
+        .send()
+    {
+        if let Ok(text) = resp.text() {
+            let hits = parse_ddg_lite(&text);
+            if !hits.is_empty() {
+                out += "DuckDuckGo:\n";
+                for hit in hits.iter().take(6) {
+                    out += &format!("- {} — {}\n  {}\n", hit.title, hit.url, hit.snippet);
+                }
+            }
+        }
+    }
+
+    // 2) DuckDuckGo Instant Answer JSON (дополнение — мгновенные ответы)
     let ddg = format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&no_redirect=1",
                       urlencode(query));
     if let Ok(resp) = client.get(&ddg).send() {
@@ -1133,7 +1151,7 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
                 if let Some(abs) = v["AbstractText"].as_str().filter(|s| !s.is_empty()) {
                     let src = v["AbstractURL"].as_str().unwrap_or("");
-                    out += &format!("DDG: {abs} ({src})\n");
+                    out += &format!("DDG Instant Answer: {abs} ({src})\n");
                 }
                 if let Some(topics) = v["RelatedTopics"].as_array() {
                     for t in topics.iter().take(4) {
@@ -1148,22 +1166,9 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
         }
     }
 
-    // 2) Wikipedia OpenSearch (fallback/augment)
-    let wiki = format!("https://ru.wikipedia.org/w/api.php?action=opensearch&format=json&limit=5&search={}",
-                       urlencode(query));
-    if let Ok(resp) = client.get(&wiki).send() {
-        if let Ok(text) = resp.text() {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
-                if let (Some(titles), Some(urls)) = (v[1].as_array(), v[3].as_array()) {
-                    if !titles.is_empty() {
-                        out += "Wikipedia:\n";
-                    }
-                    for (t, u) in titles.iter().zip(urls.iter()) {
-                        out += &format!("- {} — {}\n", t.as_str().unwrap_or(""), u.as_str().unwrap_or(""));
-                    }
-                }
-            }
-        }
+    // 3) Wikipedia OpenSearch: EN (ML/AI термины) + RU (дополнение)
+    for (lang, label) in [("en", "EN"), ("ru", "RU")] {
+        wiki_opensearch(&client, lang, label, query, &mut out);
     }
 
     if out.is_empty() {
@@ -1172,9 +1177,204 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
     Ok(cap(out))
 }
 
+/// Wikipedia OpenSearch API: до 5 ссылок по запросу с языка `lang` → в `out`.
+fn wiki_opensearch(client: &reqwest::blocking::Client, lang: &str, label: &str,
+                   query: &str, out: &mut String) {
+    let url = format!("https://{lang}.wikipedia.org/w/api.php?action=opensearch&format=json&limit=5&search={}",
+                      urlencode(query));
+    if let Ok(resp) = client.get(&url).send() {
+        if let Ok(text) = resp.text() {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                if let (Some(titles), Some(urls)) = (v[1].as_array(), v[3].as_array()) {
+                    if !titles.is_empty() {
+                        *out += &format!("Wikipedia ({label}):\n");
+                    }
+                    for (t, u) in titles.iter().zip(urls.iter()) {
+                        *out += &format!("- {} — {}\n", t.as_str().unwrap_or(""), u.as_str().unwrap_or(""));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Один результат DuckDuckGo Lite: заголовок, URL и сниппет.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DdgHit {
+    title: String,
+    url: String,
+    snippet: String,
+}
+
+/// Парсер HTML-выдачи DuckDuckGo Lite (`lite.duckduckgo.com/lite/`).
+///
+/// Разметка результата (проверена живьём 03.08): якорь
+/// `<a rel="nofollow" href="URL" class='result-link'>Title</a>`, позже за ним
+/// `<td class='result-snippet'>Snippet</td>`. Автомат идёт по документу
+/// сверху вниз: якорь с `class='result-link'` открывает новый результат,
+/// первый snippet после него заполняет его `snippet` — сниппеты жёстко
+/// привязаны к своим ссылкам (склейка по индексу съезжалась на служебных
+/// ячейках таблицы).
+fn parse_ddg_lite(html: &str) -> Vec<DdgHit> {
+    let item_re = regex::Regex::new(
+        r#"(?s)<a\b[^>]*>(.*?)</a>|<td\b[^>]*class=['"]result-snippet['"][^>]*>(.*?)</td>"#).unwrap();
+    let link_class_re = regex::Regex::new(r#"class=['"]result-link['"]"#).unwrap();
+    let href_re = regex::Regex::new(r#"href="([^"]+)""#).unwrap();
+
+    let mut hits: Vec<DdgHit> = Vec::new();
+    for cap in item_re.captures_iter(html) {
+        if let Some(anchor_inner) = cap.get(1) {
+            let tag = &cap[0];
+            if !link_class_re.is_match(tag) { continue; }
+            let Some(href) = href_re.captures(tag).map(|c| c[1].to_string()) else { continue };
+            if !href.starts_with("http") || href.contains("duckduckgo.com") { continue; }
+            let title = strip_html(anchor_inner.as_str());
+            if title.is_empty() { continue; }
+            hits.push(DdgHit { title, url: href, snippet: String::new() });
+        } else if let Some(snippet_html) = cap.get(2) {
+            // сниппет — к последнему результату без сниппета
+            if let Some(last) = hits.iter_mut().rev().find(|h| h.snippet.is_empty()) {
+                last.snippet = strip_html(snippet_html.as_str());
+            }
+        }
+    }
+    hits
+}
+
+/// Удаляет HTML-теги и декодирует сущности (именованные и числовые, в т.ч.
+/// hex вида `&#x27;`) одним проходом. Незакрытый тег в конце отбрасывается,
+/// неизвестная сущность сохраняется как есть.
+fn strip_html(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '<' => {
+                for c2 in chars.by_ref() { if c2 == '>' { break; } }
+            }
+            '&' => {
+                let mut ent = String::new();
+                let mut closed = false;
+                for c2 in chars.by_ref() {
+                    if c2 == ';' { closed = true; break; }
+                    if ent.len() >= 7 { break; }
+                    ent.push(c2);
+                }
+                let decoded = if closed { decode_entity(&ent) } else { None };
+                match decoded {
+                    Some(d) => out.push_str(&d),
+                    None => {
+                        out.push('&');
+                        out.push_str(&ent);
+                        if closed { out.push(';'); }
+                    }
+                }
+            }
+            _ => out.push(c),
+        }
+    }
+    out.trim().to_string()
+}
+
+/// Декодирование одной HTML-сущности (без `&` и `;`): именованные +
+/// числовые (`&#39;` десятичные, `&#x27;` hex). Неизвестная — `None`.
+fn decode_entity(ent: &str) -> Option<String> {
+    match ent {
+        "amp" => Some("&".into()),
+        "lt" => Some("<".into()),
+        "gt" => Some(">".into()),
+        "quot" => Some("\"".into()),
+        "apos" => Some("'".into()),
+        "nbsp" => Some(" ".into()),
+        "hellip" => Some("…".into()),
+        _ => {
+            if let Some(num) = ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X")) {
+                u32::from_str_radix(num, 16).ok()
+                    .and_then(char::from_u32).map(|c| c.to_string())
+            } else if let Some(num) = ent.strip_prefix('#') {
+                num.parse::<u32>().ok()
+                    .and_then(char::from_u32).map(|c| c.to_string())
+            } else {
+                None
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// strip_html: теги срезаются одним проходом, именованные и числовые
+    /// (в т.ч. hex) сущности декодируются, незакрытый тег отбрасывается.
+    #[test]
+    fn strip_html_tags_and_entities() {
+        assert_eq!(strip_html("<b>жирный</b> и <i>курсив</i>"), "жирный и курсив");
+        assert_eq!(strip_html("a &amp; b &lt;x&gt; &quot;q&quot; &#39;s&#39;"), "a & b <x> \"q\" 's'");
+        // hex-сущности (DDG: GRPO&#x27;s)
+        assert_eq!(strip_html("GRPO&#x27;s &#x41;&#65;"), "GRPO's AA");
+        // незакрытый тег в конце — отбрасывается
+        assert_eq!(strip_html("текст <span class='x"), "текст");
+        // не-сущность остаётся как есть
+        assert_eq!(strip_html("a & b; c"), "a & b; c");
+        // вложенные теги и пробелы по краям
+        assert_eq!(strip_html("  <td>  сниппет с <b>выделением</b>  </td>  "), "сниппет с выделением");
+    }
+
+    /// Парсер DDG Lite (разметка из живого снимка 03.08): ссылки по
+    /// class='result-link', сниппеты привязаны к своим ссылкам по порядку,
+    /// внутренние ссылки duckduckgo.com отфильтрованы.
+    #[test]
+    fn parse_ddg_lite_pairs_snippets_with_links() {
+        let html = r#"
+<table>
+  <tr><td>служебная ячейка с длинным текстом — не сниппет и не ссылка</td></tr>
+  <tr><td>
+    <a rel="nofollow" href="https://example.com/grpo" class='result-link'>GRPO&#x27;s Guide</a>
+  </td></tr>
+  <tr><td class='result-snippet'>Сниппет <b>первого</b> результата про GRPO.</td></tr>
+  <tr><td>
+    <a rel="nofollow" href="https://duckduckgo.com/internal" class='result-link'>Внутренняя</a>
+  </td></tr>
+  <tr><td>
+    <a rel="nofollow" href="https://other.io/ppo" class='result-link'>PPO vs GRPO</a>
+  </td></tr>
+  <tr><td class='result-snippet'>Второй сниппет — про PPO и сравнение.</td></tr>
+</table>"#;
+        let hits = parse_ddg_lite(html);
+        assert_eq!(hits.len(), 2, "внутренняя ссылка отфильтрована: {hits:?}");
+        assert_eq!(hits[0].title, "GRPO's Guide");
+        assert_eq!(hits[0].url, "https://example.com/grpo");
+        assert_eq!(hits[0].snippet, "Сниппет первого результата про GRPO.");
+        assert_eq!(hits[1].title, "PPO vs GRPO");
+        assert_eq!(hits[1].snippet, "Второй сниппет — про PPO и сравнение.");
+        // сниппет НЕ перескочил на чужую ссылку (бывшая склейка по индексу)
+        assert!(!hits[1].snippet.contains("первого"));
+    }
+
+    /// Результат без сниппета — пустая строка, следующий сниппет не «липнет».
+    #[test]
+    fn parse_ddg_lite_missing_snippet_stays_empty() {
+        let html = r#"
+<a rel="nofollow" href="https://a.io/1" class='result-link'>Без сниппета</a>
+<a rel="nofollow" href="https://b.io/2" class='result-link'>Со сниппетом</a>
+<td class='result-snippet'>Сниппет второго.</td>"#;
+        let hits = parse_ddg_lite(html);
+        assert_eq!(hits.len(), 2);
+        assert_eq!(hits[0].snippet, "");
+        assert_eq!(hits[1].snippet, "Сниппет второго.");
+    }
+
+    /// Живой smoke веб-поиска (сеть!): DDG Lite отдаёт результаты со
+    /// сниппетами по ML-запросу. Запуск: cargo test --lib -- --ignored.
+    #[test]
+    #[ignore]
+    fn web_search_live_smoke() {
+        let out = web_search("GRPO reinforcement learning", 15).unwrap();
+        eprintln!("web_search_live_smoke:\n{out}");
+        assert!(out.contains("DuckDuckGo:"), "нет блока DDG: {out}");
+        assert!(out.contains("http"), "нет ссылок: {out}");
+    }
 
     /// sandbox_effective: sandbox включён всегда, КРОМЕ режима максимальных
     /// прав (MODE_MAX через общий атомик — /mode max или запуск с --max).
