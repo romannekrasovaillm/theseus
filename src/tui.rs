@@ -1026,7 +1026,10 @@ fn sanitize_log_str(s: &str) -> Cow<'_, str> {
     if !s.chars().any(char::is_control) {
         return Cow::Borrowed(s);
     }
-    Cow::Owned(s.chars().map(|c| match c {
+    // ANSI-последовательности срезаем целиком и первыми: если лишь заменить
+    // ESC на пробел, их параметры остаются текстом-мусором (протечка 03.08)
+    let stripped = crate::textutil::strip_ansi(s);
+    Cow::Owned(stripped.chars().map(|c| match c {
         '\n' | '\r' => '⏎',
         c if c.is_control() => ' ',
         c => c,
@@ -1117,10 +1120,14 @@ fn sanitize_paste(s: &str) -> String {
     out
 }
 
-/// Санитация стрим-дельты ДО markdown-рендера: управляющие символы → пробел,
-/// но `\n` сохраняем — это структура markdown (в отличие от лога, где \n → ⏎).
+/// Санитация стрим-дельты ДО markdown-рендера: сначала срезаем ANSI-последовательности
+/// целиком (иначе ESC уходит в пробел, а их параметры `[38;2;135;148;12m`
+/// остаются видимым мусором — баг-протечка 03.08), затем управляющие символы
+/// → пробел, но `\n` сохраняем — это структура markdown (в отличие от лога,
+/// где \n → ⏎).
 fn sanitize_stream(s: &str) -> String {
-    s.chars().map(|c| if c.is_control() && c != '\n' { ' ' } else { c }).collect()
+    crate::textutil::strip_ansi(s)
+        .chars().map(|c| if c.is_control() && c != '\n' { ' ' } else { c }).collect()
 }
 
 /// Санитация спанов строки лога от управляющих символов (общий код push() и
@@ -1354,7 +1361,9 @@ impl TuiApp {
                 let first_gutter = self.stream_gutter.take()
                     .unwrap_or_else(|| self.gutter_first("◆ ", agent));
                 self.begin_block(BlockKind::Agent);
-                let rendered = crate::markdown::render(&t, 100);
+                // финальный текст чистим так же, как дельты (strip ANSI + control):
+                // иначе сырой ANSI из ответа модели протекает в лог (баг 03.08)
+                let rendered = crate::markdown::render(&sanitize_stream(&t), 100);
                 for (i, spans) in md_ansi_to_lines(&rendered).into_iter().enumerate() {
                     let mut line = if i == 0 {
                         first_gutter.clone()
@@ -3191,6 +3200,45 @@ mod ui_helpers_tests {
         assert_eq!(rows[3], (PreviewRole::Tool, "хвост инструмента".to_string()));
         // усечение длинных текстов до одной строки
         assert!(rows.iter().all(|(_, t)| !t.contains('\n')));
+    }
+
+    /// Протечка ANSI (баг 03.08): SGR-последовательности срезаются целиком,
+    /// параметры `[38;2;…m` не остаются текстом; недописанный хвост — тоже.
+    #[test]
+    fn sanitize_stream_strips_ansi_sequences() {
+        let dirty = "текст \u{1b}[38;2;135;148;12mцветной\u{1b}[0m норма";
+        assert_eq!(sanitize_stream(dirty), "текст цветной норма");
+        // недописанная последовательность в конце — отбрасывается молча
+        assert_eq!(sanitize_stream("хвост \u{1b}[38;2;135"), "хвост ");
+        // OSC (заголовок окна) — тоже срезается
+        let osc = "a\u{1b}]0;title\u{7}b";
+        assert_eq!(sanitize_stream(osc), "ab");
+        // C1-вариант CSI
+        assert_eq!(sanitize_stream("x\u{9b}32my"), "xy");
+    }
+
+    /// Та же протечка в пути лога (превью инструментов, push): sanitize_log_str
+    /// сначала strip_ansi, потом управляющие → пробел/⏎.
+    #[test]
+    fn sanitize_log_str_strips_ansi_before_controls() {
+        let dirty = "out \u{1b}[31mкрасный\u{1b}[0m\nстрока";
+        assert_eq!(sanitize_log_str(dirty).as_ref(), "out красный⏎строка");
+        assert!(sanitize_log_str("без управляющих").as_ref() == "без управляющих");
+    }
+
+    /// Сквозной путь: дельта и финальный AgentText с сырым ANSI — в лог падает
+    /// только чистый текст, ни одного параметра последовательности.
+    #[test]
+    fn agent_text_with_ansi_renders_clean() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::AgentTextDelta("старт \u{1b}[38;2;1;2;3m".into()));
+        app.on_event(AgentEvent::AgentText("старт \u{1b}[38;2;1;2;3mфиниш\u{1b}[0m".into()));
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("старт финиш"), "чистый текст: {text}");
+        assert!(!text.contains("[38;2"), "параметры ANSI протекли: {text}");
+        assert!(!text.contains("1;2;3"), "части последовательности протекли: {text}");
     }
 
     /// Slash-completion: «/» + непустой префикс без пробелов, регистронезависимо.
