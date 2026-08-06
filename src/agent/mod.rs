@@ -197,6 +197,18 @@ fn est_tokens(messages: &[Message]) -> usize {
     chars / 4 + 1
 }
 
+/// Признак ошибки переполнения запроса для on-error триггера компактификации
+/// (текст уже в нижнем регистре): context-length классика + «too large» —
+/// покрывает HTTP 413 «Request Entity Too Large» от openresty/шлюзов
+/// (баг 06.08: 413 умирал без ретрая — ключевые слова его не ловили).
+fn is_context_overflow_error(etext: &str) -> bool {
+    etext.contains("context")
+        || etext.contains("length")
+        || etext.contains("token")
+        || etext.contains("too long")
+        || etext.contains("too large")
+}
+
 /// Текущее время в секундах от эпохи (для меток сессий).
 fn now_secs() -> u64 {
     std::time::SystemTime::now()
@@ -953,12 +965,18 @@ impl Agent {
             Err(e) => {
                 self.trace.attr(api_span, "error", &format!("{e:#}"));
                 self.trace.close_span(api_span);
-                // on-error триггер (урок Grok): context-length ошибка → L3 компактификация и resubmit
+                // on-error триггер (урок Grok): context-length/413 ошибка →
+                // маскирование переразмеров + L3 компактификация и resubmit
                 let etext = format!("{e:#}").to_lowercase();
-                if etext.contains("context") || etext.contains("length")
-                    || etext.contains("token") || etext.contains("too long") {
+                if is_context_overflow_error(&etext) {
                     self.emit(AgentEvent::HookNote(format!(
                         "⤓ on-error триггер: L3 компактификация и повтор запроса ({e:#})")));
+                    // сперва гигантские tool-сообщения — L3 их в хвосте не тронет
+                    let oversized = crate::agent::compact::mask_oversized_tool_outputs(messages);
+                    if oversized > 0 {
+                        self.emit(AgentEvent::HookNote(format!(
+                            "⤓ маскирование переразмера: {oversized} tool-сообщений (>32 КБ)")));
+                    }
                     // Pre/PostCompact — через hooks_ext (этот путь идёт мимо maybe_compact)
                     self.fire_ext(ExtHookEvent::PreCompact,
                         serde_json::json!({"trigger": "on-error", "level": "L3"}));
@@ -1707,5 +1725,21 @@ mod tests {
         let msg = Agent::assistant_history_message(&empty_text_tools).expect("тулы — валидная реплика");
         assert!(msg.content.is_none(), "пустой контент не уходит в историю");
         assert_eq!(msg.tool_calls.as_ref().map(Vec::len), Some(1));
+    }
+
+    /// on-error триггер (баг 06.08): HTTP 413 «Request Entity Too Large»
+    /// распознаётся как переполнение (маскирование + L3 + resubmit), а не
+    /// смерть без ретрая; посторонние ошибки не триггерят.
+    #[test]
+    fn context_overflow_error_detection() {
+        assert!(is_context_overflow_error(
+            "api ответил ошибкой без ретрая: http 413: <html> 413 request entity too large"));
+        assert!(is_context_overflow_error("http 400: context length exceeded"));
+        assert!(is_context_overflow_error("maximum context window tokens"));
+        assert!(is_context_overflow_error("payload too large"));
+        assert!(!is_context_overflow_error(
+            "http 400: invalid assistant message: content or tool_calls must be set"));
+        assert!(!is_context_overflow_error("http 401: unauthorized"));
+        assert!(!is_context_overflow_error("таймаут соединения"));
     }
 }

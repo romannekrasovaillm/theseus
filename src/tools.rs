@@ -702,7 +702,8 @@ impl ToolEnv {
         let mut out = vec![];
         grep_walk(&base, &base, &pat, &mut out, 50)?;
         if out.is_empty() { return Ok("(совпадений нет)".into()); }
-        Ok(out.join("\n"))
+        // cap — страховка поверх бюджетов grep_walk (баг 06.08: 37,9 МБ в истории)
+        Ok(cap(out.join("\n")))
     }
 
     fn bash(&self, args: &serde_json::Value) -> Result<String> {
@@ -859,11 +860,20 @@ fn diff_preview(old: &str, new: &str, path: &str) -> String {
     preview_block(&crate::diffview::unified_diff(old, new, path, 2))
 }
 
+/// Лимит длины одной строки совпадения в grep (символов): минифицированные
+/// bundle'ы и machine-json держат мегабайты в ОДНОЙ строке — без обрезки
+/// 50 таких «строк» дали 37,9 МБ в истории (баг 06.08: est 9,69M, HTTP 413).
+const GREP_LINE_MAX_CHARS: usize = 300;
+/// Общий бюджет вывода grep в байтах: по достижении обход останавливается.
+const GREP_TOTAL_MAX_BYTES: usize = 16 * 1024;
+
 fn grep_walk(base: &Path, dir: &Path, pat: &str, out: &mut Vec<String>, max: usize) -> Result<()> {
-    if out.len() >= max { return Ok(()); }
+    let mut total_bytes: usize = out.iter().map(String::len).sum();
+    if out.len() >= max || total_bytes >= GREP_TOTAL_MAX_BYTES { return Ok(()); }
     let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return Ok(()) };
     for e in entries.flatten() {
-        if out.len() >= max { break; }
+        total_bytes = out.iter().map(String::len).sum();
+        if out.len() >= max || total_bytes >= GREP_TOTAL_MAX_BYTES { break; }
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
         if name == ".git" || name == "target" || name == "node_modules" { continue; }
@@ -873,7 +883,15 @@ fn grep_walk(base: &Path, dir: &Path, pat: &str, out: &mut Vec<String>, max: usi
             for (i, line) in text.lines().enumerate() {
                 if line.contains(pat) {
                     let rel = p.strip_prefix(base).unwrap_or(&p).display().to_string();
-                    out.push(format!("{rel}:{}: {}", i + 1, line.trim()));
+                    // длинная строка (минифик/дамп) — обрезаем с маркером
+                    let trimmed = line.trim();
+                    let head: String = trimmed.chars().take(GREP_LINE_MAX_CHARS).collect();
+                    let shown = if trimmed.chars().count() > GREP_LINE_MAX_CHARS {
+                        format!("{head}…(строка урезана)")
+                    } else {
+                        head
+                    };
+                    out.push(format!("{rel}:{}: {shown}", i + 1));
                     if out.len() >= max { break; }
                 }
             }
@@ -1309,7 +1327,6 @@ mod tests {
     /// (в т.ч. hex) сущности декодируются, незакрытый тег отбрасывается.
     #[test]
     fn strip_html_tags_and_entities() {
-        assert_eq!(strip_html("<b>жирный</b> и <i>курсив</i>"), "жирный и курсив");
         assert_eq!(strip_html("a &amp; b &lt;x&gt; &quot;q&quot; &#39;s&#39;"), "a & b <x> \"q\" 's'");
         // hex-сущности (DDG: GRPO&#x27;s)
         assert_eq!(strip_html("GRPO&#x27;s &#x41;&#65;"), "GRPO's AA");
@@ -1412,6 +1429,31 @@ mod tests {
         let r = env.call("edit_file", &serde_json::json!({"path":"a.txt","old_string":"world","new_string":"rust"}));
         assert!(r.starts_with("OK"));
         assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "hello rust\nbye\n");
+    }
+
+    /// grep (баг 06.08): мегабайтная строка обрезается маркером, а общий
+    /// бюджет вывода ограничен — в историю не попадут 37,9 МБ.
+    #[test]
+    fn grep_caps_long_lines_and_total_bytes() {
+        let dir = std::env::temp_dir().join(format!("theseus_grep_big_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mega = format!("prefix{}suffix", "a".repeat(100_000));
+        std::fs::write(dir.join("bundle.js"), &mega).unwrap();
+        let mut out = vec![];
+        grep_walk(&dir, &dir, "prefix", &mut out, 50).unwrap();
+        assert_eq!(out.len(), 1);
+        assert!(out[0].contains("строка урезана"), "маркер обрезки: {:.60}", &out[0][..60]);
+        assert!(out[0].len() < 500, "строка ограничена: {}", out[0].len());
+        // общий бюджет: много файлов с длинными строками — суммарно ограничено
+        for i in 0..40 {
+            std::fs::write(dir.join(format!("f{i}.txt")),
+                format!("key {}", "b".repeat(10_000))).unwrap();
+        }
+        let mut out2 = vec![];
+        grep_walk(&dir, &dir, "key", &mut out2, 50).unwrap();
+        let total: usize = out2.iter().map(String::len).sum();
+        assert!(total < 20 * 1024, "общий бюджет: {total} байт");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

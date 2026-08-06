@@ -14,6 +14,13 @@ impl Agent {
     /// PreCompact/PostCompact (hooks_ext) обрамляют весь эпизод компактификации
     /// ровно один раз (порог L1 пройден раньше остальных — он и есть «вход»).
     pub(crate) fn maybe_compact(&mut self, messages: &mut Vec<Message>, parent: Option<SpanId>) -> Result<()> {
+        // стадия 0: переразмерные tool-сообщения маскируются ВСЕГДА, до порогов —
+        // один гигант в истории (баг 06.08) раздувает est и валит запрос 413
+        let oversized = mask_oversized_tool_outputs(messages);
+        if oversized > 0 {
+            self.emit(AgentEvent::HookNote(format!(
+                "⤓ маскирование переразмера: {oversized} tool-сообщений (>32 КБ)")));
+        }
         let limit = self.context_limit;
         let est = est_tokens(messages).max(self.last_prompt);
         let engaged = est >= limit * self.compact_mask_pct / 100;
@@ -144,6 +151,31 @@ fn mask_old_tool_outputs(messages: &mut [Message], keep_last: usize, max_chars: 
     masked
 }
 
+/// Потолок одного tool-сообщения в истории (байт): превышение маскируется
+/// независимо от «свежести» — один гигантский tool-результат (37,9 МБ из
+/// grep по всему $HOME, баг 06.08) раздувал est до 9,69M и валил запрос 413.
+const TOOL_MSG_HARD_CAP_BYTES: usize = 32 * 1024;
+
+/// Маскирование ПЕРЕРАЗМЕРНЫХ tool-сообщений (любой позиции): L1 режет по
+/// «старости» и не видит гиганта в свежем хвосте, а 413 от него — именно
+/// там. Голова сообщения сохраняется, хвост заменяется честным маркером.
+/// Возвращает число замаскированных.
+pub(crate) fn mask_oversized_tool_outputs(messages: &mut [Message]) -> usize {
+    let mut masked = 0;
+    for m in messages.iter_mut() {
+        if m.role != "tool" { continue; }
+        let Some(c) = m.content.as_mut() else { continue; };
+        if c.len() <= TOOL_MSG_HARD_CAP_BYTES || c.starts_with("[masked]") { continue; }
+        let mut head_end = TOOL_MSG_HARD_CAP_BYTES.min(c.len());
+        while !c.is_char_boundary(head_end) { head_end -= 1; }
+        let skipped = c.len() - head_end;
+        let head = &c[..head_end];
+        *c = format!("[masked] {head}\n…(урезано харнессом: {skipped} байт переразмера)");
+        masked += 1;
+    }
+    masked
+}
+
 /// L2: дедуп идентичных tool-результатов (agentnye-harnessy 6.3: дедупликация повторных чтений)
 fn dedupe_tool_results(messages: &mut [Message]) -> usize {
     let mut seen = std::collections::HashMap::new();
@@ -240,6 +272,30 @@ mod compact_tests {
         assert!(!msgs[6].content.as_ref().unwrap().starts_with("[pruned]"));
         // роли не удалены — пары не нарушены
         assert_eq!(msgs[2].role, "tool");
+    }
+
+    /// Стадия 0 (баг 06.08): переразмерное tool-сообщение маскируется в ЛЮБОЙ
+    /// позиции (свежий хвост не спасает), голова сохраняется с честным
+    /// маркером; мелкие и уже замаскированные не трогаем.
+    #[test]
+    fn mask_oversized_tool_outputs_caps_giants_anywhere() {
+        let giant = "x".repeat(40 * 1024);
+        let mut msgs = vec![
+            Message::system("s"),
+            Message::assistant(Some("call".into()), None),
+            Message::tool("c1", "маленький результат"),
+            Message::tool("c2", giant),
+            Message::user("u"),
+            Message::tool("c3", "[masked] уже урезан ".to_string() + &"y".repeat(40 * 1024)),
+        ];
+        let n = mask_oversized_tool_outputs(&mut msgs);
+        assert_eq!(n, 1, "замаскирован только гигант: {n}");
+        let c2 = msgs[3].content.as_ref().unwrap();
+        assert!(c2.starts_with("[masked] "), "{c2:.40}");
+        assert!(c2.contains("урезано харнессом"), "маркер: {c2:.60}");
+        assert!(c2.len() < 34 * 1024, "размер после урезки: {}", c2.len());
+        assert_eq!(msgs[2].content.as_deref(), Some("маленький результат"));
+        assert!(msgs[5].content.as_ref().unwrap().starts_with("[masked] уже урезан"));
     }
 
     /// L2b: похожие (не идентичные) повторные чтения ловятся simhash-дедупом.
