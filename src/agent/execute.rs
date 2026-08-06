@@ -29,7 +29,7 @@ fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>
             Err(e) => format!("ERROR: peer «{}» недоступен или упал: {e:#}", spec.name),
         }
     } else {
-        let mut bridge = peer_event_bridge(&agent.events, &spec.name);
+        let mut bridge = peer_event_bridge(&agent.events, &spec.name, None);
         match crate::peers::peer_ask_streaming(&spec, task, &agent.workspace, timeout, &mut bridge) {
             Ok(out) => out,
             Err(e) => format!("ERROR: peer «{}» недоступен или упал: {e:#}", spec.name),
@@ -38,13 +38,29 @@ fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>
 }
 
 /// Мост peer-событий стриминга в канал событий TUI: текст пира → PeerDelta,
-/// вызовы инструментов → PeerToolUse, служебное глотаем. Без событийного
-/// канала (headless) — тихая заглушка.
-fn peer_event_bridge(events: &Option<std::sync::mpsc::Sender<AgentEvent>>, peer: &str)
+/// вызовы инструментов → PeerToolUse, служебное глотаем. `tail_slot`
+/// (разделяемый снимок bg-задач + id) — обновляет хвост вывода для живой
+/// панели /bg (резерв 06.08). Без событийного канала (headless) — заглушка.
+fn peer_event_bridge(events: &Option<std::sync::mpsc::Sender<AgentEvent>>, peer: &str,
+                     tail_slot: Option<(std::sync::Arc<std::sync::Mutex<Vec<crate::background::BgTaskInfo>>>, u64)>)
     -> Box<dyn FnMut(crate::peers::PeerEvent) + Send> {
     let tx = events.clone();
     let peer = peer.to_string();
     Box::new(move |ev| {
+        // хвост живой панели: последняя содержательная строка (текст/заметка)
+        if let Some((snap, id)) = &tail_slot {
+            let tail_text = match &ev {
+                crate::peers::PeerEvent::Text(t) => Some(t.as_str()),
+                crate::peers::PeerEvent::Note(n) => Some(n.as_str()),
+                _ => None,
+            };
+            if let Some(t) = tail_text {
+                let tail: String = t.trim().chars().take(200).collect();
+                if !tail.is_empty() {
+                    crate::background::set_tail_in(snap, *id, tail);
+                }
+            }
+        }
         let Some(tx) = &tx else { return };
         match ev {
             crate::peers::PeerEvent::Text(t) => {
@@ -382,7 +398,7 @@ impl Agent {
         }
         let id = self.spawn_bg_subagent(spec, prompt);
         format!("[bg {id}] субагент «{}» запущен в фоне — продолжайте работу; \
-                 результат заберите через task_output", spec.name)
+                 результат заберите через swarm_wait (весь рой разом) или task_output (по одному)", spec.name)
     }
 
     /// Общий запуск фонового субагента (task is_background и рой swarm):
@@ -408,7 +424,7 @@ impl Agent {
         let cancel2 = cancel.clone();
         let label = format!("subagent {} — {}", spec.name,
             prompt.chars().take(60).collect::<String>());
-        self.bg.spawn_fn(label, cancel, move || {
+        self.bg.spawn_fn(label, cancel, move |_id| {
             match crate::subagent::run_agent(&sub_cfg, &ws, &spec2, &prompt2, budget, sandbox,
                                              Some(&cancel2)) {
                 Ok(res) => {
@@ -459,16 +475,22 @@ impl Agent {
         let name2 = pspec.name.clone();
         let events2 = self.events.clone();
         let name3 = pspec.name.clone();
+        let snapshot2 = self.controls.bg_snapshot.clone();
+        let snapshot3 = self.controls.bg_snapshot.clone();
         let id = self.bg.spawn_fn(label,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move || {
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move |bg_id| {
                 if pspec.stream == crate::peers::PeerStream::Off {
-                    match crate::peers::peer_ask(&pspec, &task2, &ws, timeout) {
+                    // raw-пиры: сырые строки stdout — в хвост живой панели /bg
+                    let mut bridge = peer_event_bridge(&events2, &name3,
+                        Some((snapshot2.clone(), bg_id)));
+                    match crate::peers::peer_ask_streaming(&pspec, &task2, &ws, timeout, &mut bridge) {
                         Ok(out) => out,
                         Err(e) => format!("ERROR: peer «{name2}» недоступен или упал: {e:#}"),
                     }
                 } else {
-                    // стрим в фоне: дельты пира тоже летят в TUI (мост в канал событий)
-                    let mut bridge = peer_event_bridge(&events2, &name3);
+                    // стрим в фоне: дельты летят в TUI + хвост в панели /bg
+                    let mut bridge = peer_event_bridge(&events2, &name3,
+                        Some((snapshot3.clone(), bg_id)));
                     match crate::peers::peer_ask_streaming(&pspec, &task2, &ws, timeout, &mut bridge) {
                         Ok(out) => out,
                         Err(e) => format!("ERROR: peer «{name3}» недоступен или упал: {e:#}"),
@@ -476,7 +498,7 @@ impl Agent {
                 }
         });
         format!("[bg {id}] peer «{agent}» запущен в фоне — продолжайте работу; \
-                 результат заберите через task_output")
+                 результат заберите через swarm_wait (весь рой разом) или task_output (по одному)")
     }
 
     fn execute_inner(&mut self, call: &ToolCall, name: &str, args: serde_json::Value) -> String {

@@ -2169,6 +2169,15 @@ fn render_skill_audit(app: &mut TuiApp, v: &serde_json::Value,
     }
 }
 
+/// Заметка агенту о завершении фоновой задачи (чистая функция — для тестов):
+/// вливается в следующий промпт через notes_slot, помечена как контекст,
+/// чтобы не прочиталась как новая задача (образец — skill_search_note).
+fn bg_done_note(info: &crate::background::BgTaskInfo) -> String {
+    let secs = info.started.elapsed().as_secs();
+    format!("[context: фоновая задача bg {} ({}) завершена за {}. Результат заберите через swarm_wait или task_output {{\"id\": {}}}. Это контекст, а не задача.]",
+        info.id, info.kind, fmt_mmss(secs), info.id)
+}
+
 /// `/bg`: таблица фоновых задач из разделяемого снимка (v0.7) — работает
 /// и пока агент занят (чтение реестра не требует доступа к агенту).
 fn cmd_bg(app: &mut TuiApp, controls: &Controls) {
@@ -2184,7 +2193,8 @@ fn cmd_bg(app: &mut TuiApp, controls: &Controls) {
 }
 
 /// Строки таблицы /bg (чистая функция — для тестов): id · тип · время ·
-/// статус · метка; завершённые тоже показываем (их результаты можно забрать).
+/// статус · метка (+ хвост вывода, если задача что-то печатает — резерв 06.08);
+/// завершённые тоже показываем (их результаты можно забрать).
 fn format_bg_table(items: &[crate::background::BgTaskInfo]) -> Vec<String> {
     if items.is_empty() {
         return vec!["фоновых задач нет — рой и фоновые субагенты появятся здесь".to_string()];
@@ -2195,6 +2205,11 @@ fn format_bg_table(items: &[crate::background::BgTaskInfo]) -> Vec<String> {
         let label: String = i.label.chars().take(56).collect();
         out.push(format!("  bg {:<3} {:<12} {:>6}  {:<10} {}",
             i.id, i.kind, fmt_mmss(i.started.elapsed().as_secs()), status, label));
+        // хвост вывода: последняя содержательная строка — видно, «не завис ли пир»
+        if !i.tail.is_empty() {
+            let tail: String = i.tail.chars().take(72).collect();
+            out.push(format!("       ↳ {tail}"));
+        }
     }
     out.push("результаты завершённых: task_output {id} или swarm_wait".to_string());
     out
@@ -2738,6 +2753,9 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                 format!("✅ bg {} ({}) завершена за {} — заберите результат: swarm_wait или task_output",
                     info.id, info.kind, fmt_mmss(secs)),
                 role_style(&app.theme, ThemeRole::Ok))]);
+            // пробуждение агента по событию (резерв 06.08: вместо sleep-поллинга
+            // bash'ем) — заметка вливается в следующий промпт как контекст
+            controls.notes_slot.lock().unwrap().push(bg_done_note(&info));
         }
         let pq = broker.peek();
         terminal.draw(|f| draw(f, &mut app, pq.as_deref()))?;
@@ -3414,7 +3432,7 @@ mod ui_helpers_tests {
         use crate::background::BgTaskInfo;
         let mk = |id: u64, kind: &str, done: bool| BgTaskInfo {
             id, kind: kind.to_string(), label: format!("lbl{id}"),
-            started: std::time::Instant::now(), done,
+            started: std::time::Instant::now(), done, tail: String::new(),
         };
         let items = vec![mk(1, "explore", false), mk(2, "peer kimi", false), mk(3, "bash", true)];
         let panel = format_bg_panel(&items, 48);
@@ -3457,15 +3475,51 @@ mod ui_helpers_tests {
         assert_eq!(format_bg_table(&[]).len(), 1, "пусто — одна строка-подсказка");
         let items = vec![
             BgTaskInfo { id: 7, kind: "explore".into(), label: "subagent explore — x".into(),
-                started: std::time::Instant::now(), done: false },
+                started: std::time::Instant::now(), done: false, tail: String::new() },
             BgTaskInfo { id: 8, kind: "peer kimi".into(), label: "peer kimi — y".into(),
-                started: std::time::Instant::now(), done: true },
+                started: std::time::Instant::now(), done: true, tail: String::new() },
         ];
         let lines = format_bg_table(&items);
         assert!(lines[0].contains("фоновые задачи (2)"), "{lines:?}");
         assert!(lines[1].contains("bg 7") && lines[1].contains("работает"), "{lines:?}");
         assert!(lines[2].contains("bg 8") && lines[2].contains("завершена"), "{lines:?}");
         assert!(lines.last().unwrap().contains("task_output"), "{lines:?}");
+    }
+
+    /// Таблица /bg (резерв 06.08): хвост вывода виден строкой «↳», пустой — нет.
+    #[test]
+    fn bg_table_shows_output_tail() {
+        use crate::background::BgTaskInfo;
+        let items = vec![
+            BgTaskInfo { id: 1, kind: "peer kimi".into(), label: "peer kimi — ресёрч".into(),
+                started: std::time::Instant::now(), done: false,
+                tail: "читаю документ 3 из 10".into() },
+            BgTaskInfo { id: 2, kind: "bash".into(), label: "sleep 30".into(),
+                started: std::time::Instant::now(), done: false, tail: String::new() },
+        ];
+        let lines = format_bg_table(&items);
+        let tail_line = lines.iter().find(|l| l.contains("читаю документ 3 из 10"))
+            .expect("хвост не показан");
+        assert!(tail_line.contains("↳"), "маркер хвоста: {tail_line}");
+        // у задачи без хвоста строки «↳» нет
+        let tail_count = lines.iter().filter(|l| l.contains("↳")).count();
+        assert_eq!(tail_count, 1, "ровно один хвост: {lines:?}");
+    }
+
+    /// Заметка агенту на bg-done (резерв 06.08): id, тип, время, подсказка
+    /// swarm_wait/task_output и маркер «контекст, а не задача».
+    #[test]
+    fn bg_done_note_format() {
+        use crate::background::BgTaskInfo;
+        let info = BgTaskInfo { id: 5, kind: "peer kimi".into(), label: "peer kimi — x".into(),
+            started: std::time::Instant::now(), done: true, tail: String::new() };
+        let note = bg_done_note(&info);
+        assert!(note.contains("bg 5"), "id: {note}");
+        assert!(note.contains("peer kimi"), "тип: {note}");
+        assert!(note.contains("swarm_wait"), "подсказка: {note}");
+        assert!(note.contains("task_output {\"id\": 5}"), "точечный сбор: {note}");
+        assert!(note.starts_with("[context:"), "маркер контекста: {note}");
+        assert!(note.contains("Это контекст, а не задача."), "дисклеймер: {note}");
     }
 
     /// Формат времени HH:MM: полночь, минуты, пояс +03:00, заворот назад.
