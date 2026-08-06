@@ -47,6 +47,9 @@ pub struct BgTaskInfo {
     pub started: Instant,
     /// Завершена ли задача.
     pub done: bool,
+    /// Последняя содержательная строка вывода (для живой панели, резерв 06.08:
+    /// видно, «не завис ли пир»); пуста, если задача молчит.
+    pub tail: String,
 }
 
 /// Короткий тип задачи из метки: «subagent explore — …» → «explore»,
@@ -61,6 +64,16 @@ pub fn short_kind(label: &str) -> String {
         return format!("peer {name}");
     }
     "bash".to_string()
+}
+
+/// Обновить хвост вывода задачи в снимке (последняя содержательная строка,
+/// ≤ 200 символов) — для живой панели «не завис ли пир» (резерв 06.08).
+/// Свободная функция: мост peer-событий работает из фонового потока, где
+/// доступен только разделяемый Arc снимка, а не сам реестр.
+pub fn set_tail_in(snap: &Arc<Mutex<Vec<BgTaskInfo>>>, id: u64, tail: String) {
+    if let Some(info) = snap.lock().unwrap().iter_mut().find(|i| i.id == id) {
+        info.tail = tail;
+    }
 }
 
 pub struct BgRegistry {
@@ -194,7 +207,7 @@ impl BgRegistry {
         });
         self.snap_push(BgTaskInfo {
             id, kind: "bash".to_string(), label: command.to_string(),
-            started: Instant::now(), done: false,
+            started: Instant::now(), done: false, tail: String::new(),
         });
         Ok(id)
     }
@@ -205,9 +218,10 @@ impl BgRegistry {
     /// убивает — время жизни ограничивают собственные бюджеты/таймауты задачи.
     /// `cancel` — флаг кооперативной остановки (v0.7): выставляется task_stop,
     /// проверяется замыканием на границе хода (субагент) или игнорируется
-    /// (peer-вызов — тот прервётся по своему таймауту).
+    /// (peer-вызов — тот прервётся по своему таймауту). Замыканию передаётся
+    /// id задачи — для обновления хвоста вывода в снимке (set_tail).
     pub fn spawn_fn(&mut self, label: String, cancel: Arc<std::sync::atomic::AtomicBool>,
-                    f: impl FnOnce() -> String + Send + 'static) -> u64 {
+                    f: impl FnOnce(u64) -> String + Send + 'static) -> u64 {
         let out = Arc::new(Mutex::new(String::new()));
         let done = Arc::new(Mutex::new(None));
         self.next += 1;
@@ -218,7 +232,7 @@ impl BgRegistry {
         let snapshot2 = self.snapshot.clone();
         self.counter_inc();
         std::thread::spawn(move || {
-            let res = f();
+            let res = f(id);
             *out2.lock().unwrap() = res;
             *done2.lock().unwrap() = Some(0);
             if let Some(s) = &snapshot2 {
@@ -234,7 +248,7 @@ impl BgRegistry {
         });
         self.snap_push(BgTaskInfo {
             id, kind: short_kind(&label), label: label.clone(),
-            started: Instant::now(), done: false,
+            started: Instant::now(), done: false, tail: String::new(),
         });
         self.tasks.insert(id, BgTask {
             id, command: label, started: Instant::now(),
@@ -260,7 +274,7 @@ impl BgRegistry {
             // анти-flail (живой кейс 21.07: модель опросила task_output 7 раз
             // подряд за 5с и бросила ждать) — направляем на другую работу
             None => "выполняется — НЕ опрашивайте подряд: продолжайте другую \
-                     работу и заберите результат позже".to_string(),
+                     работу, а когда задач несколько — ждите разом через swarm_wait".to_string(),
         };
         let out = t.out.lock().unwrap().clone();
         // хвост: для процессов — последние ~400 символов лога, для потоковых
@@ -382,7 +396,7 @@ mod tests {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut reg = BgRegistry::new();
         reg.set_counter(counter.clone());
-        let id = reg.spawn_fn("subagent — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
+        let id = reg.spawn_fn("subagent — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
             std::thread::sleep(std::time::Duration::from_millis(80));
             "ok".to_string()
         });
@@ -436,7 +450,7 @@ mod tests {
         let snap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut reg = BgRegistry::new();
         reg.set_snapshot(snap.clone());
-        let id = reg.spawn_fn("subagent explore — что-то".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
+        let id = reg.spawn_fn("subagent explore — что-то".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
             std::thread::sleep(std::time::Duration::from_millis(50));
             "ok".to_string()
         });
@@ -469,7 +483,7 @@ mod tests {
     #[test]
     fn spawn_fn_lifecycle() {
         let mut reg = BgRegistry::new();
-        let id = reg.spawn_fn("subagent explore — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
+        let id = reg.spawn_fn("subagent explore — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
             std::thread::sleep(std::time::Duration::from_millis(80));
             "ответ субагента".to_string()
         });
@@ -495,7 +509,7 @@ mod tests {
     fn stop_threaded_sets_cancel_flag() {
         let mut reg = BgRegistry::new();
         let id = reg.spawn_fn("subagent explore — долгий".into(),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), || {
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
             std::thread::sleep(std::time::Duration::from_millis(300));
             "поздний".to_string()
         });
@@ -505,5 +519,39 @@ mod tests {
         assert!(out.contains("флаг остановки выставлен"), "{out}");
         assert!(flag.load(std::sync::atomic::Ordering::Relaxed),
             "флаг обязан быть взведён после stop");
+    }
+
+    /// Хвост вывода в снимке (резерв 06.08): set_tail_in обновляет именно
+    /// целевую задачу; id в замыкание доезжает (для моста peer-событий).
+    #[test]
+    fn set_tail_updates_target_task_and_id_reaches_closure() {
+        let snap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut reg = BgRegistry::new();
+        reg.set_snapshot(snap.clone());
+        let got_id = std::sync::Arc::new(std::sync::Mutex::new(None));
+        let got2 = got_id.clone();
+        let snap2 = snap.clone();
+        let id = reg.spawn_fn("peer kimi — тест".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move |bg_id| {
+            *got2.lock().unwrap() = Some(bg_id);
+            set_tail_in(&snap2, bg_id, "последняя строка вывода".to_string());
+            "ok".to_string()
+        });
+        // ждём финиша потоковой задачи
+        for _ in 0..50 {
+            if reg.is_done(id).unwrap_or(false) { break; }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(*got_id.lock().unwrap(), Some(id), "id в замыкание не доехал");
+        let tail = {
+            let items = snap.lock().unwrap();
+            assert_eq!(items.len(), 1);
+            items[0].tail.clone()
+        };
+        assert_eq!(tail, "последняя строка вывода", "хвост не обновлён");
+        // чужой id хвост не трогает (guard первого захвата уже снят — std Mutex
+        // не реентрантен: set_tail_in под живым lock дал бы селф-дедлок)
+        set_tail_in(&snap, 999, "чужой".to_string());
+        assert_eq!(snap.lock().unwrap()[0].tail, "последняя строка вывода");
     }
 }

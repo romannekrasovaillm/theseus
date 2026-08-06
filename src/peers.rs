@@ -285,19 +285,7 @@ pub fn probe_peers(specs: &[PeerSpec]) -> Vec<(PeerSpec, PeerStatus)> {
 /// символов): таймаут (процесс убит и убран), ненулевой exit code,
 /// пустой stdout, сбой spawn (бинарь не найден и т.п.).
 pub fn peer_ask(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration) -> Result<String> {
-    let mut cmd = Command::new(&spec.binary);
-    cmd.args(render_args(&spec.args, task)).current_dir(cwd);
-    // openclaw — node-приложение: если дефолтный node старше минимума,
-    // запускаем с новейшим подходящим из nvm (живой кейс 24.07: падение
-    // «Node.js v22.22.1 устарела — нужна ≥22.22.3»)
-    if spec.name == "openclaw" {
-        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
-            if let Some(bin_dir) = openclaw_node_bin_dir(&home) {
-                let path = std::env::var("PATH").unwrap_or_default();
-                cmd.env("PATH", format!("{}:{path}", bin_dir.display()));
-            }
-        }
-    }
+    let mut cmd = build_cmd(spec, task, cwd, &[]);
     let cap = run_capture(&mut cmd, timeout)?;
     finish_capture(spec, cap, None, timeout)
 }
@@ -341,6 +329,25 @@ fn stream_extra_args(mode: PeerStream) -> &'static [&'static str] {
     }
 }
 
+/// Команда запуска пира: argv с подстановкой задачи + `extra_args` (стрим-флаги)
+/// + особый случай openclaw (node-приложение: при старом дефолтном node
+///   подставляем новейший поддерживаемый из nvm — живой кейс 24.07).
+fn build_cmd(spec: &PeerSpec, task: &str, cwd: &Path, extra_args: &[&str]) -> Command {
+    let mut cmd = Command::new(&spec.binary);
+    let mut argv = render_args(&spec.args, task);
+    argv.extend(extra_args.iter().map(|s| (*s).to_string()));
+    cmd.args(argv).current_dir(cwd);
+    if spec.name == "openclaw" {
+        if let Some(home) = std::env::var("HOME").ok().map(PathBuf::from) {
+            if let Some(bin_dir) = openclaw_node_bin_dir(&home) {
+                let path = std::env::var("PATH").unwrap_or_default();
+                cmd.env("PATH", format!("{}:{path}", bin_dir.display()));
+            }
+        }
+    }
+    cmd
+}
+
 /// Ошибка класса «CLI не понял флаг» — сигнал откатиться на синхронный вызов
 /// (старая версия агента без stream-json).
 fn is_unknown_flag_error(msg: &str) -> bool {
@@ -353,25 +360,20 @@ fn is_unknown_flag_error(msg: &str) -> bool {
 
 /// Стриминг-вариант peer_ask (peer-sse-streaming, нативно — без Python-брокера):
 /// для пиров со stream-json (claude/kimi) строки stdout разбираются налету в
-/// [`PeerEvent`] (callback — например, трансляция в TUI), финальный ответ —
-/// из `result`/последнего assistant content. CLI без stream-json (старая
-/// версия): откат на прежний синхронный [`peer_ask`].
+/// [`PeerEvent::Text`/`ToolUse`], для raw-пиров (Off) каждая строка уходит как
+/// [`PeerEvent::Note`] (хвост для живой панели /bg). CLI без stream-json
+/// (старая версия): откат на прежний синхронный [`peer_ask`].
 pub fn peer_ask_streaming(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration,
                           on_event: &mut dyn FnMut(PeerEvent)) -> Result<String> {
-    if spec.stream == PeerStream::Off {
-        return peer_ask(spec, task, cwd, timeout);
-    }
-    let mut cmd = Command::new(&spec.binary);
-    let mut argv = render_args(&spec.args, task);
-    argv.extend(stream_extra_args(spec.stream).iter().map(|s| (*s).to_string()));
-    cmd.args(argv).current_dir(cwd);
+    let mut cmd = build_cmd(spec, task, cwd, stream_extra_args(spec.stream));
     let result = match run_capture_streaming(&mut cmd, timeout, spec.stream, on_event) {
         Ok((cap, final_override)) => finish_capture(spec, cap, final_override, timeout),
         Err(e) => Err(e),
     };
     match result {
         // CLI не понял stream-флаги (старая версия): откат на синхронный вызов
-        Err(e) if is_unknown_flag_error(&format!("{e:#}")) => peer_ask(spec, task, cwd, timeout),
+        Err(e) if spec.stream != PeerStream::Off && is_unknown_flag_error(&format!("{e:#}")) =>
+            peer_ask(spec, task, cwd, timeout),
         other => other,
     }
 }
@@ -416,7 +418,8 @@ fn run_capture_streaming(cmd: &mut Command, timeout: Duration, mode: PeerStream,
     let mut raw = String::new();
     let mut last_text = String::new();
     let mut result_text: Option<String> = None;
-    // разбор очередной строки: события наружу, финал/last_text — в состояние
+    // разбор очередной строки: события наружу, финал/last_text — в состояние;
+    // для raw-пиров (Off) непустая строка уходит заметкой (хвост панели /bg)
     let handle_line = |line: &str, raw: &mut String, last_text: &mut String,
                        result_text: &mut Option<String>,
                        on_event: &mut dyn FnMut(PeerEvent)| {
@@ -428,6 +431,9 @@ fn run_capture_streaming(cmd: &mut Command, timeout: Duration, mode: PeerStream,
                 *last_text = t.clone();
             }
             on_event(ev);
+        }
+        if mode == PeerStream::Off && !trimmed.is_empty() {
+            on_event(PeerEvent::Note(trimmed.chars().take(300).collect()));
         }
         if let Some(f) = fin {
             *result_text = Some(f);
@@ -862,6 +868,30 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("exit status: 3"), "код выхода в ошибке: {msg}");
         assert!(msg.contains("токены кончились"), "хвост stderr в ошибке: {msg}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Raw-пир (Off): каждая непустая строка stdout уходит заметкой (хвост
+    /// для живой панели /bg), финал — сырой stdout как раньше.
+    #[test]
+    fn peer_ask_streaming_off_mode_forwards_lines_as_notes() {
+        let dir = temp_dir("stream_off");
+        let mut events: Vec<PeerEvent> = Vec::new();
+        let out = with_mock(&dir, "mock-agent",
+            "echo 'читаю первый файл'\n\
+             echo ''\n\
+             echo 'читаю второй файл'\n\
+             echo 'готов ответ'", |mock| {
+                let spec = spec_streaming(mock, &["-p", TASK_PLACEHOLDER], PeerStream::Off);
+                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10),
+                    &mut |ev| events.push(ev)).unwrap()
+            });
+        assert_eq!(out, "читаю первый файл\n\nчитаю второй файл\nготов ответ");
+        assert_eq!(events, vec![
+            PeerEvent::Note("читаю первый файл".into()),
+            PeerEvent::Note("читаю второй файл".into()),
+            PeerEvent::Note("готов ответ".into()),
+        ], "непустые строки — заметки, пустая пропущена");
         let _ = fs::remove_dir_all(&dir);
     }
 
