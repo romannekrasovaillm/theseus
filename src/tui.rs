@@ -965,6 +965,18 @@ pub struct TuiApp {
     /// (баг хронологии 21.07: перерендер на дельтах обновлял HH:MM текущим
     /// временем, и блок «переезжал» вперёд — оказывался выше старших строк)
     stream_gutter: Option<Vec<Span<'static>>>,
+    /// Индекс первой строки PEER-блока в логе (нативный стриминг пиров,
+    /// фазы 1-2): отдельное состояние от стрима основной модели — они могут
+    /// идти одновременно (фоновый пир + ответ агента)
+    peer_stream_idx: Option<usize>,
+    /// Накопленный текст текущего peer-стрима (дельты PeerDelta конкатенируются)
+    peer_stream_text: String,
+    /// Длина peer-блока в строках лога (для drain при перерендере)
+    peer_stream_len: usize,
+    /// Желобок первой строки peer-блока («◈ имя-пира», время заморожено)
+    peer_stream_gutter: Option<Vec<Span<'static>>>,
+    /// Имя пира текущего peer-блока: смена пира = новый блок в конце лога
+    peer_stream_peer: String,
     /// активная цветовая тема (дизайн-токены crate::theme; dark по умолчанию)
     theme: Theme,
     /// оценка токенов из последнего Status — для контекст-бара заголовка
@@ -1171,6 +1183,8 @@ impl TuiApp {
             git_status: String::new(),
             scroll: 0, follow: true, agent_done: false, started_at: Instant::now(),
             stream_open: false, stream_line_idx: None,
+            peer_stream_idx: None, peer_stream_text: String::new(), peer_stream_len: 0,
+            peer_stream_gutter: None, peer_stream_peer: String::new(),
             stream_text: String::new(), stream_block_len: 0, stream_gutter: None,
             // дефолты для тестов и до инициализации в run_tui: dark-тема,
             // стандартный лимит, UTC; боевые значения подставляет run_tui
@@ -1227,6 +1241,49 @@ impl TuiApp {
         }
         self.stream_block_len = count;
         if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+    }
+    /// Перерендер PEER-блока (нативный стриминг пиров): зеркало
+    /// [`TuiApp::render_stream_block`], но для [`TuiApp::peer_stream_text`] —
+    /// отдельное состояние от стрима основной модели (могут идти параллельно).
+    fn render_peer_block(&mut self) {
+        let Some(idx) = self.peer_stream_idx else { return };
+        let end = (idx + self.peer_stream_len).min(self.log.len());
+        if idx < end {
+            self.log.drain(idx..end);
+        }
+        let agent = role_style(&self.theme, ThemeRole::AgentText);
+        let rendered = crate::markdown::render(&self.peer_stream_text, 100);
+        let lines = md_ansi_to_lines(&rendered);
+        let count = lines.len();
+        // желобок первой строки — с ЗАМОРОЖЕННЫМ временем начала peer-стрима
+        let first_gutter = match &self.peer_stream_gutter {
+            Some(g) => g.clone(),
+            None => {
+                let g = self.gutter_first(&format!("◈ {} ", self.peer_stream_peer), agent);
+                self.peer_stream_gutter = Some(g.clone());
+                g
+            }
+        };
+        for (off, spans) in lines.into_iter().enumerate() {
+            let mut line = if off == 0 {
+                first_gutter.clone()
+            } else {
+                self.gutter_cont()
+            };
+            line.extend(spans);
+            self.log.insert(idx + off, LogLine { spans: sanitize_spans(line) });
+        }
+        self.peer_stream_len = count;
+        if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+    }
+    /// Финализация peer-блока без снятия строк: блок остаётся в логе,
+    /// состояние сбрасывается (следующая дельта любого пира — новый блок).
+    fn finalize_peer_block(&mut self) {
+        self.peer_stream_idx = None;
+        self.peer_stream_len = 0;
+        self.peer_stream_text.clear();
+        self.peer_stream_gutter = None;
+        self.peer_stream_peer.clear();
     }
     /// Верх окна ручного скролла с полным экраном (кламп против «провала»
     /// колеса в пустоту под концом лога). Читает log_area последнего кадра.
@@ -1322,6 +1379,9 @@ impl TuiApp {
             }
             AgentEvent::UserMsg(t) => {
                 self.stream_open = false;
+                // вставка пользователя — граница и для peer-стрима: дельты пира
+                // после неё начинают НОВЫЙ блок ниже, не дописываются выше
+                self.finalize_peer_block();
                 self.begin_block(BlockKind::User);
                 let user = role_style(&theme, ThemeRole::UserText);
                 let mut line = self.gutter_first("❯ ", user);
@@ -1380,6 +1440,31 @@ impl TuiApp {
                 line.push(Span::styled(format!("(мышление: {n} символов)"), dim));
                 self.push(line);
             }
+            AgentEvent::PeerDelta { peer, text } => {
+                // peer-блок на месте (нативный стриминг фаз 1-2): смена пира —
+                // прежний блок финализируется, новый открывается в конце лога
+                if self.peer_stream_peer != peer {
+                    self.finalize_peer_block();
+                    self.peer_stream_peer = peer;
+                }
+                if self.peer_stream_idx.is_none() {
+                    self.begin_block(BlockKind::Agent);
+                    self.peer_stream_idx = Some(self.log.len());
+                    self.peer_stream_len = 0;
+                }
+                self.peer_stream_text.push_str(&sanitize_stream(&text));
+                self.render_peer_block();
+            }
+            AgentEvent::PeerToolUse { peer, name, args } => {
+                let short: String = args.chars().take(80).collect();
+                let tool = role_style(&theme, ThemeRole::ToolName);
+                self.begin_block(BlockKind::Tool);
+                let mut line = self.gutter_sub();
+                line.push(Span::styled(format!("◈ {peer} "), tool));
+                line.push(Span::styled(format!("⚙ {name} "), tool.add_modifier(Modifier::BOLD)));
+                line.push(Span::styled(short, dim));
+                self.push(line);
+            }
             AgentEvent::ToolCall { name, args, decision } => {
                 let short: String = args.chars().take(80).collect();
                 let tool = role_style(&theme, ThemeRole::ToolName);
@@ -1395,7 +1480,11 @@ impl TuiApp {
                 // (компактный трейс в одну строку — как у лидеров, v0.6.0)
                 self.last_tool_open = Some(self.log.len() - 1);
             }
-            AgentEvent::ToolResult { preview, ok, .. } => {
+            AgentEvent::ToolResult { name, preview, ok } => {
+                // peer-вызов завершён: peer-блок финализируется (строки остаются)
+                if name == "peer_ask" {
+                    self.finalize_peer_block();
+                }
                 let style = if ok { dim } else { error };
                 // встроенные \n в preview (многострочный read_file) заменяем
                 // на видимый разделитель ⏎: иначе ratatui рисует их инлайн,
@@ -3999,6 +4088,67 @@ mod render_bug_tests {
         let pos_tool = text.iter().position(|t| t.contains("read_file")).unwrap();
         let pos_answer = text.iter().rposition(|t| t.contains("текст ответа")).unwrap();
         assert!(pos_answer > pos_tool, "финал уехал выше инструмента: {text:?}");
+    }
+
+    /// Peer-стриминг (фазы 1-2): дельты одного пира копятся в одном блоке с
+    /// желобком «◈ имя»; финализация на ToolResult peer_ask — следующая дельта
+    /// открывает НОВЫЙ блок (без «протекания» текста в старый).
+    #[test]
+    fn peer_delta_block_and_finalize_on_tool_result() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "часть ".into() });
+        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "ответа".into() });
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("◈ claude"), "желобок пира: {text}");
+        assert!(text.contains("часть ответа"), "текст блока: {text}");
+        let gutters = |app: &TuiApp| app.log.iter()
+            .filter(|l| l.spans.iter().any(|s| s.content.contains("◈ claude")))
+            .count();
+        assert_eq!(gutters(&app), 1, "один желобок на блок");
+        app.on_event(AgentEvent::ToolResult { name: "peer_ask".into(),
+            preview: "готово".into(), ok: true });
+        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "второй заход".into() });
+        assert_eq!(gutters(&app), 2, "после финализации — новый блок");
+    }
+
+    /// Смена пира и вставка пользователя — границы peer-блока: дельты нового
+    /// пира и дельты после UserMsg открывают свежие блоки ниже.
+    #[test]
+    fn peer_switch_and_user_insert_start_fresh_block() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "текст claude".into() });
+        app.on_event(AgentEvent::PeerDelta { peer: "kimi".into(), text: "текст kimi".into() });
+        app.on_event(AgentEvent::UserMsg("пользовательская вставка".into()));
+        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "после вставки".into() });
+        let gutter_of = |needle: &str, app: &TuiApp| app.log.iter()
+            .filter(|l| l.spans.iter().any(|s| s.content.contains(needle)))
+            .count();
+        assert_eq!(gutter_of("◈ claude", &app), 2, "два блока claude (до/после вставки)");
+        assert_eq!(gutter_of("◈ kimi", &app), 1, "один блок kimi");
+        // хронология: блок kimi выше вставки, блок «после вставки» — ниже
+        let texts: Vec<String> = app.log.iter()
+            .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
+            .collect();
+        let pos_kimi = texts.iter().position(|t| t.contains("текст kimi")).unwrap();
+        let pos_user = texts.iter().position(|t| t.contains("пользовательская вставка")).unwrap();
+        let pos_after = texts.iter().position(|t| t.contains("после вставки")).unwrap();
+        assert!(pos_kimi < pos_user && pos_user < pos_after,
+            "хронология нарушена: {texts:?}");
+    }
+
+    /// PeerToolUse — компактная строка вызова инструмента пира.
+    #[test]
+    fn peer_tool_use_renders_line() {
+        let mut app = TuiApp::new();
+        app.on_event(AgentEvent::PeerToolUse { peer: "kimi".into(),
+            name: "Bash".into(), args: "{\"cmd\":\"ls\"}".into() });
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("◈ kimi"), "{text}");
+        assert!(text.contains("⚙ Bash"), "{text}");
     }
 
     /// Индикатор фоновых агентов (v0.6.6): в шапке виден «фон: N» с пульсом,

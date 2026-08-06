@@ -152,6 +152,16 @@ pub fn print_event(ev: AgentEvent) {
             let _ = std::io::stdout().flush();
         }
         AgentEvent::Reasoning(n) => println!("\x1b[90m(мышление: {n} символов)\x1b[0m"),
+        AgentEvent::PeerDelta { peer, text } => {
+            use std::io::Write;
+            // дельты пира — как дельты модели: печать налету, без ANSI-разрыва
+            print!("\x1b[36m◈ {peer}\x1b[0m {text}");
+            let _ = std::io::stdout().flush();
+        }
+        AgentEvent::PeerToolUse { peer, name, args } => {
+            let short: String = args.chars().take(100).collect();
+            println!("\x1b[33m◈ {peer} ⚙ {name}\x1b[90m {short}\x1b[0m");
+        }
         AgentEvent::ToolCall { name, args, decision } => {
             let short: String = args.chars().take(100).collect();
             println!("\x1b[33m⚙ {name}\x1b[90m {short} [{decision}]\x1b[0m");

@@ -20,5 +20,22 @@ pub enum AgentEvent {
     PlanChanged(bool),
     MemoryConsolidated(usize),
     HookNote(String),
+    /// Дельта текста пир-агента (stream-json, нативный стриминг фаз 1-2):
+    /// TUI рендерит peer-блок на месте; peer — имя из реестра (claude/kimi).
+    PeerDelta {
+        /// Имя пира из реестра.
+        peer: String,
+        /// Текстовый блок ассистента пира.
+        text: String,
+    },
+    /// Вызов инструмента пир-агентом (из stream-json разбора).
+    PeerToolUse {
+        /// Имя пира из реестра.
+        peer: String,
+        /// Имя инструмента пира.
+        name: String,
+        /// Аргументы вызова (JSON-строкой).
+        args: String,
+    },
 }
 

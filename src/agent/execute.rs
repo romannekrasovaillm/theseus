@@ -21,10 +21,41 @@ fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>
     };
     let timeout = std::time::Duration::from_secs(
         timeout_secs.unwrap_or(spec.default_timeout_secs).min(600));
-    match crate::peers::peer_ask(&spec, task, &agent.workspace, timeout) {
-        Ok(out) => out,
-        Err(e) => format!("ERROR: peer «{}» недоступен или упал: {e:#}", spec.name),
+    // стрим-режим (claude/kimi): события stream-json мостом в TUI;
+    // прочие пиры — прежний синхронный захват
+    if spec.stream == crate::peers::PeerStream::Off {
+        match crate::peers::peer_ask(&spec, task, &agent.workspace, timeout) {
+            Ok(out) => out,
+            Err(e) => format!("ERROR: peer «{}» недоступен или упал: {e:#}", spec.name),
+        }
+    } else {
+        let mut bridge = peer_event_bridge(&agent.events, &spec.name);
+        match crate::peers::peer_ask_streaming(&spec, task, &agent.workspace, timeout, &mut bridge) {
+            Ok(out) => out,
+            Err(e) => format!("ERROR: peer «{}» недоступен или упал: {e:#}", spec.name),
+        }
     }
+}
+
+/// Мост peer-событий стриминга в канал событий TUI: текст пира → PeerDelta,
+/// вызовы инструментов → PeerToolUse, служебное глотаем. Без событийного
+/// канала (headless) — тихая заглушка.
+fn peer_event_bridge(events: &Option<std::sync::mpsc::Sender<AgentEvent>>, peer: &str)
+    -> Box<dyn FnMut(crate::peers::PeerEvent) + Send> {
+    let tx = events.clone();
+    let peer = peer.to_string();
+    Box::new(move |ev| {
+        let Some(tx) = &tx else { return };
+        match ev {
+            crate::peers::PeerEvent::Text(t) => {
+                let _ = tx.send(AgentEvent::PeerDelta { peer: peer.clone(), text: t });
+            }
+            crate::peers::PeerEvent::ToolUse { name, args } => {
+                let _ = tx.send(AgentEvent::PeerToolUse { peer: peer.clone(), name, args });
+            }
+            crate::peers::PeerEvent::Note(_) => {}
+        }
+    })
 }
 
 /// Имя — реальный инструмент агента (по реестру tool_specs)?
@@ -426,12 +457,23 @@ impl Agent {
         let label = format!("peer {} — {}", pspec.name,
             task.chars().take(60).collect::<String>());
         let name2 = pspec.name.clone();
+        let events2 = self.events.clone();
+        let name3 = pspec.name.clone();
         let id = self.bg.spawn_fn(label,
             std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move || {
-            match crate::peers::peer_ask(&pspec, &task2, &ws, timeout) {
-                Ok(out) => out,
-                Err(e) => format!("ERROR: peer «{name2}» недоступен или упал: {e:#}"),
-            }
+                if pspec.stream == crate::peers::PeerStream::Off {
+                    match crate::peers::peer_ask(&pspec, &task2, &ws, timeout) {
+                        Ok(out) => out,
+                        Err(e) => format!("ERROR: peer «{name2}» недоступен или упал: {e:#}"),
+                    }
+                } else {
+                    // стрим в фоне: дельты пира тоже летят в TUI (мост в канал событий)
+                    let mut bridge = peer_event_bridge(&events2, &name3);
+                    match crate::peers::peer_ask_streaming(&pspec, &task2, &ws, timeout, &mut bridge) {
+                        Ok(out) => out,
+                        Err(e) => format!("ERROR: peer «{name3}» недоступен или упал: {e:#}"),
+                    }
+                }
         });
         format!("[bg {id}] peer «{agent}» запущен в фоне — продолжайте работу; \
                  результат заберите через task_output")
