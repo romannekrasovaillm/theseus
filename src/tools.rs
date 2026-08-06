@@ -118,7 +118,7 @@ pub fn tool_specs() -> serde_json::Value {
             },"required":["query"]}}},
         {"type":"function","function":{
             "name":"peer_ask",
-            "description":"Ask an external CLI agent installed on this machine (claude=Claude Code, kimi=Kimi Code, codewhale, hermes=Hermes Agent, openclaw). Runs the agent headless with your task and returns its answer. Powerful: requires ask/yolo mode. Set is_background=true to run it in background and keep working (collect via task_output).",
+            "description":"Ask an external CLI agent installed on this machine (claude=Claude Code, kimi=Kimi Code, codewhale, hermes=Hermes Agent, openclaw). Runs the agent headless with your task and returns its answer. claude and kimi stream LIVE natively (stream-json): their text and tool calls appear in the user's log in real time — for live peer streaming just call peer_ask; do NOT load skills or start SSE brokers for that. Powerful: requires ask/yolo mode. Set is_background=true to run it in background and keep working (collect via task_output; deltas stream too).",
             "parameters":{"type":"object","properties":{
                 "agent":{"type":"string","description":"claude | kimi | codewhale | hermes | openclaw"},
                 "task":{"type":"string"},
