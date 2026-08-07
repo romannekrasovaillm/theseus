@@ -579,12 +579,10 @@ fn locale_is_utf8(v: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // общий crate-wide замок env-тестов (гонки между модулями, flake 08.08)
+    use crate::test_util::ENV_LOCK;
     use std::collections::HashSet;
     use std::fs;
-    use std::sync::Mutex;
-
-    /// Сериализация тестов, мутирующих переменные окружения (env — глобальный).
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Временный каталог с автоудалением.
     struct TmpDir(PathBuf);

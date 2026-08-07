@@ -215,9 +215,13 @@ impl Config {
         }
 
         // env-оверрайды (прежняя семантика: заполняют только пустые места).
+        // API-ключ: сначала env-переменная провайдера выбранной модели
+        // (KIMI_API_KEY для k3, ZHIPU_API_KEY/GLM_API_KEY для glm-5.2, ...),
+        // затем общие исторические имена (DEEPSEEK_API_KEY, THESEUS_API_KEY).
+        // Кейс 07.08: ключ Kimi в KIMI_API_KEY не подхватывался — стартовая
+        // загрузка смотрела только в DEEPSEEK_API_KEY/THESEUS_API_KEY → 401.
         if cfg.api_key.is_none() {
-            cfg.api_key = std::env::var("DEEPSEEK_API_KEY").ok()
-                .or_else(|| std::env::var("THESEUS_API_KEY").ok());
+            cfg.api_key = models::api_key_from_env(&cfg.model);
         }
         if cfg.base_url.is_none() {
             cfg.base_url = std::env::var("THESEUS_BASE_URL").ok();
@@ -246,8 +250,13 @@ impl Config {
     }
 
     pub fn api_key(&self) -> Result<&str> {
-        self.api_key.as_deref()
-            .context("нет API-ключа: задайте DEEPSEEK_API_KEY или api_key в config.toml")
+        self.api_key.as_deref().with_context(|| {
+            let names = models::api_key_env_names(&self.model).join(" / ");
+            format!(
+                "нет API-ключа: задайте {names} или api_key в config.toml. \
+                 Если переменная выставлена ПОСЛЕ запуска Тесея — перезапустите его"
+            )
+        })
     }
 }
 
@@ -372,7 +381,8 @@ pub fn write_example_config() -> Result<PathBuf> {
         std::fs::write(&p, r#"# theseus config
 model = "deepseek-v4-flash"
 # base_url = "https://api.deepseek.com/v1"
-# api_key задаётся через env DEEPSEEK_API_KEY (не храните ключ в файле)
+# api_key задаётся через env провайдера: DEEPSEEK_API_KEY / KIMI_API_KEY / ZHIPU_API_KEY
+# (не храните ключ в файле)
 context_limit_tokens = 120000
 max_output_tokens = 8192
 api_timeout_secs = 600
@@ -389,10 +399,8 @@ extra_body = { thinking = { type = "enabled" } }
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    /// Сериализация тестов, трогающих env: они исполняются в одном процессе.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    // общий crate-wide замок env-тестов (гонки между модулями, flake 08.08)
+    use crate::test_util::ENV_LOCK;
 
     /// Временный каталог для файловых тестов.
     fn temp_dir(tag: &str) -> PathBuf {
@@ -407,6 +415,28 @@ mod tests {
         std::env::var("THESEUS_BASE_URL").ok().unwrap_or_else(|| {
             models::find_provider(provider).unwrap().effective_base_url()
         })
+    }
+
+    /// Выполнить `f` с временно выставленными env-переменными (None = удалить),
+    /// затем вернуть прежние значения. Держит глобальную блокировку.
+    fn with_env_vars<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let saved: Vec<(&str, Option<String>)> =
+            vars.iter().map(|(name, _)| (*name, std::env::var(name).ok())).collect();
+        for &(name, value) in vars {
+            match value {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+        let result = f();
+        for (name, old) in saved {
+            match old {
+                Some(v) => std::env::set_var(name, v),
+                None => std::env::remove_var(name),
+            }
+        }
+        result
     }
 
     #[test]
@@ -589,5 +619,74 @@ elicit = "accept"
         // Явный лимит контекста сохраняется (реестр его не перекрывает).
         assert_eq!(cfg.context_limit_tokens, 120_000);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Кейс 07.08: модель k3 должна подхватывать KIMI_API_KEY при стартовой
+    /// загрузке (раньше читались только DEEPSEEK_API_KEY/THESEUS_API_KEY → 401).
+    #[test]
+    fn api_key_resolved_from_provider_env() {
+        with_env_vars(
+            &[
+                ("KIMI_API_KEY", Some(" sk-kimi-test ")),
+                ("DEEPSEEK_API_KEY", None),
+                ("THESEUS_API_KEY", None),
+            ],
+            || {
+                let dir = temp_dir("env_key_provider");
+                let global = dir.join("global.toml");
+                std::fs::write(&global, "model = \"k3\"\n").unwrap();
+                let cfg =
+                    Config::load_from_paths(&global, &dir.join("w.toml"), None, None).unwrap();
+                // пробелы обрезаны, ключ — провайдерский, а не общий
+                assert_eq!(cfg.api_key.as_deref(), Some("sk-kimi-test"));
+                assert_eq!(cfg.base_url.as_deref(), Some(expected_url("kimi").as_str()));
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+        );
+    }
+
+    /// Провайдерский ключ приоритетнее общих имён; явный api_key в конфиге —
+    /// приоритетнее env (слой env заполняет только пустые места).
+    #[test]
+    fn api_key_priority_explicit_then_provider_then_generic() {
+        with_env_vars(
+            &[("KIMI_API_KEY", Some("kimi-env")), ("DEEPSEEK_API_KEY", Some("ds-env"))],
+            || {
+                let dir = temp_dir("env_key_priority");
+                let global = dir.join("global.toml");
+                // 1. провайдерский бьёт общий
+                std::fs::write(&global, "model = \"k3\"\n").unwrap();
+                let cfg =
+                    Config::load_from_paths(&global, &dir.join("w.toml"), None, None).unwrap();
+                assert_eq!(cfg.api_key.as_deref(), Some("kimi-env"));
+                // 2. явный api_key бьёт env
+                std::fs::write(&global, "model = \"k3\"\napi_key = \"from-file\"\n").unwrap();
+                let cfg =
+                    Config::load_from_paths(&global, &dir.join("w.toml"), None, None).unwrap();
+                assert_eq!(cfg.api_key.as_deref(), Some("from-file"));
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+        );
+    }
+
+    /// DeepSeek-модели по-прежнему читают DEEPSEEK_API_KEY (обратная
+    /// совместимость прежнего поведения env-оверрайда).
+    #[test]
+    fn api_key_deepseek_legacy_env_preserved() {
+        with_env_vars(
+            &[("DEEPSEEK_API_KEY", Some("sk-ds")), ("THESEUS_API_KEY", None)],
+            || {
+                let dir = temp_dir("env_key_deepseek");
+                let cfg = Config::load_from_paths(
+                    &dir.join("g.toml"),
+                    &dir.join("w.toml"),
+                    None,
+                    None,
+                )
+                .unwrap();
+                assert_eq!(cfg.api_key.as_deref(), Some("sk-ds"));
+                let _ = std::fs::remove_dir_all(&dir);
+            },
+        );
     }
 }

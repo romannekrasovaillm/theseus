@@ -95,7 +95,8 @@ pub fn run_agent(cfg: &SubConfig, workspace: &Path, spec: &AgentSpec,
         let over = guard.consume(resp.prompt_tokens + resp.completion_tokens).err();
         let has_tools = !resp.tool_calls.is_empty();
         messages.push(Message::assistant(resp.content.clone(),
-            if has_tools { Some(resp.tool_calls.clone()) } else { None }));
+            if has_tools { Some(resp.tool_calls.clone()) } else { None })
+            .with_reasoning(resp.reasoning.clone()));
         if !has_tools {
             let text = resp.content.unwrap_or_else(|| "(субагент завершил без текста)".into());
             return Ok(AgentResult::from_guard(text, &guard, over.is_some()));

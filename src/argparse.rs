@@ -57,7 +57,8 @@ const USAGE: &str = "theseus — собственный агентный хар�
   /memory, /sessions, /trace, /compact, /yolo, /quit), ↑/↓ — история ввода
   (~/.theseus/history).
 
-КЛЮЧИ: env DEEPSEEK_API_KEY (обязателен). Транскрипты: <workspace>/.theseus/";
+КЛЮЧИ: env провайдера модели — DEEPSEEK_API_KEY / KIMI_API_KEY /
+  ZHIPU_API_KEY (обязателен). Транскрипты: <workspace>/.theseus/";
 
 /// Все известные флаги — для подсказки «возможно, вы имели в виду…» при опечатках.
 const KNOWN_FLAGS: &[&str] = &[

@@ -24,6 +24,13 @@ pub struct Message {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
+    /// Цепочка рассуждений thinking-модели: храним и возвращаем с историей
+    /// (interleaved thinking). Kimi K3 требует полное assistant-сообщение
+    /// без изменений (иначе 400 на multi-turn/tools); GLM preserved thinking —
+    /// неизменный reasoning_content; DeepSeek игнорирует, но принимает
+    /// безопасно (доки deepseek-api: «в историю добавляй как обычно»).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<ToolCall>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -32,16 +39,21 @@ pub struct Message {
 
 impl Message {
     pub fn system(s: impl Into<String>) -> Self {
-        Message { role: "system".into(), content: Some(s.into()), tool_calls: None, tool_call_id: None }
+        Message { role: "system".into(), content: Some(s.into()), reasoning_content: None, tool_calls: None, tool_call_id: None }
     }
     pub fn user(s: impl Into<String>) -> Self {
-        Message { role: "user".into(), content: Some(s.into()), tool_calls: None, tool_call_id: None }
+        Message { role: "user".into(), content: Some(s.into()), reasoning_content: None, tool_calls: None, tool_call_id: None }
     }
     pub fn assistant(content: Option<String>, tool_calls: Option<Vec<ToolCall>>) -> Self {
-        Message { role: "assistant".into(), content, tool_calls, tool_call_id: None }
+        Message { role: "assistant".into(), content, reasoning_content: None, tool_calls, tool_call_id: None }
     }
     pub fn tool(call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Message { role: "tool".into(), content: Some(content.into()), tool_calls: None, tool_call_id: Some(call_id.into()) }
+        Message { role: "tool".into(), content: Some(content.into()), reasoning_content: None, tool_calls: None, tool_call_id: Some(call_id.into()) }
+    }
+    /// Прикрепить цепочку рассуждений (пустая строка отбрасывается).
+    pub fn with_reasoning(mut self, reasoning: Option<String>) -> Self {
+        self.reasoning_content = reasoning.filter(|s| !s.is_empty());
+        self
     }
 }
 
@@ -49,6 +61,9 @@ impl Message {
 pub struct ChatResponse {
     pub content: Option<String>,
     pub tool_calls: Vec<ToolCall>,
+    /// полный текст цепочки рассуждений (для проброса в историю — см.
+    /// Message::reasoning_content); None, если провайдер его не вернул
+    pub reasoning: Option<String>,
     pub reasoning_len: usize,
     pub prompt_tokens: u64,
     pub completion_tokens: u64,
@@ -85,6 +100,15 @@ impl ApiClient {
             .timeout(Duration::from_secs(timeout_secs + 30))
             .user_agent("theseus/0.1")
             .build()?;
+        // Kimi Code не принимает thinking без reasoning_content в истории
+        // (HTTP 400, доки 08.08) — для провайдера kimi ключ thinking выкидываем
+        // из extra_body на входе (единая точка: Agent::new, /model, субагенты).
+        let mut extra_body = extra_body;
+        if crate::models::find_model(model).map(|m| m.provider == "kimi") == Some(true) {
+            if let Some(obj) = extra_body.as_object_mut() {
+                obj.remove("thinking");
+            }
+        }
         Ok(ApiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
@@ -111,11 +135,16 @@ impl ApiClient {
     fn chat_inner(&mut self, messages: &[Message], tools: &serde_json::Value,
                   stream: bool, on_text: &mut dyn FnMut(&str),
                   should_stop: &dyn Fn() -> bool) -> Result<ChatResponse> {
+        // Принудительная температура провайдера из реестра (Kimi K3 — ровно 1,
+        // иначе HTTP 400); для остальных моделей — 0 (детерминизм ML-задач).
+        let temperature = crate::models::find_model(&self.model)
+            .and_then(|m| m.temperature)
+            .unwrap_or(0.0);
         let mut body = serde_json::json!({
             "model": self.model,
             "messages": messages,
             "max_tokens": self.max_output_tokens,
-            "temperature": 0,
+            "temperature": temperature,
         });
         if !tools.is_null() {
             body["tools"] = tools.clone();
@@ -201,6 +230,8 @@ impl ApiClient {
         let usage = &v["usage"];
         let prompt_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
         let completion_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
+        let reasoning = msg["reasoning_content"].as_str().map(String::from)
+            .filter(|s| !s.is_empty());
         self.accounting.calls += 1;
         self.accounting.prompt_tokens += prompt_tokens;
         self.accounting.completion_tokens += completion_tokens;
@@ -209,7 +240,8 @@ impl ApiClient {
             content: msg["content"].as_str().map(String::from)
                 .filter(|s| !s.is_empty()),
             tool_calls,
-            reasoning_len: msg["reasoning_content"].as_str().map(str::len).unwrap_or(0),
+            reasoning_len: reasoning.as_deref().map(str::len).unwrap_or(0),
+            reasoning,
             prompt_tokens,
             completion_tokens,
             finish_reason: choice["finish_reason"].as_str().map(String::from),
@@ -225,7 +257,7 @@ impl ApiClient {
         let reader = BufReader::new(r);
         let t0 = Instant::now();
         let mut content = String::new();
-        let mut reasoning_len = 0usize;
+        let mut reasoning = String::new();
         let mut finish_reason: Option<String> = None;
         let mut prompt_tokens = 0u64;
         let mut completion_tokens = 0u64;
@@ -262,7 +294,7 @@ impl ApiClient {
                 on_text(c);
             }
             if let Some(rc) = delta["reasoning_content"].as_str() {
-                reasoning_len += rc.len();
+                reasoning.push_str(rc);
             }
             if let Some(tcs) = delta["tool_calls"].as_array() {
                 for tc in tcs {
@@ -287,7 +319,8 @@ impl ApiClient {
         Ok(ChatResponse {
             content: if content.is_empty() { None } else { Some(content) },
             tool_calls,
-            reasoning_len,
+            reasoning_len: reasoning.len(),
+            reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
             prompt_tokens,
             completion_tokens,
             finish_reason,
@@ -317,5 +350,72 @@ mod tests {
         assert_eq!(id, "call_1");
         assert_eq!(name, "bash");
         assert_eq!(args, "{\"command\": \"ls\"}");
+    }
+
+    /// Нестриминговый разбор ловит reasoning_content целиком (Kimi K3/GLM/DeepSeek);
+    /// пустое поле отбрасывается, чтобы не раздувать историю пустышками.
+    #[test]
+    fn parse_response_captures_reasoning() {
+        let mut client = super::ApiClient::new(
+            "http://127.0.0.1:9/v1", "k", "m", 1, serde_json::json!({}), 16).unwrap();
+        let body = serde_json::json!({
+            "choices": [{
+                "message": {"role": "assistant", "content": "готово",
+                            "reasoning_content": "цепочка"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2},
+        });
+        let resp = client.parse_response(&body.to_string(), std::time::Duration::ZERO).unwrap();
+        assert_eq!(resp.reasoning.as_deref(), Some("цепочка"));
+        assert_eq!(resp.reasoning_len, "цепочка".len());
+        assert_eq!(resp.content.as_deref(), Some("готово"));
+        // без reasoning_content — None, а не пустая строка
+        let body = serde_json::json!({
+            "choices": [{"message": {"role": "assistant", "content": "текст"},
+                         "finish_reason": "stop"}],
+            "usage": {},
+        });
+        let resp = client.parse_response(&body.to_string(), std::time::Duration::ZERO).unwrap();
+        assert_eq!(resp.reasoning, None);
+        assert_eq!(resp.reasoning_len, 0);
+    }
+
+    /// Message::with_reasoning: пустая цепочка отбрасывается; serde-раундтрип
+    /// старых сессий (без поля reasoning_content) не ломается.
+    #[test]
+    fn message_reasoning_serde_roundtrip() {
+        use super::Message;
+        let msg = Message::assistant(Some("a".into()), None).with_reasoning(Some("r".into()));
+        let wire = serde_json::to_string(&msg).unwrap();
+        assert!(wire.contains("\"reasoning_content\":\"r\""), "wire: {wire}");
+        let back: Message = serde_json::from_str(&wire).unwrap();
+        assert_eq!(back.reasoning_content.as_deref(), Some("r"));
+        // пустое reasoning отбрасывается
+        let msg = Message::assistant(Some("a".into()), None).with_reasoning(Some(String::new()));
+        assert!(msg.reasoning_content.is_none());
+        // старый формат сессии (без поля) десериализуется
+        let old: Message = serde_json::from_str(r#"{"role":"assistant","content":"x"}"#).unwrap();
+        assert!(old.reasoning_content.is_none());
+    }
+
+    /// Kimi-провайдер: thinking выкидывается из extra_body на входе (Kimi Code
+    /// отвечает 400 на thinking без reasoning_content в истории; для K3 thinking
+    /// всегда включён на стороне сервера, параметр из K2.x не передаём).
+    /// DeepSeek-модели extra_body не трогаем.
+    #[test]
+    fn kimi_provider_strips_thinking_from_extra_body() {
+        let thinking = serde_json::json!({"thinking": {"type": "enabled"}, "x": 1});
+        let kimi = super::ApiClient::new(
+            "http://127.0.0.1:9/v1", "k", "k3", 1, thinking.clone(), 16).unwrap();
+        assert!(kimi.extra_body.get("thinking").is_none(), "thinking срезан: {}", kimi.extra_body);
+        assert_eq!(kimi.extra_body.get("x"), Some(&serde_json::json!(1)), "прочие ключи целы");
+        let ds = super::ApiClient::new(
+            "http://127.0.0.1:9/v1", "k", "deepseek-v4-pro", 1, thinking.clone(), 16).unwrap();
+        assert!(ds.extra_body.get("thinking").is_some(), "deepseek: thinking сохранён");
+        // неизвестная реестру модель — не трогаем (openai-compatible эндпоинты)
+        let custom = super::ApiClient::new(
+            "http://127.0.0.1:9/v1", "k", "my-local-model", 1, thinking, 16).unwrap();
+        assert!(custom.extra_body.get("thinking").is_some());
     }
 }

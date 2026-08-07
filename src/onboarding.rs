@@ -5,8 +5,19 @@
 
 use std::path::{Path, PathBuf};
 
-/// Имя env-переменной с API-ключом (совпадает с конвенцией config.rs).
-const ENV_API_KEY: &str = "DEEPSEEK_API_KEY";
+/// Имена env-переменных с API-ключом всех встроенных провайдеров
+/// (зеркало `ProviderInfo::env_key` + алиасы + общие имена харнесса;
+/// модуль онбординга самодостаточен и в models не заглядывает).
+const ENV_API_KEY_NAMES: &[&str] = &[
+    "DEEPSEEK_API_KEY",
+    "KIMI_API_KEY",
+    "MOONSHOT_API_KEY",
+    "ZHIPU_API_KEY",
+    "GLM_API_KEY",
+    "ZAI_API_KEY",
+    "OPENAI_API_KEY",
+    "THESEUS_API_KEY",
+];
 
 /// Маркер-файл первого запуска (относительно домашнего каталога пользователя).
 const MARKER_RELATIVE_PATH: &str = ".theseus/onboarded.marker";
@@ -16,7 +27,8 @@ const MARKER_RELATIVE_PATH: &str = ".theseus/onboarded.marker";
 pub struct OnboardingState {
     /// Найден ли хотя бы один конфиг: `~/.config/theseus/config.toml` или `./.theseus/config.toml`.
     pub config_exists: bool,
-    /// Задан ли API-ключ: env `DEEPSEEK_API_KEY` или непустой `api_key` в конфиге.
+    /// Задан ли API-ключ: env провайдера (DEEPSEEK_API_KEY / KIMI_API_KEY / …)
+    /// или непустой `api_key` в конфиге.
     pub key_set: bool,
     /// Существует ли рабочий каталог и доступен ли он на чтение.
     pub workspace_ok: bool,
@@ -42,11 +54,14 @@ pub struct ChecklistItem {
     pub hint: String,
 }
 
-/// Оценить готовность окружения: читает env `DEEPSEEK_API_KEY` и файловую систему.
+/// Оценить готовность окружения: читает env-ключи провайдеров
+/// (`ENV_API_KEY_NAMES`) и файловую систему.
 ///
 /// Чистая разведка перед показом онбординга: ничего не создаёт и не изменяет.
 pub fn assess(home_dir: &Path, workspace: &Path) -> OnboardingState {
-    let env_key = std::env::var(ENV_API_KEY).ok();
+    let env_key = ENV_API_KEY_NAMES
+        .iter()
+        .find_map(|name| std::env::var(name).ok());
     assess_with_env(home_dir, workspace, env_key.as_deref())
 }
 
@@ -60,7 +75,7 @@ pub fn welcome_text(state: &OnboardingState) -> String {
     out.push_str(&status_line(state.config_exists, "конфиг theseus (config.toml)"));
     out.push_str(&status_line(
         state.key_set,
-        "API-ключ (DEEPSEEK_API_KEY или api_key в config.toml)",
+        "API-ключ (env провайдера: DEEPSEEK_API_KEY / KIMI_API_KEY / …, или api_key в config.toml)",
     ));
     out.push_str(&status_line(state.workspace_ok, "рабочий каталог проекта"));
     let skills_icon = if state.skills_found > 0 { "✅" } else { "❌" };
@@ -100,7 +115,8 @@ pub fn readiness_checklist(state: &OnboardingState) -> Vec<ChecklistItem> {
         make(
             "api_key",
             state.key_set,
-            "задайте ключ: export DEEPSEEK_API_KEY=… или строка `api_key = \"…\"` в config.toml",
+            "задайте ключ: export DEEPSEEK_API_KEY=… (или KIMI_API_KEY / ZHIPU_API_KEY \
+             для других провайдеров) либо строка `api_key = \"…\"` в config.toml",
         ),
         make(
             "workspace",
@@ -366,8 +382,14 @@ mod tests {
 
     #[test]
     fn assess_public_wrapper_matches_injected_env() {
+        // общий crate-wide замок env-тестов: другие модули мутируют
+        // DEEPSEEK_API_KEY/KIMI_API_KEY — чтение обязано быть сериализовано
+        let _guard = crate::test_util::ENV_LOCK.lock().unwrap();
         let (base, home, ws) = fixture("wrapper");
-        let env_now = std::env::var(ENV_API_KEY).ok();
+        // Зеркало реализации: первый найденный ключ из списка провайдеров.
+        let env_now = ENV_API_KEY_NAMES
+            .iter()
+            .find_map(|name| std::env::var(name).ok());
         assert_eq!(
             assess(&home, &ws),
             assess_with_env(&home, &ws, env_now.as_deref())

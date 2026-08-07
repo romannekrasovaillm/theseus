@@ -78,6 +78,18 @@ use agent::{Agent, AgentEvent};
 use anyhow::Result;
 use std::sync::mpsc::channel;
 
+/// Общие принадлежности тестов (только в test-сборке).
+#[cfg(test)]
+pub(crate) mod test_util {
+    use std::sync::Mutex;
+
+    /// Единый замок для тестов, трогающих env-переменные: модульные мьютексы
+    /// не сериализуют гонки МЕЖДУ модулями (flake 08.08: config::tests убрал
+    /// DEEPSEEK_API_KEY, пока models::tests его читал). Все with_env_vars
+    /// обязаны брать именно его.
+    pub(crate) static ENV_LOCK: Mutex<()> = Mutex::new(());
+}
+
 /// Маркер обрыва по лимиту ходов в финальном ответе агента — текст тот же,
 /// что формирует `agent::Agent::run_with` («достигнут лимит ходов (N) на ходе M»).
 const TURN_LIMIT_MARK: &str = "достигнут лимит ходов";

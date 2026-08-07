@@ -192,6 +192,9 @@ pub struct Agent {
 fn est_tokens(messages: &[Message]) -> usize {
     let chars: usize = messages.iter().map(|m| {
         m.content.as_deref().unwrap_or("").len()
+            // цепочки рассуждений тоже едят контекст на проводе (K3 многословен
+            // ~2x к контенту) — без них оценка занижалась, компакт запаздывал
+            + m.reasoning_content.as_deref().unwrap_or("").len()
             + m.tool_calls.as_ref().map(|v| serde_json::to_string(v).unwrap_or_default().len()).unwrap_or(0)
     }).sum();
     chars / 4 + 1
@@ -729,13 +732,17 @@ impl Agent {
     /// отвергает assistant-сообщение без content и tool_calls
     /// (400 «content or tool_calls must be set» — баг 26.07: reasoning-only
     /// ответ отравил историю, и ВСЕ следующие запросы сессии падали с 400).
+    /// Цепочка рассуждений прикрепляется к реплике (interleaved thinking):
+    /// Kimi K3 ждёт полное assistant-сообщение неизменным, GLM — preserved
+    /// thinking, DeepSeek игнорирует (безопасно по докам deepseek-api).
     fn assistant_history_message(resp: &ChatResponse) -> Option<Message> {
         let content = resp.content.clone().filter(|c| !c.is_empty());
         if content.is_none() && resp.tool_calls.is_empty() {
             return None;
         }
         Some(Message::assistant(content,
-            if resp.tool_calls.is_empty() { None } else { Some(resp.tool_calls.clone()) }))
+            if resp.tool_calls.is_empty() { None } else { Some(resp.tool_calls.clone()) })
+            .with_reasoning(resp.reasoning.clone()))
     }
 
     /// Сборка сообщений прерванного преемпцией хода: частичный ответ ассистента
@@ -1732,6 +1739,34 @@ mod tests {
         };
         let msg = Agent::assistant_history_message(&empty_text_tools).expect("тулы — валидная реплика");
         assert!(msg.content.is_none(), "пустой контент не уходит в историю");
+        assert_eq!(msg.tool_calls.as_ref().map(Vec::len), Some(1));
+    }
+
+    /// Interleaved thinking (08.08): цепочка рассуждений прикрепляется к
+    /// assistant-реплике истории — контракт Kimi K3 (полное сообщение
+    /// неизменным), GLM preserved thinking; DeepSeek игнорирует безопасно.
+    #[test]
+    fn assistant_history_message_carries_reasoning() {
+        let resp = ChatResponse {
+            content: Some("ответ".into()),
+            reasoning: Some("цепочка рассуждений".into()),
+            ..Default::default()
+        };
+        let msg = Agent::assistant_history_message(&resp).expect("реплика есть");
+        assert_eq!(msg.reasoning_content.as_deref(), Some("цепочка рассуждений"));
+        // без reasoning — поле отсутствует (None), история не раздувается
+        let bare = ChatResponse { content: Some("ответ".into()), ..Default::default() };
+        let msg = Agent::assistant_history_message(&bare).expect("реплика есть");
+        assert!(msg.reasoning_content.is_none());
+        // reasoning + тулы (типичный interleaved-кадр) — и то, и другое на месте
+        let tools = ChatResponse {
+            content: None,
+            reasoning: Some("думаю над вызовом".into()),
+            tool_calls: vec![tool_call("c1", "bash", r#"{"command":"ls"}"#)],
+            ..Default::default()
+        };
+        let msg = Agent::assistant_history_message(&tools).expect("тулы — валидная реплика");
+        assert_eq!(msg.reasoning_content.as_deref(), Some("думаю над вызовом"));
         assert_eq!(msg.tool_calls.as_ref().map(Vec::len), Some(1));
     }
 

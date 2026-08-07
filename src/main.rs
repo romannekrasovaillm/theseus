@@ -33,7 +33,8 @@ const USAGE: &str = "theseus — собственный агентный хар�
   /memory, /sessions, /trace, /compact, /yolo, /quit), ↑/↓ — история ввода
   (~/.theseus/history).
 
-КЛЮЧИ: env DEEPSEEK_API_KEY (обязателен). Транскрипты: <workspace>/.theseus/";
+КЛЮЧИ: env провайдера модели — DEEPSEEK_API_KEY / KIMI_API_KEY /
+  ZHIPU_API_KEY (обязателен). Транскрипты: <workspace>/.theseus/";
 
 /// Код стартового режима для общего атомика `Controls.mode_atomic`
 /// (THS-QA-01: DontAsk обязан мапиться в `MODE_DONTASK` — раньше попадал

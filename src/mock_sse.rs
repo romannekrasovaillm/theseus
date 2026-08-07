@@ -51,6 +51,9 @@ const MAX_HEADER_LINES: usize = 128;
 enum Delta {
     /// Текстовый кусок `choices[0].delta.content`.
     Text(String),
+    /// Кусок цепочки рассуждений `choices[0].delta.reasoning_content`
+    /// (thinking-модели: DeepSeek v4, GLM, Kimi K3).
+    Reasoning(String),
     /// Вызов инструмента `choices[0].delta.tool_calls[...]`.
     ToolCall { name: String, arguments: String },
 }
@@ -99,6 +102,13 @@ impl Scenario {
     /// Ответить потоком текстовых кадров (по одному SSE-кадру на элемент).
     pub fn reply_stream(mut self, chunks: &[&str]) -> Self {
         self.deltas.extend(chunks.iter().map(|c| Delta::Text((*c).to_string())));
+        self
+    }
+
+    /// Ответить кадрами цепочки рассуждений (`delta.reasoning_content`,
+    /// по кадру на элемент) — паттерн thinking-моделей DeepSeek/GLM/Kimi.
+    pub fn reply_reasoning(mut self, chunks: &[&str]) -> Self {
+        self.deltas.extend(chunks.iter().map(|c| Delta::Reasoning((*c).to_string())));
         self
     }
 
@@ -448,6 +458,13 @@ fn scenario_to_sse(scenario: &Scenario, model: &str, prompt_tokens: u64) -> Stri
                     json!({"role": "assistant", "content": text})
                 } else {
                     json!({"content": text})
+                }
+            }
+            Delta::Reasoning(text) => {
+                if first {
+                    json!({"role": "assistant", "reasoning_content": text})
+                } else {
+                    json!({"reasoning_content": text})
                 }
             }
             Delta::ToolCall { name, arguments } => {
@@ -910,6 +927,40 @@ mod tests {
         assert_eq!(names, ["read_file", "write_file"]);
         assert_eq!(response.tool_calls[0].id, "call_0");
         assert_eq!(response.tool_calls[1].id, "call_1");
+        handle.join();
+    }
+
+    /// Interleaved thinking (08.08): reasoning-дельты накапливаются в полный
+    /// текст цепочки; при возврате в историю сериализуются как
+    /// `reasoning_content` — контракт Kimi K3 (полное assistant-сообщение
+    /// неизменным) и GLM preserved thinking; DeepSeek игнорирует безопасно.
+    #[test]
+    fn reasoning_streams_and_replays_to_history() {
+        let handle = MockLlm::with_scenarios(vec![
+            Scenario::new()
+                .reply_reasoning(&["Думаю", " шаг за шагом."])
+                .reply_text("Ответ: 42")
+                .finish_reason("stop"),
+        ])
+        .serve_on_ephemeral()
+        .unwrap();
+        let mut client = theseus_client(&handle.base_url);
+        let response = client
+            .chat_stream(&[Message::user("вопрос")], &json!(null), &mut |_| {}, &|| false)
+            .expect("chat_stream отрабатывает");
+        assert_eq!(response.reasoning.as_deref(), Some("Думаю шаг за шагом."));
+        assert_eq!(response.reasoning_len, "Думаю шаг за шагом.".len());
+        assert_eq!(response.content.as_deref(), Some("Ответ: 42"));
+
+        // проброс в историю: assistant-реплика с reasoning_content
+        let msg = Message::assistant(response.content.clone(), None)
+            .with_reasoning(response.reasoning);
+        let wire = serde_json::to_value(&msg).unwrap();
+        assert_eq!(wire["reasoning_content"], "Думаю шаг за шагом.");
+        assert_eq!(wire["content"], "Ответ: 42");
+        // без reasoning поле на провод не уходит вовсе (skip_serializing_if)
+        let bare = serde_json::to_value(Message::assistant(Some("текст".into()), None)).unwrap();
+        assert!(bare.get("reasoning_content").is_none());
         handle.join();
     }
 }

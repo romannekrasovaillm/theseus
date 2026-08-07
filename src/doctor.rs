@@ -35,7 +35,8 @@ pub fn run(cfg: &Config, workspace: &Path, fix: bool) -> Result<i32> {
     match cfg.api_key() {
         Ok(_) => checks.push(("api_key".into(), Verdict::Ok("задан (env/конфиг)".into()))),
         Err(_) => {
-            checks.push(("api_key".into(), Verdict::Fail("нет: задайте DEEPSEEK_API_KEY".into())));
+            let names = crate::models::api_key_env_names(&cfg.model).join(" / ");
+            checks.push(("api_key".into(), Verdict::Fail(format!("нет: задайте {names}"))));
             fails += 1;
         }
     }

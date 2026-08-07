@@ -114,6 +114,19 @@ pub struct ModelInfo {
     pub supports_tools: bool,
     /// ориентировочная цена (`None` — данных нет)
     pub cost_hint: Option<CostHint>,
+    /// принудительная температура провайдера: `Some(t)` — API отвергает другие
+    /// значения (Kimi K3: «invalid temperature: only 1 is allowed», 08.08);
+    /// `None` — харнесс шлёт 0 как обычно
+    #[serde(default)]
+    pub temperature: Option<f64>,
+}
+
+impl ModelInfo {
+    /// Билдер для реестра: установить принудительную температуру.
+    pub fn with_temperature(mut self, t: f64) -> Self {
+        self.temperature = Some(t);
+        self
+    }
 }
 
 impl ModelInfo {
@@ -279,7 +292,8 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             true,
             Some(CostHint { input_usd_per_mtok: 1.20, output_usd_per_mtok: 6.00 }),
         ),
-        // канонические id по докам Kimi Code (08.08): k3 и k3-256k
+        // канонические id по докам Kimi Code (08.08): k3 и k3-256k;
+        // K3 принимает только temperature=1 (400 «only 1 is allowed»)
         model(
             "k3",
             kimi,
@@ -288,7 +302,8 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             true,
             true,
             None, // подписка Kimi Code (Moderato+), не помегабайтная цена
-        ),
+        )
+        .with_temperature(1.0),
         model(
             "k3-256k",
             kimi,
@@ -297,7 +312,8 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             true,
             true,
             None,
-        ),
+        )
+        .with_temperature(1.0),
         // --- Moonshot (api.moonshot.ai, DPI-риск) ---
         model(
             "moonshot-v1-8k",
@@ -359,6 +375,7 @@ fn model(
         supports_thinking,
         supports_tools,
         cost_hint,
+        temperature: None,
     }
 }
 
@@ -398,6 +415,44 @@ pub fn resolve_with_env(model_id: &str, api_key_env: &str) -> Result<Credentials
     let model = find_model(model_id).ok_or_else(|| unknown_model_error(model_id))?;
     let provider = registry_provider(&model)?;
     resolve_parts(&model, &provider, api_key_env)
+}
+
+/// Имена env-переменных, из которых принимается API-ключ модели, в порядке
+/// приоритета: `env_key` провайдера (KIMI_API_KEY для k3, ...), его алиасы
+/// (GLM_API_KEY/ZAI_API_KEY для zhipu), затем общие исторические имена
+/// харнесса (DEEPSEEK_API_KEY, THESEUS_API_KEY). Дубликатов нет.
+pub fn api_key_env_names(model_id: &str) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    let mut push = |name: &str| {
+        if !names.iter().any(|n| n == name) {
+            names.push(name.to_string());
+        }
+    };
+    if let Some(model) = find_model(model_id) {
+        if let Some(provider) = find_provider(&model.provider) {
+            if let Some(env_key) = &provider.env_key {
+                push(env_key);
+            }
+            for alias in &provider.env_key_aliases {
+                push(alias);
+            }
+        }
+    }
+    push("DEEPSEEK_API_KEY");
+    push("THESEUS_API_KEY");
+    names
+}
+
+/// Прочитать API-ключ модели из окружения, не требуя его наличия.
+///
+/// Пробует имена из [`api_key_env_names`] по порядку; пробельные/пустые
+/// значения игнорируются, найденное обрезается от пробелов. В отличие от
+/// [`resolve`] не падает при отсутствии ключа — это «мягкий» env-слой
+/// загрузчика конфига (явный `api_key` в конфиге всегда приоритетнее).
+pub fn api_key_from_env(model_id: &str) -> Option<String> {
+    api_key_env_names(model_id).into_iter().find_map(|name| {
+        env::var(&name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    })
 }
 
 /// Провайдер модели из реестра; отсутствие — внутренняя несогласованность.
@@ -515,11 +570,9 @@ pub fn levenshtein(a: &str, b: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // общий crate-wide замок env-тестов (гонки между модулями, flake 08.08)
+    use crate::test_util::ENV_LOCK;
     use std::collections::HashSet;
-    use std::sync::Mutex;
-
-    /// Сериализация тестов, трогающих env: они исполняются в одном процессе.
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     /// Выполнить `f` с временно выставленными env-переменными (None = удалить),
     /// затем вернуть прежние значения. Держит глобальную блокировку.
@@ -626,6 +679,11 @@ mod tests {
         let k3 = find_model("k3").expect("k3 в реестре");
         assert_eq!(k3.provider, "kimi");
         assert!(k3.supports_thinking && k3.supports_tools);
+        // K3 принимает только temperature=1 (400 «only 1 is allowed»)
+        assert_eq!(k3.temperature, Some(1.0));
+        assert_eq!(find_model("k3-256k").unwrap().temperature, Some(1.0));
+        // остальные модели — без принудительной температуры
+        assert_eq!(find_model("deepseek-v4-pro").unwrap().temperature, None);
         let kimi = find_provider("kimi").expect("провайдер kimi");
         assert_eq!(kimi.base_url, "https://api.kimi.com/coding/v1");
         assert_eq!(kimi.env_key.as_deref(), Some("KIMI_API_KEY"));
@@ -804,6 +862,7 @@ mod tests {
             supports_thinking: false,
             supports_tools: false,
             cost_hint: None,
+            temperature: None,
         };
         assert_near(estimate_context_pct(0, &m), 0.0);
         assert!(estimate_context_pct(5, &m).is_infinite());
@@ -822,7 +881,63 @@ mod tests {
             supports_thinking: false,
             supports_tools: false,
             cost_hint: None,
+            temperature: None,
         };
         assert!(bare.estimate_cost_usd(10, 10).is_none());
+    }
+
+    /// Мягкий env-резолвер ключа (кейс 07.08): провайдерское имя приоритетнее
+    /// общих; пробелы обрезаются; пустые значения не считаются ключом.
+    #[test]
+    fn api_key_from_env_prefers_provider_key() {
+        with_env_vars(
+            &[
+                ("KIMI_API_KEY", Some(" sk-k3 ")),
+                ("DEEPSEEK_API_KEY", Some("ds-key")),
+                ("THESEUS_API_KEY", None),
+            ],
+            || {
+                assert_eq!(api_key_from_env("k3").as_deref(), Some("sk-k3"));
+            },
+        );
+    }
+
+    #[test]
+    fn api_key_from_env_alias_generic_fallback_and_empty() {
+        // алиас провайдера (GLM_API_KEY) работает и через мягкий резолвер
+        with_env_vars(
+            &[("ZHIPU_API_KEY", None), ("GLM_API_KEY", Some("glm")), ("ZAI_API_KEY", None)],
+            || assert_eq!(api_key_from_env("glm-5.2").as_deref(), Some("glm")),
+        );
+        // неизвестная модель — только общие исторические имена
+        with_env_vars(&[("DEEPSEEK_API_KEY", Some("ds"))], || {
+            assert_eq!(api_key_from_env("custom-local-model").as_deref(), Some("ds"));
+        });
+        // пустая/пробельная переменная не считается; ничего нет — None
+        with_env_vars(
+            &[
+                ("KIMI_API_KEY", Some("   ")),
+                ("DEEPSEEK_API_KEY", None),
+                ("THESEUS_API_KEY", None),
+            ],
+            || assert_eq!(api_key_from_env("k3"), None),
+        );
+    }
+
+    #[test]
+    fn api_key_env_names_ordered_and_deduplicated() {
+        let names = api_key_env_names("k3");
+        assert_eq!(names[0], "KIMI_API_KEY");
+        assert!(names.contains(&"DEEPSEEK_API_KEY".to_string()));
+        let unique: HashSet<_> = names.iter().collect();
+        assert_eq!(unique.len(), names.len(), "дубли: {names:?}");
+        // у deepseek общие имена совпадают с провайдерскими — дублей быть не должно
+        let ds = api_key_env_names("deepseek-v4-pro");
+        assert_eq!(ds, vec!["DEEPSEEK_API_KEY".to_string(), "THESEUS_API_KEY".to_string()]);
+        // неизвестная модель — только общие
+        assert_eq!(
+            api_key_env_names("no-such-model"),
+            vec!["DEEPSEEK_API_KEY".to_string(), "THESEUS_API_KEY".to_string()]
+        );
     }
 }
