@@ -61,7 +61,14 @@ pub struct ChecklistItem {
 pub fn assess(home_dir: &Path, workspace: &Path) -> OnboardingState {
     let env_key = ENV_API_KEY_NAMES
         .iter()
-        .find_map(|name| std::env::var(name).ok());
+        .find_map(|name| std::env::var(name).ok())
+        .filter(|v| !v.trim().is_empty())
+        // запасной файл ключа Kimi (конвенция ProviderInfo::key_file, кейс 07.08)
+        .or_else(|| {
+            std::fs::read_to_string(home_dir.join(".kimi_api_key")).ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| !v.is_empty())
+        });
     assess_with_env(home_dir, workspace, env_key.as_deref())
 }
 

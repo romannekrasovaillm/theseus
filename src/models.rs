@@ -67,6 +67,11 @@ pub struct ProviderInfo {
     /// пользователи ставят ключ под разными именами (GLM_API_KEY, ZAI_API_KEY...)
     #[serde(default)]
     pub env_key_aliases: Vec<String>,
+    /// запасной ФАЙЛ с ключом (напр. `~/.kimi_api_key`; `~` раскрывается в
+    /// $HOME): читается последним, если ни одна env-переменная не задана —
+    /// кейс 07.08: ключ Kimi сохранён в файл, а процесс харнесса env не видит
+    #[serde(default)]
+    pub key_file: Option<String>,
     /// проводной API: chat/completions или responses
     pub wire_api: WireApi,
     /// дополнительные HTTP-заголовки по умолчанию (подмешиваются в каждый запрос)
@@ -168,6 +173,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             base_url: "https://api.deepseek.com/v1".into(),
             env_key: Some("DEEPSEEK_API_KEY".into()),
             env_key_aliases: vec!["THESEUS_API_KEY".into()],
+            key_file: None,
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("DEEPSEEK_BASE_URL".into()),
@@ -181,6 +187,8 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             base_url: "https://api.kimi.com/coding/v1".into(),
             env_key: Some("KIMI_API_KEY".into()),
             env_key_aliases: vec![],
+            // ключ можно держать в файле, не экспортируя в env
+            key_file: Some("~/.kimi_api_key".into()),
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("KIMI_BASE_URL".into()),
@@ -191,6 +199,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             base_url: "https://api.moonshot.ai/v1".into(),
             env_key: Some("MOONSHOT_API_KEY".into()),
             env_key_aliases: vec![],
+            key_file: None,
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("MOONSHOT_BASE_URL".into()),
@@ -207,6 +216,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             // GLM-ключ пользователи ставят под разными именами (кейс 03.08:
             // GLM_API_KEY/ZAI_API_KEY в env, а харнесс ждал только ZHIPU_API_KEY)
             env_key_aliases: vec!["GLM_API_KEY".into(), "ZAI_API_KEY".into()],
+            key_file: None,
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("ZHIPU_BASE_URL".into()),
@@ -217,6 +227,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             base_url: "http://localhost:8000/v1".into(),
             env_key: Some("OPENAI_API_KEY".into()),
             env_key_aliases: vec![],
+            key_file: None,
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("OPENAI_BASE_URL".into()),
@@ -443,16 +454,57 @@ pub fn api_key_env_names(model_id: &str) -> Vec<String> {
     names
 }
 
-/// Прочитать API-ключ модели из окружения, не требуя его наличия.
+/// Прочитать API-ключ модели, не требуя его наличия.
 ///
-/// Пробует имена из [`api_key_env_names`] по порядку; пробельные/пустые
+/// Порядок: `env_key` провайдера → его алиасы → запасной файл ключа
+/// (`ProviderInfo::key_file`, напр. `~/.kimi_api_key`) → общие исторические
+/// имена харнесса (DEEPSEEK_API_KEY, THESEUS_API_KEY). Пробельные/пустые
 /// значения игнорируются, найденное обрезается от пробелов. В отличие от
-/// [`resolve`] не падает при отсутствии ключа — это «мягкий» env-слой
-/// загрузчика конфига (явный `api_key` в конфиге всегда приоритетнее).
+/// [`resolve`] не падает при отсутствии ключа — это «мягкий» слой загрузчика
+/// конфига (явный `api_key` в конфиге всегда приоритетнее).
 pub fn api_key_from_env(model_id: &str) -> Option<String> {
-    api_key_env_names(model_id).into_iter().find_map(|name| {
-        env::var(&name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
-    })
+    let from_env = |name: &str| {
+        env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+    };
+    let provider = find_model(model_id).and_then(|m| find_provider(&m.provider));
+    if let Some(p) = &provider {
+        if let Some(key) = p.env_key.as_deref().and_then(&from_env) {
+            return Some(key);
+        }
+        for alias in &p.env_key_aliases {
+            if let Some(key) = from_env(alias) {
+                return Some(key);
+            }
+        }
+        if let Some(f) = &p.key_file {
+            if let Some(key) = read_key_file(f) {
+                return Some(key);
+            }
+        }
+    }
+    ["DEEPSEEK_API_KEY", "THESEUS_API_KEY"].into_iter().find_map(from_env)
+}
+
+/// Подсказка про запасной файл ключа для текстов ошибок
+/// (« либо положите ключ в файл ~/.kimi_api_key»; пусто, если не объявлен).
+pub fn api_key_file_hint(model_id: &str) -> String {
+    find_model(model_id)
+        .and_then(|m| find_provider(&m.provider))
+        .and_then(|p| p.key_file)
+        .map(|f| format!(" либо положите ключ в файл {f}"))
+        .unwrap_or_default()
+}
+
+/// Прочитать ключ из файла провайдера (`~` раскрывается в $HOME);
+/// пустое/пробельное содержимое и ошибки чтения — `None`.
+fn read_key_file(path: &str) -> Option<String> {
+    let expanded = match path.strip_prefix("~/") {
+        Some(rest) => format!("{}/{rest}", env::var("HOME").ok()?),
+        None => path.to_string(),
+    };
+    std::fs::read_to_string(expanded).ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
 }
 
 /// Провайдер модели из реестра; отсутствие — внутренняя несогласованность.
@@ -468,7 +520,8 @@ fn registry_provider(model: &ModelInfo) -> Result<ProviderInfo> {
 
 /// Общее ядро `resolve*`: ключ из env + эффективный URL провайдера.
 /// Если основная переменная не задана, пробуются алиасы провайдера
-/// (`env_key_aliases` — GLM_API_KEY/ZAI_API_KEY для zhipu и т.п.); в тексте
+/// (`env_key_aliases` — GLM_API_KEY/ZAI_API_KEY для zhipu и т.п.), затем
+/// запасной файл ключа (`key_file`, напр. ~/.kimi_api_key); в тексте
 /// ошибки — все принятые имена и подсказка про окружение процесса.
 fn resolve_parts(model: &ModelInfo, provider: &ProviderInfo, api_key_env: &str) -> Result<Credentials> {
     let mut tried = vec![api_key_env.to_string()];
@@ -479,11 +532,20 @@ fn resolve_parts(model: &ModelInfo, provider: &ProviderInfo, api_key_env: &str) 
         tried.push(alias.clone());
         raw = env::var(alias).ok();
     }
+    // запасной файл ключа (кейс 07.08: ключ Kimi в ~/.kimi_api_key, а процесс
+    // харнесса env-переменную не видит — /model k3 падал на переключении)
+    let mut file_note = String::new();
+    if raw.is_none() {
+        if let Some(f) = &provider.key_file {
+            file_note = format!(" либо положите ключ в файл {f}");
+            raw = read_key_file(f);
+        }
+    }
     let raw = raw.with_context(|| format!(
-        "нет API-ключа: задайте env-переменную {}. Если переменная выставлена \
+        "нет API-ключа: задайте env-переменную {}{}. Если переменная выставлена \
          ПОСЛЕ запуска Тесея — перезапустите его: окружение захватывается при \
          старте процесса и позже не пополняется",
-        tried.join(" или ")))?;
+        tried.join(" или "), file_note))?;
     let key = raw.trim();
     ensure!(!key.is_empty(), "env-переменная {} задана, но пустая",
         tried.last().map(String::as_str).unwrap_or(api_key_env));
@@ -913,15 +975,58 @@ mod tests {
         with_env_vars(&[("DEEPSEEK_API_KEY", Some("ds"))], || {
             assert_eq!(api_key_from_env("custom-local-model").as_deref(), Some("ds"));
         });
-        // пустая/пробельная переменная не считается; ничего нет — None
+        // пустая/пробельная переменная не считается; ничего нет — None.
+        // Модель без провайдера в реестре: у k3 запасной файл ~/.kimi_api_key
+        // существует на боевой машине и сделал бы тест зависимым от окружения.
         with_env_vars(
             &[
-                ("KIMI_API_KEY", Some("   ")),
-                ("DEEPSEEK_API_KEY", None),
+                ("DEEPSEEK_API_KEY", Some("   ")),
                 ("THESEUS_API_KEY", None),
             ],
-            || assert_eq!(api_key_from_env("k3"), None),
+            || assert_eq!(api_key_from_env("no-such-model"), None),
         );
+    }
+
+    /// Запасной файл ключа (кейс 07.08): ключ читается из файла провайдера,
+    /// если ни одна env-переменная не задана; env приоритетнее файла;
+    /// в ошибке отсутствия ключа файл подсказывается.
+    #[test]
+    fn resolve_falls_back_to_key_file() {
+        let dir = std::env::temp_dir().join(format!("theseus_keyfile_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let key_path = dir.join("provider_key");
+        std::fs::write(&key_path, " file-key-123 \n").unwrap();
+        let provider = ProviderInfo {
+            name: "test-prov".into(),
+            base_url: "http://x/v1".into(),
+            env_key: Some("THESEUS_TEST_KEYFILE_ENV".into()),
+            env_key_aliases: vec![],
+            key_file: Some(key_path.to_string_lossy().into()),
+            wire_api: WireApi::Chat,
+            default_headers: vec![],
+            base_url_env: None,
+            risk_note: None,
+        };
+        let model = find_model("k3").unwrap();
+        // env не задан → ключ из файла (пробелы/перевод строки обрезаны)
+        with_env_vars(&[("THESEUS_TEST_KEYFILE_ENV", None)], || {
+            let creds = resolve_parts(&model, &provider, "THESEUS_TEST_KEYFILE_ENV").unwrap();
+            assert_eq!(creds.key, "file-key-123");
+        });
+        // env задан → приоритетнее файла
+        with_env_vars(&[("THESEUS_TEST_KEYFILE_ENV", Some("env-key"))], || {
+            let creds = resolve_parts(&model, &provider, "THESEUS_TEST_KEYFILE_ENV").unwrap();
+            assert_eq!(creds.key, "env-key");
+        });
+        // ни env, ни файла → ошибка подсказывает и имя, и путь файла
+        let _ = std::fs::remove_file(&key_path);
+        with_env_vars(&[("THESEUS_TEST_KEYFILE_ENV", None)], || {
+            let err = resolve_parts(&model, &provider, "THESEUS_TEST_KEYFILE_ENV").unwrap_err();
+            let msg = format!("{err:#}");
+            assert!(msg.contains("THESEUS_TEST_KEYFILE_ENV"), "msg: {msg}");
+            assert!(msg.contains("положите ключ в файл"), "msg: {msg}");
+        });
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

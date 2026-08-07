@@ -252,8 +252,9 @@ impl Config {
     pub fn api_key(&self) -> Result<&str> {
         self.api_key.as_deref().with_context(|| {
             let names = models::api_key_env_names(&self.model).join(" / ");
+            let file = models::api_key_file_hint(&self.model);
             format!(
-                "нет API-ключа: задайте {names} или api_key в config.toml. \
+                "нет API-ключа: задайте {names}{file} или api_key в config.toml. \
                  Если переменная выставлена ПОСЛЕ запуска Тесея — перезапустите его"
             )
         })
