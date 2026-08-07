@@ -162,7 +162,10 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
         },
         ProviderInfo {
             name: "kimi".into(),
-            base_url: "https://api.kimi.com/v1".into(),
+            // Kimi Code API (официальная OpenAI-совместимая поверхность,
+            // доки kimi.com/code 08.08): chat — /chat/completions; модели
+            // k3 / k3-256k / kimi-for-coding[-highspeed]. Старая /v1 — 404.
+            base_url: "https://api.kimi.com/coding/v1".into(),
             env_key: Some("KIMI_API_KEY".into()),
             env_key_aliases: vec![],
             wire_api: WireApi::Chat,
@@ -209,7 +212,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
     ]
 }
 
-/// Встроенные модели всех провайдеров (10 шт.).
+/// Встроенные модели всех провайдеров (12 шт.).
 ///
 /// Модели `openai-compatible` в реестр не входят: их идентификаторы и лимиты
 /// задаются конфигом пользователя под конкретный эндпоинт.
@@ -257,7 +260,7 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             true,
             Some(CostHint { input_usd_per_mtok: 0.55, output_usd_per_mtok: 2.19 }),
         ),
-        // --- Kimi (api.kimi.com) ---
+        // --- Kimi (api.kimi.com/coding — официальная coding-поверхность) ---
         model(
             "kimi-k2",
             kimi,
@@ -275,6 +278,25 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             true,
             true,
             Some(CostHint { input_usd_per_mtok: 1.20, output_usd_per_mtok: 6.00 }),
+        ),
+        // канонические id по докам Kimi Code (08.08): k3 и k3-256k
+        model(
+            "k3",
+            kimi,
+            262_144,
+            32_768,
+            true,
+            true,
+            None, // подписка Kimi Code (Moderato+), не помегабайтная цена
+        ),
+        model(
+            "k3-256k",
+            kimi,
+            262_144,
+            32_768,
+            true,
+            true,
+            None,
         ),
         // --- Moonshot (api.moonshot.ai, DPI-риск) ---
         model(
@@ -553,7 +575,7 @@ mod tests {
             assert!(p.requires_key(), "{}: ожидался env_key", p.name);
         }
         let models = builtin_models();
-        assert_eq!(models.len(), 10);
+        assert_eq!(models.len(), 12);
         let mut seen = HashSet::new();
         for m in &models {
             assert!(seen.insert(m.id.as_str()), "дубликат id {}", m.id);
@@ -598,6 +620,15 @@ mod tests {
         let zhipu = find_provider("zhipu").expect("провайдер zhipu");
         assert_eq!(zhipu.env_key.as_deref(), Some("ZHIPU_API_KEY"));
         assert_eq!(zhipu.base_url, "https://api.z.ai/api/paas/v4");
+
+        // Kimi K3 по докам Kimi Code (08.08): канонический id «k3»,
+        // провайдер — coding-поверхность api.kimi.com/coding/v1
+        let k3 = find_model("k3").expect("k3 в реестре");
+        assert_eq!(k3.provider, "kimi");
+        assert!(k3.supports_thinking && k3.supports_tools);
+        let kimi = find_provider("kimi").expect("провайдер kimi");
+        assert_eq!(kimi.base_url, "https://api.kimi.com/coding/v1");
+        assert_eq!(kimi.env_key.as_deref(), Some("KIMI_API_KEY"));
     }
 
     #[test]

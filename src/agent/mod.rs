@@ -440,8 +440,14 @@ impl Agent {
     /// Переключение модели в рантайме (/model в TUI): ApiClient пересобирается
     /// с новыми кредами (таймаут/extra_body/max_output — из sub-конфига),
     /// лимит контекста — из реестра. Sub-конфиг следует за главной моделью,
-    /// чтобы субагенты не продолжали ходить в старую.
-    pub fn switch_model(&mut self, creds: &crate::models::Credentials, context_limit: usize) -> Result<()> {
+    /// чтобы субагенты не продолжали ходить в старую. Для kimi (k3 и др.)
+    /// extra_body мышления СБРАСЫВАЕТСЯ: Kimi Code требует reasoning_content
+    /// в истории при thinking=enabled (400 по докам 08.08), а мы его не храним.
+    pub fn switch_model(&mut self, creds: &crate::models::Credentials, context_limit: usize,
+                        provider: &str) -> Result<()> {
+        if provider == "kimi" {
+            self.sub.extra_body = serde_json::json!({});
+        }
         self.api = ApiClient::new(&creds.url, &creds.key, &creds.model,
             self.sub.timeout_secs, self.sub.extra_body.clone(), self.sub.max_output_tokens)?;
         self.model = creds.model.clone();
@@ -908,10 +914,12 @@ impl Agent {
         if let Some(id) = model_switch {
             match crate::models::resolve(&id) {
                 Ok(creds) => {
-                    let limit = crate::models::find_model(&id)
+                    let info = crate::models::find_model(&id);
+                    let limit = info.as_ref()
                         .map(|m| m.context_limit)
                         .unwrap_or(self.context_limit);
-                    match self.switch_model(&creds, limit) {
+                    let provider = info.map(|m| m.provider).unwrap_or_default();
+                    match self.switch_model(&creds, limit, &provider) {
                         Ok(()) => self.emit(AgentEvent::HookNote(format!(
                             "⚡ модель → {id} ({})", creds.url))),
                         Err(e) => self.emit(AgentEvent::Error(format!(

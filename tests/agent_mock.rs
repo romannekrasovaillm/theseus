@@ -436,7 +436,7 @@ fn switch_model_applies_to_next_request() -> Result<()> {
         key: "test-key-2".into(),
         model: "glm-5.2".into(),
     };
-    agent.switch_model(&creds, 131_072)?;
+    agent.switch_model(&creds, 131_072, "zhipu")?;
     let _ = agent.run("второй запрос")?;
 
     let requests = handle.requests();
@@ -445,5 +445,48 @@ fn switch_model_applies_to_next_request() -> Result<()> {
         "первый запрос — исходная модель");
     assert_eq!(requests[1]["model"].as_str().unwrap_or(""), "glm-5.2",
         "второй запрос обязан идти в новую модель");
+    Ok(())
+}
+
+/// Переключение на kimi (k3): thinking extra_body сбрасывается — Kimi Code
+/// требует reasoning_content в истории при thinking=enabled (400 по докам),
+/// а харнесс его не хранит. На deepseek-провайдере extra_body сохраняется.
+#[test]
+fn switch_model_to_kimi_clears_thinking_extra_body() -> Result<()> {
+    let ws = TempWs::new("kimi_extra");
+    let handle = MockLlm::with_scenarios(vec![
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"a"}"#),
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"b"}"#),
+        Scenario::new().reply_text("ок"),
+        Scenario::new().reply_text("ок"),
+    ])
+    .serve_on_ephemeral()?;
+
+    // конфиг с включённым thinking (как у пользователя для DeepSeek)
+    let mut cfg = mock_config(&handle.base_url);
+    cfg.extra_body = serde_json::json!({"thinking": {"type": "enabled"}});
+    let perms = PermissionEngine::new(Mode::Yolo, cfg.permission.clone(), ws.path());
+    let mut agent = Agent::new(cfg, perms, ws.path(), 4, None)?;
+
+    // переключение на k3 → thinking уходит из тела запроса
+    let creds = theseus::models::Credentials {
+        url: handle.base_url.clone(), key: "k".into(), model: "k3".into(),
+    };
+    agent.switch_model(&creds, 262_144, "kimi")?;
+    let _ = agent.run("запрос после k3")?;
+    let requests = handle.requests();
+    let last = requests.last().unwrap();
+    assert!(last.get("thinking").is_none(),
+        "thinking не сброшен для kimi: {}", &last.to_string()[..200.min(last.to_string().len())]);
+
+    // обратно на deepseek-провайдер — extra_body не трогаем (там уже {})
+    let creds2 = theseus::models::Credentials {
+        url: handle.base_url.clone(), key: "k".into(), model: "deepseek-v4-flash".into(),
+    };
+    agent.switch_model(&creds2, 131_072, "deepseek")?;
+    let _ = agent.run("запрос после flash")?;
+    let requests = handle.requests();
+    let last2 = requests.last().unwrap();
+    assert!(last2.get("thinking").is_none(), "у mock-конфига extra_body пуст: ожидаемо без thinking");
     Ok(())
 }

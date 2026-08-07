@@ -1904,10 +1904,11 @@ fn push_lines(app: &mut TuiApp, text: &str, role: ThemeRole) {
 }
 
 /// Быстрый выбор модели в /model (порядок = нумерация в меню).
-const MODEL_CHOICES: [(&str, &str); 3] = [
+const MODEL_CHOICES: [(&str, &str); 4] = [
     ("deepseek-v4-pro", "DeepSeek V4 Pro — фронтир-ризонинг"),
     ("deepseek-v4-flash", "DeepSeek V4 Flash — быстрый и дешёвый (дефолт)"),
     ("glm-5.2", "GLM-5.2 (Zhipu, ключ ZHIPU_API_KEY)"),
+    ("k3", "Kimi K3 (Kimi Code, ключ KIMI_API_KEY)"),
 ];
 
 /// Разрешение аргумента /model: номер из меню, алиас или точный id из тройки.
@@ -1917,6 +1918,7 @@ fn resolve_model_choice(arg: &str) -> Option<&'static str> {
         "1" | "pro" | "v4pro" | "v4-pro" | "deepseek-v4-pro" => Some("deepseek-v4-pro"),
         "2" | "flash" | "v4flash" | "v4-flash" | "deepseek-v4-flash" => Some("deepseek-v4-flash"),
         "3" | "glm" | "glm5.2" | "glm-5.2" => Some("glm-5.2"),
+        "4" | "k3" | "kimi" | "kimik3" | "kimi-k3" => Some("k3"),
         _ => None,
     }
 }
@@ -1928,7 +1930,7 @@ fn model_menu_lines(model_info: &str) -> Vec<String> {
     for (i, (id, desc)) in MODEL_CHOICES.iter().enumerate() {
         out.push(format!("  {}. {id} — {desc}", i + 1));
     }
-    out.push("переключить: /model 1|2|3 или /model pro|flash|glm".to_string());
+    out.push("переключить: /model 1|2|3|4 или /model pro|flash|glm|k3".to_string());
     out
 }
 
@@ -3238,20 +3240,23 @@ mod ui_helpers_tests {
             ("2", "deepseek-v4-flash"), ("flash", "deepseek-v4-flash"),
             ("deepseek-v4-flash", "deepseek-v4-flash"),
             ("3", "glm-5.2"), ("glm", "glm-5.2"), ("GLM-5.2", "glm-5.2"),
+            ("4", "k3"), ("k3", "k3"), ("kimi", "k3"),
+            ("kimi-k3", "k3"),
         ] {
             assert_eq!(resolve_model_choice(arg), Some(expected), "аргумент: {arg}");
         }
-        assert_eq!(resolve_model_choice("kimi-k3"), None);
+        assert_eq!(resolve_model_choice("bogus-model"), None);
         assert_eq!(resolve_model_choice(""), None);
         assert_eq!(resolve_model_choice("9"), None);
-        // меню: текущая модель + три пронумерованных варианта + подсказка
+        // меню: текущая модель + пронумерованные варианты + подсказка
         let menu = model_menu_lines("deepseek-v4-flash @ https://api.deepseek.com/v1");
         assert!(menu[0].contains("deepseek-v4-flash"), "текущая модель: {menu:?}");
         assert_eq!(menu.len(), 1 + MODEL_CHOICES.len() + 1, "строк меню: {menu:?}");
         assert!(menu[1].contains("1. deepseek-v4-pro"), "{menu:?}");
         assert!(menu[2].contains("2. deepseek-v4-flash"), "{menu:?}");
         assert!(menu[3].contains("3. glm-5.2"), "{menu:?}");
-        assert!(menu[4].contains("/model 1|2|3"), "{menu:?}");
+        assert!(menu[4].contains("4. k3"), "{menu:?}");
+        assert!(menu[5].contains("/model 1|2|3|4"), "{menu:?}");
     }
 
     /// Пикер сессий: заголовок — первая user-реплика (одной строкой, с усечением),
