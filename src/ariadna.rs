@@ -71,6 +71,11 @@ fn strip_think_blocks(content: &str) -> String {
 }
 /// Путь к бинарю llama-server на машине разработки.
 const DEFAULT_SERVER_BIN: &str = "/home/roman/llama.cpp/build/bin/llama-server";
+/// Запасной бинарь llama-server (Vulkan-сборка): используется, когда основной
+/// (CUDA) поднялся, но GPU не инициализировался — типовой живой кейс 06.08:
+/// /dev/nvidia-uvm сломан (cuInit=999, чинится только root+ребут), CUDA-сборка
+/// молча уходит на CPU, а Vulkan-бэкенд работает без CUDA-стека.
+const FALLBACK_SERVER_BIN: &str = "/home/roman/llama.cpp/build_vulkan/bin/llama-server";
 /// Путь к GGUF-файлу дообученной модели на машине разработки.
 const DEFAULT_GGUF_PATH: &str =
     "/home/roman/models/ariadna-grpo/qwen35-4b-ariadna-grpo-v10.Q4_K_M.gguf";
@@ -382,38 +387,72 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
 /// для серии задач выгоднее самим вызвать [`ensure_server`], держать
 /// гард и ходить в [`chat`] напрямую.
 ///
-/// Если порождённый сервер не смог поднять GPU (лог содержит «no usable GPU
-/// found» — CPU-фолбэк, генерация в ~20 раз медленнее), к ответу добавляется
-/// честная пометка `[system: …]`, чтобы родительский агент понимал задержку.
+/// Если порождённый сервер не смог поднять GPU (см. [`cpu_fallback`]),
+/// предпринимается одна попытка перезапуска с запасным Vulkan-бинарём
+/// ([`FALLBACK_SERVER_BIN`], если он существует): живой кейс 06.08 —
+/// /dev/nvidia-uvm сломан (cuInit=999, чинится только root+ребут),
+/// CUDA-сборка молча уходит на CPU (~5 ток/с), а Vulkan-бэкенд работает
+/// без CUDA-стека. Если и запасной бинарь на CPU (или его нет), к ответу
+/// добавляется честная пометка `[system: …]`, чтобы родительский агент
+/// понимал задержку.
 ///
 /// # Errors
 /// Сумма ошибок [`ensure_server`] и [`chat`].
 pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String> {
-    let guard = ensure_server(cfg)?;
+    let mut cfg = cfg.clone();
+    let mut guard = ensure_server(&cfg)?;
     // CPU-фолбэк порождённого сервера (баг 20.07: ggml_cuda_init упал,
     // генерация ~5 ток/с, агент висел 10 минут) — усечённый бюджет токенов
-    // (thinking стопить можно только потолком) + пометка
-    let on_cpu = guard.log_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .is_some_and(|c| cpu_fallback(&c));
+    // (thinking стопить можно только потолком) + пометка. Перед деградацией
+    // пробуем Vulkan-сборку (инцидент 06.08: CUDA-стек сломан, Vulkan жив).
+    let mut on_cpu = spawned_on_cpu(&guard);
+    if on_cpu {
+        if let Some(fallback) = fallback_server_bin(&cfg) {
+            drop(guard); // убиваем порождённый CPU-сервер до перезапуска
+            cfg.server_bin = fallback;
+            guard = ensure_server(&cfg)?;
+            on_cpu = spawned_on_cpu(&guard);
+        }
+    }
     let max_tokens = if on_cpu { CHAT_MAX_TOKENS_CPU } else { CHAT_MAX_TOKENS };
     // v10 (GRPO) ломается от ЛЮБОГО system-сообщения: отвечает «<think>» + EOS
     // (живой тест 02.08) — для неё шлём только user. v1 (SFT) system понимает.
-    let messages = if model_is_v10(cfg) {
+    let messages = if model_is_v10(&cfg) {
         vec![ChatMessage::user(task)]
     } else {
         vec![ChatMessage::system(system), ChatMessage::user(task)]
     };
-    let answer = chat_with_max_tokens(cfg, &messages, max_tokens)?;
+    let answer = chat_with_max_tokens(&cfg, &messages, max_tokens)?;
     if on_cpu {
         return Ok(format!(
-            "{answer}\n[system: Ариадна работает на CPU — GPU недоступен \
-             (ggml_cuda_init failed); бюджет ответа усечён до {CHAT_MAX_TOKENS_CPU} \
-             токенов против бегущего thinking у v10. Рекомендуется поднять \
-             сервер на GPU]"
+            "{answer}\n[system: Ариадна работает на CPU — GPU не поднялся \
+             (ни CUDA, ни Vulkan; хвост лога сервера — в ошибках запуска); \
+             бюджет ответа усечён до {CHAT_MAX_TOKENS_CPU} токенов против \
+             бегущего thinking у v10. Рекомендуется проверить CUDA-стек \
+             (cuInit) и поднять сервер на GPU]"
         ));
     }
     Ok(answer)
+}
+
+/// `true`, если порождённый нами сервер не смог поднять GPU. Для чужого
+/// (переиспользованного) сервера лога у нас нет — считаем, что всё хорошо.
+fn spawned_on_cpu(guard: &ServerGuard) -> bool {
+    guard
+        .log_path()
+        .and_then(|p| std::fs::read_to_string(p).ok())
+        .is_some_and(|c| cpu_fallback(&c))
+}
+
+/// Запасной бинарь (Vulkan-сборка), если он существует и отличается от
+/// текущего `cfg.server_bin` (иначе перезапуск бессмысленен).
+fn fallback_server_bin(cfg: &AriadnaConfig) -> Option<PathBuf> {
+    let fallback = PathBuf::from(FALLBACK_SERVER_BIN);
+    if fallback.is_file() && fallback != cfg.server_bin {
+        Some(fallback)
+    } else {
+        None
+    }
 }
 
 /// `true`, если конфиг указывает на GRPO-модель v10 (имя файла GGUF содержит
@@ -423,9 +462,25 @@ fn model_is_v10(cfg: &AriadnaConfig) -> bool {
     cfg.gguf_path.to_string_lossy().contains("v10")
 }
 
-/// CPU-фолбэк по логу сервера: ggml_cuda_init упал → «no usable GPU found».
+/// CPU-фолбэк по логу сервера. Явные маркеры отказа GPU: «no usable GPU
+/// found» (ggml_cuda_init упал — баг 20.07, инцидент 06.08) и «--gpu-layers
+/// option will be ignored» (бинарь собран без GPU-бэкенда). Если при этом
+/// в логе виден успешно поднявшийся GPU-бэкенд (Vulkan-сборка раздаёт
+/// модель с GPU без ggml_cuda), это НЕ CPU-фолбэк.
 fn cpu_fallback(log_content: &str) -> bool {
-    log_content.contains("no usable GPU found")
+    let gpu_refused = log_content.contains("no usable GPU found")
+        || log_content.contains("--gpu-layers option will be ignored")
+        || log_content.contains("--n-gpu-layers option will be ignored");
+    gpu_refused && !gpu_backend_active(log_content)
+}
+
+/// В логе видна успешная инициализация GPU-бэкенда (CUDA или Vulkan).
+/// «found 0 CUDA devices» — это отказ, а не успех.
+fn gpu_backend_active(log_content: &str) -> bool {
+    let lower = log_content.to_lowercase();
+    let cuda_ok = lower.contains("ggml_cuda_init: found")
+        && !lower.contains("found 0 cuda devices");
+    cuda_ok || lower.contains("ggml_vulkan: found")
 }
 
 /// Системный промпт Ариадны: русский первичен, английский — явный фолбэк.
@@ -803,10 +858,16 @@ mod tests {
 
     /// CPU-фолбэк по логу сервера (баг 20.07): «no usable GPU found» —
     /// сигнал усечь бюджет токенов, v10 thinking потолком не стопить иначе.
+    /// Vulkan-сборка с живым GPU (инцидент 06.08) — НЕ фолбэк.
     #[test]
     fn cpu_fallback_detects_log_marker() {
         assert!(cpu_fallback("warning: no usable GPU found, --gpu-layers option will be ignored"));
+        assert!(cpu_fallback("ggml_cuda_init: found 0 CUDA devices:\n  no usable GPU found"));
+        assert!(cpu_fallback("warning: not compiled with GPU offload support, --n-gpu-layers option will be ignored"));
         assert!(!cpu_fallback("ggml_cuda_init: OK, using CUDA device 0"));
+        assert!(!cpu_fallback("ggml_cuda_init: found 1 CUDA devices (Total VRAM: 15972 MiB):"));
+        // Vulkan-бэкенд поднял GPU без CUDA — это не CPU-фолбэк.
+        assert!(!cpu_fallback("ggml_vulkan: Found 1 Vulkan devices:\nload_tensors: offloaded 33/33 layers to GPU"));
         assert!(!cpu_fallback(""));
     }
 
