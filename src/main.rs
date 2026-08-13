@@ -140,13 +140,15 @@ fn main() -> Result<()> {
         None => {
             // интерактивный TUI без стартовой задачи
             let broker = tui::PermBroker::new();
-            tui::run_tui(agent, broker, None, controls, model_info)?;
+            tui::run_tui(agent, broker, None, controls, model_info,
+                         cfg.model, cfg.reasoning_effort)?;
         }
         Some(p) => {
             if atty::is_terminal() {
                 // есть терминал и задача → TUI с первой задачей
                 let broker = tui::PermBroker::new();
-                tui::run_tui(agent, broker, Some(p), controls, model_info)?;
+                tui::run_tui(agent, broker, Some(p), controls, model_info,
+                             cfg.model, cfg.reasoning_effort)?;
             } else {
                 run_headless(agent, &p)?;
             }

@@ -479,9 +479,10 @@ fn slash_complete(input: &str, cycle: Option<(String, usize)>) -> Option<(String
 }
 
 /// Welcome-блок пустого лога (старт TUI без первой задачи): заголовок,
-/// модель@url, подсказки клавиш и 3 стартовых промпта из онбординга.
+/// модель@url + уровень ризонинга, подсказки клавиш и 3 стартовых промпта
+/// из онбординга.
 /// Чистая функция — рендерится вместо лога, пока в нём нет ни одной строки.
-fn welcome_lines(model_info: &str, theme: &Theme) -> Vec<Line<'static>> {
+fn welcome_lines(model_info: &str, reasoning: &str, theme: &Theme) -> Vec<Line<'static>> {
     let title = role_style(theme, ThemeRole::Accent).add_modifier(Modifier::BOLD);
     let dim = role_style(theme, ThemeRole::Dim);
     let prompt_style = role_style(theme, ThemeRole::UserText);
@@ -498,7 +499,7 @@ fn welcome_lines(model_info: &str, theme: &Theme) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::from(Span::styled(format!("  ╚{}╝", "═".repeat(w)), dim)));
     lines.extend([
-        Line::from(Span::styled(format!("  модель: {model_info}"), dim)),
+        Line::from(Span::styled(format!("  модель: {model_info} · ризонинг {reasoning}"), dim)),
         Line::raw(""),
         Line::from(Span::styled(
             "  Enter — отправить · ↑/↓ — история · /help — команды · Esc — выход",
@@ -989,6 +990,11 @@ pub struct TuiApp {
     agent_running: bool,
     /// «модель @ url» для welcome-блока пустого лога
     model_info: String,
+    /// id текущей модели (deepseek-v4-flash, k3, ...) — бейдж в шапке;
+    /// обновляется по /model (запрос 13.08: «путаюсь, какая модель выбрана»)
+    model_id: String,
+    /// уровень ризонинга off|high|max — бейдж в шапке; обновляется по /think
+    effort: String,
     /// состояние цикла автодополнения slash-команд (индекс следующего кандидата);
     /// сбрасывается любой клавишей кроме Tab
     completion_cycle: Option<(String, usize)>,
@@ -1191,6 +1197,7 @@ impl TuiApp {
             theme: tui_theme("dark").unwrap_or_else(|| Theme::new("dark")),
             ctx_est_tokens: None, ctx_limit: 120_000, tz_offset_secs: 0,
             agent_running: false, model_info: String::new(),
+            model_id: String::new(), effort: "high".into(),
             completion_cycle: None, block_kind: None,
             sel: None, log_area: Rect::default(), last_tool_open: None,
             mode_code: crate::permissions::MODE_UNSET,
@@ -1626,6 +1633,20 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         ),
     ];
     let sep = || Span::styled(" │ ", role_style(&app.theme, ThemeRole::Dim));
+    // бейдж текущей модели + уровня ризонинга (запрос 13.08: «путаюсь, какая
+    // модель выбрана») — всегда в шапке; обновляется по /model и /think
+    if !app.model_id.is_empty() {
+        let rlabel = crate::models::reasoning_label(&app.model_id, &app.effort);
+        let rrole = match rlabel {
+            "выкл" | "нет" => ThemeRole::Warn,
+            _ => ThemeRole::Dim,
+        };
+        head.push(sep());
+        head.push(Span::styled(
+            format!("🧠 {}", app.model_id),
+            role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD)));
+        head.push(Span::styled(format!(" · {rlabel}"), role_style(&app.theme, rrole)));
+    }
     if app.agent_running {
         // агент работает: анимированный спиннер (кадр по тикам редрава 100 мс)
         let tick = app.started_at.elapsed().as_millis() as u64 / 100;
@@ -1671,7 +1692,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     app.log_area = log_block.inner(chunks[1]);
     let visible_rows = chunks[1].height.saturating_sub(2) as usize;
     let mut body: Vec<Line> = if app.log.is_empty() {
-        welcome_lines(&app.model_info, &app.theme)
+        welcome_lines(&app.model_info,
+                      crate::models::reasoning_label(&app.model_id, &app.effort),
+                      &app.theme)
     } else {
         let total = app.log.len();
         if app.follow {
@@ -1931,6 +1954,37 @@ fn model_menu_lines(model_info: &str) -> Vec<String> {
         out.push(format!("  {}. {id} — {desc}", i + 1));
     }
     out.push("переключить: /model 1|2|3|4 или /model pro|flash|glm|k3".to_string());
+    out
+}
+
+/// Строгий разбор токена /think (в отличие от мягкого models::normalize_effort
+/// для конфига): неизвестное слово — ошибка с подсказкой, а не молчаливый high.
+fn parse_effort_token(arg: &str) -> Option<&'static str> {
+    match arg.trim().to_lowercase().as_str() {
+        "off" | "выкл" | "disabled" => Some("off"),
+        "high" | "высокий" | "on" | "medium" | "low" => Some("high"),
+        "max" | "макс" | "максимум" | "xhigh" => Some("max"),
+        _ => None,
+    }
+}
+
+/// Строки меню /think (чистая функция — для тестов): текущий уровень с учётом
+/// модели + варианты; для фиксированных провайдером режимов — пояснение.
+fn think_menu_lines(model_id: &str, effort: &str) -> Vec<String> {
+    let label = crate::models::reasoning_label(model_id, effort);
+    let mut out = vec![format!("ризонинг сейчас: {label} (модель {model_id})")];
+    match label {
+        "встроенный" => out.push(
+            "уровень фиксирован провайдером: Kimi K3 ризонит всегда, ключи мышления не принимает".to_string()),
+        "нет" => out.push(
+            "модель не поддерживает цепочку рассуждений — переключать нечего".to_string()),
+        _ => {
+            out.push("  off — без рассуждений (быстрее и дешевле)".to_string());
+            out.push("  high — стандартный уровень (дефолт)".to_string());
+            out.push("  max — максимальная глубина (сложные задачи)".to_string());
+            out.push("переключить: /think off|high|max".to_string());
+        }
+    }
     out
 }
 
@@ -2511,6 +2565,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
                                 .map(|p| p.effective_base_url())
                                 .unwrap_or_default();
                             app.model_info = format!("{id} @ {url}");
+                            app.model_id = id.to_string();
                             app.push(vec![Span::styled(
                                 format!("⚡ модель → {id} (применится на следующем ходу)"),
                                 accent.add_modifier(Modifier::BOLD))]);
@@ -2518,6 +2573,31 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
                         None => {
                             app.push(vec![Span::styled(
                                 format!("неизвестная модель «{arg}» — варианты: /model 1|2|3 или pro|flash|glm"), error)]);
+                        }
+                    }
+                }
+            }
+            "think" => {
+                let arg = args.split_whitespace().next().unwrap_or("");
+                if arg.is_empty() {
+                    // меню выбора: текущий уровень + варианты (с учётом модели)
+                    for line in think_menu_lines(&app.model_id, &app.effort) {
+                        app.push(vec![Span::styled(line, accent)]);
+                    }
+                } else {
+                    match parse_effort_token(arg) {
+                        Some(norm) => {
+                            // слот агенту: применится на границе хода (следующий API-вызов)
+                            *controls.effort_slot.lock().unwrap() = Some(norm.to_string());
+                            app.effort = norm.to_string();
+                            let label = crate::models::reasoning_label(&app.model_id, norm);
+                            app.push(vec![Span::styled(
+                                format!("⚡ ризонинг → {label} (применится на следующем ходу)"),
+                                accent.add_modifier(Modifier::BOLD))]);
+                        }
+                        None => {
+                            app.push(vec![Span::styled(
+                                format!("неизвестный уровень «{arg}» — варианты: /think off|high|max"), error)]);
                         }
                     }
                 }
@@ -2683,7 +2763,7 @@ enum AState {
 }
 
 pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<String>,
-               controls: Controls, model_info: String) -> Result<()> {
+               controls: Controls, model_info: String, model_id: String, effort: String) -> Result<()> {
     let (tx, rx) = channel::<AgentEvent>();
     let b2 = broker.clone();
     agent.perm_answerer = Some(Box::new(move |q: &str| b2.ask(q)));
@@ -2708,10 +2788,12 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
     stdout.execute(EnableBracketedPaste)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
     let mut app = TuiApp::new();
-    // метаданные старта: модель для welcome-блока, лимит контекст-бара из
-    // конфига (сигнатуру run_tui не трогаем), часовой пояс префиксов времени —
-    // один вызов `date` на сессию
+    // метаданные старта: модель для welcome-блока и бейджа шапки, уровень
+    // ризонинга для бейджа, лимит контекст-бара из конфига, часовой пояс
+    // префиксов времени — один вызов `date` на сессию
     app.model_info = model_info;
+    app.model_id = model_id;
+    app.effort = crate::models::normalize_effort(&effort).to_string();
     app.ctx_limit = context_limit_from_config();
     app.tz_offset_secs = local_utc_offset_secs();
 
@@ -3356,9 +3438,9 @@ mod ui_helpers_tests {
     /// Slash-completion: «/» + непустой префикс без пробелов, регистронезависимо.
     #[test]
     fn slash_completion_filter() {
-        // префикс имени
+        // префикс имени (think и theme — оба на «th»)
         let names: Vec<&str> = slash_completions("/th").iter().map(|c| c.name).collect();
-        assert_eq!(names, ["theme"]);
+        assert_eq!(names, ["think", "theme"]);
         // регистронезависимо
         assert!(slash_completions("/TH").iter().any(|c| c.name == "theme"));
         // префикс алиаса тоже находит команду (/heal → алиас health → doctor)
@@ -3602,11 +3684,11 @@ mod ui_helpers_tests {
         assert_eq!(spinner_frame(23), SPINNER_FRAMES[3]);
     }
 
-    /// Welcome-блок: заголовок, модель@url, подсказки и стартовые промпты.
+    /// Welcome-блок: заголовок, модель@url + ризонинг, подсказки и стартовые промпты.
     #[test]
     fn welcome_block_contents() {
         let theme = tui_theme("dark").expect("dark-тема обязана быть");
-        let lines = welcome_lines("deepseek-chat @ https://api.deepseek.com", &theme);
+        let lines = welcome_lines("deepseek-chat @ https://api.deepseek.com", "нет", &theme);
         let text: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
@@ -3614,9 +3696,48 @@ mod ui_helpers_tests {
             .join("\n");
         assert!(text.contains("T H E S E U S"), "нет заголовка:\n{text}");
         assert!(text.contains("deepseek-chat @ https://api.deepseek.com"), "нет модели:\n{text}");
+        assert!(text.contains("ризонинг нет"), "нет уровня ризонинга:\n{text}");
         assert!(text.contains(crate::onboarding::suggested_starter_prompts()[0]),
             "нет первого стартового промпта:\n{text}");
         assert!(text.contains("/help"), "нет подсказки клавиш:\n{text}");
+    }
+
+    /// /think: разбор токенов строгий, меню учитывает возможности модели.
+    #[test]
+    fn think_token_parsing_and_menu() {
+        assert_eq!(parse_effort_token("off"), Some("off"));
+        assert_eq!(parse_effort_token("ВЫКЛ"), Some("off"));
+        assert_eq!(parse_effort_token("max"), Some("max"));
+        assert_eq!(parse_effort_token("high"), Some("high"));
+        assert_eq!(parse_effort_token("medium"), Some("high")); // API округлит
+        assert_eq!(parse_effort_token("turbo"), None);
+        let menu = think_menu_lines("deepseek-v4-pro", "high").join("\n");
+        assert!(menu.contains("высокий"), "{menu}");
+        assert!(menu.contains("/think off|high|max"), "{menu}");
+        // фиксированные провайдером режимы — без списка вариантов
+        let k3 = think_menu_lines("k3", "high").join("\n");
+        assert!(k3.contains("встроенный"), "{k3}");
+        assert!(!k3.contains("переключить"), "{k3}");
+        let chat = think_menu_lines("deepseek-chat", "high").join("\n");
+        assert!(chat.contains("не поддерживает"), "{chat}");
+    }
+
+    /// /think в handle_slash: валидный уровень уходит в effort_slot агента и
+    /// в app.effort (бейдж обновится на том же кадре); мусор — ошибка.
+    #[test]
+    fn think_command_sets_slot_and_badge() {
+        let mut app = TuiApp::new();
+        app.model_id = "deepseek-v4-pro".into();
+        let controls = crate::agent::Controls::default();
+        handle_slash("/think max", &mut app, &controls);
+        assert_eq!(app.effort, "max");
+        assert_eq!(controls.effort_slot.lock().unwrap().as_deref(), Some("max"));
+        handle_slash("/think turbo", &mut app, &controls);
+        assert_eq!(app.effort, "max", "мусорный токен не должен менять уровень");
+        let text: String = app.log.iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
+            .collect();
+        assert!(text.contains("неизвестный уровень"), "нет ошибки: {text}");
     }
 
     /// Дизайн блоков: время один раз на первой строке блока, между блоками
@@ -4208,6 +4329,30 @@ mod render_bug_tests {
             .collect();
         assert!(text.contains("◈ kimi"), "{text}");
         assert!(text.contains("⚙ Bash"), "{text}");
+    }
+
+    /// Бейдж модели + ризонинга в шапке (запрос 13.08 «путаюсь, какая модель
+    /// выбрана»): id и уровень видны всегда; у k3 ризонинг «встроенный».
+    #[test]
+    fn header_shows_model_and_reasoning_badge() {
+        let mut app = TuiApp::new();
+        app.model_id = "deepseek-v4-pro".into();
+        app.effort = "max".into();
+        let backend = TestBackend::new(120, 16);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        // 🧠 занимает 2 ячейки терминала — в дампе буфера после него 2 пробела,
+        // поэтому проверяем id и уровень без привязки к пробелу у эмодзи
+        assert!(joined.contains("🧠"), "нет иконки бейджа:\n{joined}");
+        assert!(joined.contains("deepseek-v4-pro"), "нет бейджа модели:\n{joined}");
+        assert!(joined.contains("· max"), "нет уровня ризонинга:\n{joined}");
+        // k3: ризонинг встроенный — так и пишем
+        app.model_id = "k3".into();
+        terminal.draw(|f| draw(f, &mut app, None)).unwrap();
+        let joined = buffer_lines(&terminal).join("\n");
+        assert!(joined.contains("k3"), "нет бейджа k3:\n{joined}");
+        assert!(joined.contains("· встроенный"), "k3 — встроенный ризонинг:\n{joined}");
     }
 
     /// Индикатор фоновых агентов (v0.6.6): в шапке виден «фон: N» с пульсом,

@@ -69,6 +69,7 @@ fn mock_config(base_url: &str) -> Config {
         compact_mask_pct: 70,
         compact_prune_pct: 80,
         compact_summary_pct: 95,
+        reasoning_effort: "high".into(),
     }
 }
 
@@ -436,7 +437,7 @@ fn switch_model_applies_to_next_request() -> Result<()> {
         key: "test-key-2".into(),
         model: "glm-5.2".into(),
     };
-    agent.switch_model(&creds, 131_072, "zhipu")?;
+    agent.switch_model(&creds, 131_072)?;
     let _ = agent.run("второй запрос")?;
 
     let requests = handle.requests();
@@ -448,9 +449,10 @@ fn switch_model_applies_to_next_request() -> Result<()> {
     Ok(())
 }
 
-/// Переключение на kimi (k3): thinking extra_body сбрасывается — Kimi Code
-/// требует reasoning_content в истории при thinking=enabled (400 по докам),
-/// а харнесс его не хранит. На deepseek-провайдере extra_body сохраняется.
+/// Переключение на kimi (k3): ключи мышления срезаются — Kimi Code отвечает
+/// 400 на thinking без полного reasoning_content в истории (доки 08.08).
+/// Обратно на deepseek — тело пересобирается по уровню ризонинга (дефолт
+/// high): thinking enabled + reasoning_effort возвращаются.
 #[test]
 fn switch_model_to_kimi_clears_thinking_extra_body() -> Result<()> {
     let ws = TempWs::new("kimi_extra");
@@ -472,21 +474,71 @@ fn switch_model_to_kimi_clears_thinking_extra_body() -> Result<()> {
     let creds = theseus::models::Credentials {
         url: handle.base_url.clone(), key: "k".into(), model: "k3".into(),
     };
-    agent.switch_model(&creds, 262_144, "kimi")?;
+    agent.switch_model(&creds, 262_144)?;
     let _ = agent.run("запрос после k3")?;
     let requests = handle.requests();
     let last = requests.last().unwrap();
     assert!(last.get("thinking").is_none(),
         "thinking не сброшен для kimi: {}", &last.to_string()[..200.min(last.to_string().len())]);
 
-    // обратно на deepseek-провайдер — extra_body не трогаем (там уже {})
+    // обратно на deepseek — тело мышления пересобирается по уровню high:
+    // thinking enabled + reasoning_effort на месте (раньше терялось насовсем)
     let creds2 = theseus::models::Credentials {
         url: handle.base_url.clone(), key: "k".into(), model: "deepseek-v4-flash".into(),
     };
-    agent.switch_model(&creds2, 131_072, "deepseek")?;
+    agent.switch_model(&creds2, 131_072)?;
     let _ = agent.run("запрос после flash")?;
     let requests = handle.requests();
     let last2 = requests.last().unwrap();
-    assert!(last2.get("thinking").is_none(), "у mock-конфига extra_body пуст: ожидаемо без thinking");
+    assert_eq!(last2["thinking"], serde_json::json!({"type": "enabled"}),
+        "после возврата на deepseek thinking пересобран: {last2}");
+    assert_eq!(last2["reasoning_effort"], serde_json::json!("high"),
+        "уровень ризонинга применён: {last2}");
+    Ok(())
+}
+
+/// /think в рантайме (effort_slot): уровень ризонинга применяется на границе
+/// хода — следующий API-вызов идёт с пересобранным thinking. off → disabled,
+/// обратно max → enabled + reasoning_effort=max.
+#[test]
+fn effort_slot_applies_at_turn_boundary() -> Result<()> {
+    let ws = TempWs::new("effort_slot");
+    // прогон завершается только finish-вызовом; consolidate_memory гейтится
+    // длиной диалога (<800 символов) — на коротких промптах не стреляет
+    let handle = MockLlm::with_scenarios(vec![
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"1"}"#),
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"2"}"#),
+        Scenario::new().reply_tool_call("finish", r#"{"summary":"3"}"#),
+        Scenario::new().reply_text("ок"),
+    ])
+    .serve_on_ephemeral()?;
+
+    let mut agent = mock_agent(&handle.base_url, ws.path(), 3);
+    // модель из реестра, чтобы apply_effort работал (mock-model вне реестра)
+    let creds = theseus::models::Credentials {
+        url: handle.base_url.clone(), key: "k".into(), model: "deepseek-v4-flash".into(),
+    };
+    agent.switch_model(&creds, 131_072)?;
+    let _ = agent.run("раз")?;    let requests = handle.requests();
+    let last = requests.last().unwrap();
+    assert_eq!(last["thinking"], serde_json::json!({"type": "enabled"}),
+        "дефолт high: thinking enabled: {last}");
+
+    // /think off → следующий ход без рассуждений
+    *agent.controls.effort_slot.lock().unwrap() = Some("off".into());
+    let _ = agent.run("два")?;
+    let requests = handle.requests();
+    let last = requests.last().unwrap();
+    assert_eq!(last["thinking"], serde_json::json!({"type": "disabled"}),
+        "после /think off: disabled: {last}");
+    assert!(last.get("reasoning_effort").is_none(), "при off effort не шлём: {last}");
+
+    // /think max → enabled + effort max
+    *agent.controls.effort_slot.lock().unwrap() = Some("max".into());
+    let _ = agent.run("три")?;
+    let requests = handle.requests();
+    let last = requests.last().unwrap();
+    assert_eq!(last["thinking"], serde_json::json!({"type": "enabled"}), "max: {last}");
+    assert_eq!(last["reasoning_effort"], serde_json::json!("max"), "max: {last}");
     Ok(())
 }

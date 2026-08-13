@@ -35,6 +35,7 @@ pub const KNOWN_KEYS: &[&str] = &[
     "hooks",
     "web_allowed_domains",
     "notify",
+    "reasoning_effort",
 ];
 
 /// Допустимые режимы `permission.mode`.

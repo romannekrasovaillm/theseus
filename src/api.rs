@@ -101,12 +101,15 @@ impl ApiClient {
             .user_agent("theseus/0.1")
             .build()?;
         // Kimi Code не принимает thinking без reasoning_content в истории
-        // (HTTP 400, доки 08.08) — для провайдера kimi ключ thinking выкидываем
-        // из extra_body на входе (единая точка: Agent::new, /model, субагенты).
+        // (HTTP 400, доки 08.08) — для провайдера kimi ключи мышления
+        // выкидываем из extra_body на входе (единая точка: Agent::new,
+        // /model, субагенты). reasoning_effort — за компанию: K3 ризонит
+        // всегда, уровень у него не настраивается.
         let mut extra_body = extra_body;
         if crate::models::find_model(model).map(|m| m.provider == "kimi") == Some(true) {
             if let Some(obj) = extra_body.as_object_mut() {
                 obj.remove("thinking");
+                obj.remove("reasoning_effort");
             }
         }
         Ok(ApiClient {
@@ -402,17 +405,19 @@ mod tests {
     /// Kimi-провайдер: thinking выкидывается из extra_body на входе (Kimi Code
     /// отвечает 400 на thinking без reasoning_content в истории; для K3 thinking
     /// всегда включён на стороне сервера, параметр из K2.x не передаём).
-    /// DeepSeek-модели extra_body не трогаем.
+    /// reasoning_effort срезается за компанию. DeepSeek-модели не трогаем.
     #[test]
     fn kimi_provider_strips_thinking_from_extra_body() {
-        let thinking = serde_json::json!({"thinking": {"type": "enabled"}, "x": 1});
+        let thinking = serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high", "x": 1});
         let kimi = super::ApiClient::new(
             "http://127.0.0.1:9/v1", "k", "k3", 1, thinking.clone(), 16).unwrap();
         assert!(kimi.extra_body.get("thinking").is_none(), "thinking срезан: {}", kimi.extra_body);
+        assert!(kimi.extra_body.get("reasoning_effort").is_none(), "effort срезан: {}", kimi.extra_body);
         assert_eq!(kimi.extra_body.get("x"), Some(&serde_json::json!(1)), "прочие ключи целы");
         let ds = super::ApiClient::new(
             "http://127.0.0.1:9/v1", "k", "deepseek-v4-pro", 1, thinking.clone(), 16).unwrap();
         assert!(ds.extra_body.get("thinking").is_some(), "deepseek: thinking сохранён");
+        assert!(ds.extra_body.get("reasoning_effort").is_some(), "deepseek: effort сохранён");
         // неизвестная реестру модель — не трогаем (openai-compatible эндпоинты)
         let custom = super::ApiClient::new(
             "http://127.0.0.1:9/v1", "k", "my-local-model", 1, thinking, 16).unwrap();

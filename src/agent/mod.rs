@@ -76,6 +76,9 @@ pub struct Controls {
     /// (deepseek-v4-pro | deepseek-v4-flash | glm-5.2); применяется на
     /// границе хода — следующий API-вызов уже идёт в новую модель
     pub model_slot: Arc<Mutex<Option<String>>>,
+    /// запрос смены уровня ризонинга из TUI (/think): off|high|max;
+    /// применяется на границе хода (пересборка extra_body мышления)
+    pub effort_slot: Arc<Mutex<Option<String>>>,
     /// запрос загрузки прежней сессии из TUI (/resume N): путь к файлу
     /// session-*.json; обслуживается циклом run_tui только на свободном агенте
     pub resume_slot: Arc<Mutex<Option<std::path::PathBuf>>>,
@@ -94,6 +97,7 @@ impl Default for Controls {
             notes_slot: Arc::new(Mutex::new(Vec::new())),
             bg_snapshot: Arc::new(Mutex::new(Vec::new())),
             model_slot: Arc::new(Mutex::new(None)),
+            effort_slot: Arc::new(Mutex::new(None)),
             resume_slot: Arc::new(Mutex::new(None)),
         }
     }
@@ -143,6 +147,8 @@ pub struct Agent {
     workspace: PathBuf,
     /// имя модели (для атрибутов трейсинга api_call)
     model: String,
+    /// текущий уровень ризонинга (off|high|max) — из конфига и /think
+    effort: String,
     context_limit: usize,
     transcript_dir: PathBuf,
     session_ts: u64,
@@ -344,12 +350,16 @@ fn fingerprint(name: &str, args: &serde_json::Value) -> u64 {
 impl Agent {
     pub fn new(cfg: Config, perms: PermissionEngine, workspace: &Path,
                max_turns: usize, events: Option<Sender<AgentEvent>>) -> Result<Self> {
+        // уровень ризонинга из конфига применяем к extra_body один раз здесь —
+        // дальше его пересобирают только switch_model и set_reasoning_effort
+        let effort = crate::models::normalize_effort(&cfg.reasoning_effort).to_string();
+        let extra_body = crate::models::apply_effort(&cfg.model, cfg.extra_body.clone(), &effort);
         let api = ApiClient::new(
             cfg.base_url.as_deref().unwrap(),
             cfg.api_key()?,
             &cfg.model,
             cfg.api_timeout_secs,
-            cfg.extra_body.clone(),
+            extra_body.clone(),
             cfg.max_output_tokens,
         )?;
         let transcript_dir = workspace.join(".theseus");
@@ -392,6 +402,7 @@ impl Agent {
             env: tool_env,
             workspace: workspace.to_path_buf(),
             model: cfg.model.clone(),
+            effort,
             context_limit: cfg.context_limit_tokens,
             transcript_dir,
             session_ts,
@@ -404,7 +415,7 @@ impl Agent {
                 api_key: cfg.api_key().unwrap_or_default().to_string(),
                 model: cfg.model.clone(),
                 timeout_secs: cfg.api_timeout_secs,
-                extra_body: cfg.extra_body.clone(),
+                extra_body,
                 max_output_tokens: cfg.max_output_tokens,
             },
             last_prompt: 0,
@@ -443,14 +454,15 @@ impl Agent {
     /// Переключение модели в рантайме (/model в TUI): ApiClient пересобирается
     /// с новыми кредами (таймаут/extra_body/max_output — из sub-конфига),
     /// лимит контекста — из реестра. Sub-конфиг следует за главной моделью,
-    /// чтобы субагенты не продолжали ходить в старую. Для kimi (k3 и др.)
-    /// extra_body мышления СБРАСЫВАЕТСЯ: Kimi Code требует reasoning_content
-    /// в истории при thinking=enabled (400 по докам 08.08), а мы его не храним.
-    pub fn switch_model(&mut self, creds: &crate::models::Credentials, context_limit: usize,
-                        provider: &str) -> Result<()> {
-        if provider == "kimi" {
-            self.sub.extra_body = serde_json::json!({});
-        }
+    /// чтобы субагенты не продолжали ходить в старую. Ключи мышления
+    /// пересобираются под НОВУЮ модель из текущего уровня ризонинга
+    /// (models::apply_effort): kimi — срез (Kimi Code отвечает 400 на
+    /// thinking без reasoning_content в истории), thinking-модели —
+    /// enabled + effort, модели без thinking — чистое тело.
+    pub fn switch_model(&mut self, creds: &crate::models::Credentials, context_limit: usize)
+                        -> Result<()> {
+        self.sub.extra_body = crate::models::apply_effort(
+            &creds.model, std::mem::take(&mut self.sub.extra_body), &self.effort);
         self.api = ApiClient::new(&creds.url, &creds.key, &creds.model,
             self.sub.timeout_secs, self.sub.extra_body.clone(), self.sub.max_output_tokens)?;
         self.model = creds.model.clone();
@@ -459,6 +471,19 @@ impl Agent {
         self.sub.api_key = creds.key.clone();
         self.sub.model = creds.model.clone();
         Ok(())
+    }
+
+    /// Смена уровня ризонинга в рантайме (/think в TUI): extra_body мышления
+    /// пересобирается под текущую модель, ApiClient — с теми же кредами.
+    /// Возвращает нормализованный уровень (off|high|max) для сообщения в TUI.
+    pub fn set_reasoning_effort(&mut self, effort: &str) -> Result<String> {
+        let norm = crate::models::normalize_effort(effort);
+        self.effort = norm.to_string();
+        self.sub.extra_body = crate::models::apply_effort(
+            &self.model, std::mem::take(&mut self.sub.extra_body), norm);
+        self.api = ApiClient::new(&self.sub.base_url, &self.sub.api_key, &self.sub.model,
+            self.sub.timeout_secs, self.sub.extra_body.clone(), self.sub.max_output_tokens)?;
+        Ok(norm.to_string())
     }
 
     fn emit(&self, ev: AgentEvent) {
@@ -921,12 +946,10 @@ impl Agent {
         if let Some(id) = model_switch {
             match crate::models::resolve(&id) {
                 Ok(creds) => {
-                    let info = crate::models::find_model(&id);
-                    let limit = info.as_ref()
+                    let limit = crate::models::find_model(&id)
                         .map(|m| m.context_limit)
                         .unwrap_or(self.context_limit);
-                    let provider = info.map(|m| m.provider).unwrap_or_default();
-                    match self.switch_model(&creds, limit, &provider) {
+                    match self.switch_model(&creds, limit) {
                         Ok(()) => self.emit(AgentEvent::HookNote(format!(
                             "⚡ модель → {id} ({})", creds.url))),
                         Err(e) => self.emit(AgentEvent::Error(format!(
@@ -935,6 +958,17 @@ impl Agent {
                 }
                 Err(e) => self.emit(AgentEvent::Error(format!(
                     "не удалось переключить модель на {id}: {e:#}"))),
+            }
+        }
+        // смена уровня ризонинга из TUI (/think): на границе хода, после
+        // возможного переключения модели — пересборка extra_body под итоговую
+        let effort_switch = self.controls.effort_slot.lock().unwrap().take();
+        if let Some(e) = effort_switch {
+            match self.set_reasoning_effort(&e) {
+                Ok(norm) => self.emit(AgentEvent::HookNote(format!(
+                    "⚡ ризонинг → {}", crate::models::reasoning_label(&self.model, &norm)))),
+                Err(err) => self.emit(AgentEvent::Error(format!(
+                    "не удалось сменить уровень ризонинга: {err:#}"))),
             }
         }
         self.maybe_compact(messages, Some(turn_span))?;
@@ -1520,6 +1554,7 @@ mod tests {
             compact_mask_pct: 70,
             compact_prune_pct: 80,
             compact_summary_pct: 95,
+            reasoning_effort: "high".into(),
         };
         let perms = PermissionEngine::new(crate::permissions::Mode::Yolo, cfg.permission.clone(), ws);
         Agent::new(cfg, perms, ws, 4, None).expect("агент создаётся")

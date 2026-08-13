@@ -75,6 +75,7 @@ fn live_agent(
         compact_mask_pct: 70,
         compact_prune_pct: 80,
         compact_summary_pct: 95,
+        reasoning_effort: "high".into(),
     };
     let perms = PermissionEngine::new(Mode::Yolo, cfg.permission.clone(), ws);
     Agent::new(cfg, perms, ws, max_turns, events).ok()

@@ -400,6 +400,79 @@ pub fn find_model(id: &str) -> Option<ModelInfo> {
     builtin_models().into_iter().find(|m| m.id == id)
 }
 
+// ---------------------------------------------------------------------------
+// Уровень ризонинга (thinking effort): off | high | max
+// ---------------------------------------------------------------------------
+
+/// Нормализация уровня ризонинга из конфига/слэш-команды в канонический вид:
+/// `"off"` (без цепочки рассуждений), `"high"` (дефолт DeepSeek),
+/// `"max"` (максимальная глубина). Неизвестные значения мягко сводятся к
+/// `"high"` — уровень некритичен, падать из-за опечатки не надо; строгая
+/// проверка токена с сообщением пользователю — в TUI (`/think`).
+pub fn normalize_effort(s: &str) -> &'static str {
+    // Unicode-aware lowercase: русские алиасы («Выкл», «Максимум») тоже сводим
+    match s.trim().to_lowercase().as_str() {
+        "off" | "выкл" | "disabled" | "none" | "нет" => "off",
+        "max" | "макс" | "максимум" | "xhigh" => "max",
+        // low/medium DeepSeek API сам округляет до high — держим канон
+        _ => "high",
+    }
+}
+
+/// Ярлык уровня ризонинга для бейджа TUI с учётом возможностей модели:
+/// модель без thinking → «нет»; провайдер kimi → «встроенный» (K3 ризонит
+/// всегда, ключи мышления провайдер не принимает — см. [`apply_effort`]);
+/// иначе — по нормализованному уровню. Неизвестная модель (openai-compatible)
+/// показывает конфигурный уровень как есть.
+pub fn reasoning_label(model_id: &str, effort: &str) -> &'static str {
+    match find_model(model_id) {
+        Some(m) if !m.supports_thinking => "нет",
+        Some(m) if m.provider == "kimi" => "встроенный",
+        _ => match normalize_effort(effort) {
+            "off" => "выкл",
+            "max" => "max",
+            _ => "высокий",
+        },
+    }
+}
+
+/// Применить уровень ризонинга к `extra_body` запроса (единая точка:
+/// `Agent::new`, `switch_model`, `set_reasoning_effort`). Правила:
+///
+/// - модель вне реестра (openai-compatible) — тело без изменений;
+/// - провайдер kimi — `thinking`/`reasoning_effort` срезаются: Kimi Code
+///   отвергает thinking без reasoning_content в истории (HTTP 400, 08.08);
+/// - модель без поддержки thinking — те же ключи срезаются (deepseek-chat
+///   их не принимает);
+/// - `off` → `thinking.type = disabled`, effort не шлём;
+/// - `high`/`max` → `thinking.type = enabled`; `reasoning_effort` шлём только
+///   в документированных сочетаниях: DeepSeek — high|max (low/medium API
+///   округляет до high), Zhipu GLM-5.2 — только max (в оф. примерах лишь он).
+pub fn apply_effort(model_id: &str, base: serde_json::Value, effort: &str) -> serde_json::Value {
+    let Some(m) = find_model(model_id) else { return base };
+    let mut obj = base.as_object().cloned().unwrap_or_default();
+    if m.provider == "kimi" || !m.supports_thinking {
+        obj.remove("thinking");
+        obj.remove("reasoning_effort");
+        return serde_json::Value::Object(obj);
+    }
+    match normalize_effort(effort) {
+        "off" => {
+            obj.insert("thinking".into(), serde_json::json!({"type": "disabled"}));
+            obj.remove("reasoning_effort");
+        }
+        e => {
+            obj.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
+            if m.provider == "deepseek" || (m.provider == "zhipu" && e == "max") {
+                obj.insert("reasoning_effort".into(), serde_json::json!(e));
+            } else {
+                obj.remove("reasoning_effort");
+            }
+        }
+    }
+    serde_json::Value::Object(obj)
+}
+
 /// Разрешить модель в креды вызова API.
 ///
 /// Ключ читается из env-переменной, записанной в [`ProviderInfo::env_key`]
@@ -1044,5 +1117,79 @@ mod tests {
             api_key_env_names("no-such-model"),
             vec!["DEEPSEEK_API_KEY".to_string(), "THESEUS_API_KEY".to_string()]
         );
+    }
+
+    /// Нормализация уровня ризонинга: алиасы и русские формы сводятся к
+    /// канону off/high/max; мусор мягко падает в дефолт high.
+    #[test]
+    fn normalize_effort_canonical_forms() {
+        assert_eq!(normalize_effort("off"), "off");
+        assert_eq!(normalize_effort(" Выкл "), "off");
+        assert_eq!(normalize_effort("DISABLED"), "off");
+        assert_eq!(normalize_effort("max"), "max");
+        assert_eq!(normalize_effort("Максимум"), "max");
+        assert_eq!(normalize_effort("xhigh"), "max");
+        assert_eq!(normalize_effort("high"), "high");
+        assert_eq!(normalize_effort("medium"), "high"); // API округлит
+        assert_eq!(normalize_effort(""), "high");
+        assert_eq!(normalize_effort("turbo"), "high"); // мягкий дефолт
+    }
+
+    /// Ярлык уровня для бейджа TUI: возможности модели важнее конфига.
+    #[test]
+    fn reasoning_label_respects_model_capabilities() {
+        assert_eq!(reasoning_label("deepseek-v4-pro", "high"), "высокий");
+        assert_eq!(reasoning_label("deepseek-v4-pro", "max"), "max");
+        assert_eq!(reasoning_label("deepseek-v4-pro", "off"), "выкл");
+        // kimi: ризонинг встроенный, ключи не принимаются
+        assert_eq!(reasoning_label("k3", "high"), "встроенный");
+        assert_eq!(reasoning_label("k3", "off"), "встроенный");
+        // модель без thinking
+        assert_eq!(reasoning_label("deepseek-chat", "high"), "нет");
+        // неизвестная (openai-compatible) — показываем конфигурный уровень
+        assert_eq!(reasoning_label("local-qwen", "max"), "max");
+    }
+
+    /// Применение уровня к extra_body: thinking включается/выключается,
+    /// reasoning_effort шлём только в документированных сочетаниях.
+    #[test]
+    fn apply_effort_builds_provider_specific_body() {
+        let empty = serde_json::json!({});
+        // deepseek high: thinking enabled + effort high
+        let v = apply_effort("deepseek-v4-pro", empty.clone(), "high");
+        assert_eq!(v["thinking"], serde_json::json!({"type": "enabled"}));
+        assert_eq!(v["reasoning_effort"], serde_json::json!("high"));
+        // deepseek max
+        let v = apply_effort("deepseek-v4-flash", empty.clone(), "max");
+        assert_eq!(v["reasoning_effort"], serde_json::json!("max"));
+        // deepseek off: disabled, effort срезан
+        let v = apply_effort("deepseek-v4-pro", empty.clone(), "off");
+        assert_eq!(v["thinking"], serde_json::json!({"type": "disabled"}));
+        assert!(v.get("reasoning_effort").is_none());
+        // GLM: effort только max (в оф. примерах лишь он) — high не шлём
+        let v = apply_effort("glm-5.2", empty.clone(), "high");
+        assert_eq!(v["thinking"], serde_json::json!({"type": "enabled"}));
+        assert!(v.get("reasoning_effort").is_none());
+        let v = apply_effort("glm-5.2", empty, "max");
+        assert_eq!(v["reasoning_effort"], serde_json::json!("max"));
+    }
+
+    /// apply_effort: kimi и модели без thinking — ключи срезаются; неизвестная
+    /// модель — тело не трогаем; прочие ключи extra_body сохраняются.
+    #[test]
+    fn apply_effort_strips_or_preserves_by_model() {
+        let with_keys = serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high", "x": 1});
+        let v = apply_effort("k3", with_keys.clone(), "high");
+        assert!(v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
+            "kimi срезан: {v}");
+        assert_eq!(v["x"], serde_json::json!(1), "прочие ключи целы");
+        let v = apply_effort("deepseek-chat", with_keys.clone(), "max");
+        assert!(v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
+            "без thinking: {v}");
+        let v = apply_effort("custom-local-model", with_keys.clone(), "off");
+        assert_eq!(v, with_keys, "неизвестную модель не трогаем");
+        // null-база (конфиг без extra_body) → чистый объект, без мусора
+        let v = apply_effort("deepseek-v4-pro", serde_json::Value::Null, "high");
+        assert_eq!(v["thinking"], serde_json::json!({"type": "enabled"}));
     }
 }

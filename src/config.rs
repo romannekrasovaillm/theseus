@@ -77,6 +77,11 @@ pub struct Config {
     /// thinking-режим провайдера (deepseek: {"thinking":{"type":"enabled"}})
     #[serde(default)]
     pub extra_body: serde_json::Value,
+    /// Уровень ризонинга thinking-моделей: off | high (дефолт) | max.
+    /// Маппится в thinking.type/reasoning_effort при сборке extra_body
+    /// (models::apply_effort); в рантайме переключается /think в TUI.
+    #[serde(default = "default_effort")]
+    pub reasoning_effort: String,
     #[serde(default)]
     pub permission: PermissionConfig,
     /// MCP stdio-серверы (v0.2)
@@ -131,6 +136,7 @@ impl Default for PermissionConfig {
 }
 
 fn default_model() -> String { "deepseek-v4-flash".into() }
+fn default_effort() -> String { "high".into() }
 fn default_context_limit() -> usize { 120_000 }
 fn default_max_output() -> usize { 8_192 }
 fn default_timeout() -> u64 { 600 }
