@@ -15,6 +15,8 @@
 
 use std::env;
 use std::fmt;
+use std::net::{SocketAddr, TcpStream};
+use std::time::Duration;
 
 use anyhow::{anyhow, ensure, Context, Result};
 use serde::{Deserialize, Serialize};
@@ -78,6 +80,11 @@ pub struct ProviderInfo {
     pub default_headers: Vec<(String, String)>,
     /// env-переменная, переопределяющая `base_url` (локальные прокси, зеркала)
     pub base_url_env: Option<String>,
+    /// явный прокси для HTTP-клиента провайдера (напр. локальный egress-шлюз
+    /// `http://127.0.0.1:12080` для OpenRouter — доступ из РФ только через
+    /// VPN, см. models::ensure_egress); `None` — прямое соединение
+    #[serde(default)]
+    pub proxy: Option<String>,
     /// предупреждение о сетевых рисках (DPI/SNI-фильтрация у провайдеров РФ и т.п.)
     pub risk_note: Option<String>,
 }
@@ -177,6 +184,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("DEEPSEEK_BASE_URL".into()),
+            proxy: None,
             risk_note: None,
         },
         ProviderInfo {
@@ -192,6 +200,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("KIMI_BASE_URL".into()),
+            proxy: None,
             risk_note: None,
         },
         ProviderInfo {
@@ -203,6 +212,7 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("MOONSHOT_BASE_URL".into()),
+            proxy: None,
             risk_note: Some(
                 "DPI-риск: api.moonshot.ai задушен по SNI у части провайдеров РФ; \
                  при таймаутах используйте туннель/VPN либо зеркало api.kimi.com"
@@ -220,6 +230,22 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("ZHIPU_BASE_URL".into()),
+            proxy: None,
+            risk_note: None,
+        },
+        ProviderInfo {
+            name: "openrouter".into(),
+            base_url: "https://openrouter.ai/api/v1".into(),
+            env_key: Some("OPENROUTER_API_KEY".into()),
+            env_key_aliases: vec![],
+            // ключ можно держать в файле, не экспортируя в env (как у kimi)
+            key_file: Some("~/.openrouter_key".into()),
+            wire_api: WireApi::Chat,
+            default_headers: Vec::new(),
+            base_url_env: Some("OPENROUTER_BASE_URL".into()),
+            // доступ из РФ — через локальный egress-шлюз vpn-egress (sing-box);
+            // его автозапуск обеспечивает ensure_egress
+            proxy: Some("http://127.0.0.1:12080".into()),
             risk_note: None,
         },
         ProviderInfo {
@@ -231,12 +257,13 @@ pub fn builtin_providers() -> Vec<ProviderInfo> {
             wire_api: WireApi::Chat,
             default_headers: Vec::new(),
             base_url_env: Some("OPENAI_BASE_URL".into()),
+            proxy: None,
             risk_note: None,
         },
     ]
 }
 
-/// Встроенные модели всех провайдеров (12 шт.).
+/// Встроенные модели всех провайдеров (14 шт.).
 ///
 /// Модели `openai-compatible` в реестр не входят: их идентификаторы и лимиты
 /// задаются конфигом пользователя под конкретный эндпоинт.
@@ -364,6 +391,30 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             // ценовая подсказка уточняется — смотрите тарифы z.ai
             None,
         ),
+        // GLM-5.3: контекст 1M; thinking НЕ отключается (HTTP 1210 на
+        // thinking.type=disabled) — вместо off слать reasoning_effort low,
+        // допустимы low|high|max (см. apply_effort)
+        model(
+            "glm-5.3",
+            "zhipu",
+            1_000_000,
+            32_768,
+            true,
+            true,
+            None,
+        ),
+        // --- OpenRouter (openrouter.ai, агрегатор) ---
+        // stealth-модель: ризонинг скрытый; thinking включаем нативным
+        // для OpenRouter параметром reasoning.effort (см. apply_effort)
+        model(
+            "stealth/ox-alpha",
+            "openrouter",
+            1_048_576,
+            16_384,
+            true,
+            true,
+            None,
+        ),
     ]
 }
 
@@ -444,10 +495,13 @@ pub fn reasoning_label(model_id: &str, effort: &str) -> &'static str {
 ///   отвергает thinking без reasoning_content в истории (HTTP 400, 08.08);
 /// - модель без поддержки thinking — те же ключи срезаются (deepseek-chat
 ///   их не принимает);
-/// - `off` → `thinking.type = disabled`, effort не шлём;
+/// - `off` → `thinking.type = disabled`, effort не шлём; **исключение GLM-5.3**:
+///   провайдер не даёт отключить thinking (HTTP 1210), поэтому вместо off
+///   шлём включённый thinking с `reasoning_effort = low`;
 /// - `high`/`max` → `thinking.type = enabled`; `reasoning_effort` шлём только
 ///   в документированных сочетаниях: DeepSeek — high|max (low/medium API
-///   округляет до high), Zhipu GLM-5.2 — только max (в оф. примерах лишь он).
+///   округляет до high), Zhipu GLM-5.2 — только max (в оф. примерах лишь он),
+///   Zhipu GLM-5.3 — high|max (полный диапазон low|high|max).
 pub fn apply_effort(model_id: &str, base: serde_json::Value, effort: &str) -> serde_json::Value {
     let Some(m) = find_model(model_id) else { return base };
     let mut obj = base.as_object().cloned().unwrap_or_default();
@@ -456,14 +510,38 @@ pub fn apply_effort(model_id: &str, base: serde_json::Value, effort: &str) -> se
         obj.remove("reasoning_effort");
         return serde_json::Value::Object(obj);
     }
+    // OpenRouter: нативный параметр reasoning (провайдер-агностичный уровень
+    // ризонинга), а не deepseek-подобный thinking-объект. «max» у OpenRouter
+    // нет — сводим к high; «off» — убираем ключ (дефолт провайдера; у stealth
+    // ризонинг всё равно встроенный и скрытый).
+    if m.provider == "openrouter" {
+        obj.remove("thinking");
+        obj.remove("reasoning_effort");
+        match normalize_effort(effort) {
+            "off" => {
+                obj.remove("reasoning");
+            }
+            // «max» у OpenRouter нет — сводим к high
+            _ => {
+                obj.insert("reasoning".into(), serde_json::json!({"effort": "high"}));
+            }
+        }
+        return serde_json::Value::Object(obj);
+    }
     match normalize_effort(effort) {
+        "off" if m.id == "glm-5.3" => {
+            // GLM-5.3: thinking не отключается (ошибка 1210) — «выкл»
+            // эмулируем минимальным уровнем ризонинга
+            obj.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
+            obj.insert("reasoning_effort".into(), serde_json::json!("low"));
+        }
         "off" => {
             obj.insert("thinking".into(), serde_json::json!({"type": "disabled"}));
             obj.remove("reasoning_effort");
         }
         e => {
             obj.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-            if m.provider == "deepseek" || (m.provider == "zhipu" && e == "max") {
+            if m.provider == "deepseek" || (m.provider == "zhipu" && (e == "max" || m.id == "glm-5.3")) {
                 obj.insert("reasoning_effort".into(), serde_json::json!(e));
             } else {
                 obj.remove("reasoning_effort");
@@ -641,6 +719,71 @@ pub fn estimate_context_pct(used_tokens: usize, model: &ModelInfo) -> f64 {
     used_tokens as f64 * 100.0 / model.context_limit as f64
 }
 
+// --- Egress-шлюз для провайдеров с явным прокси (OpenRouter) ---
+
+/// Таймаут одной TCP-пробы порта шлюза (короткий — это loopback).
+const EGRESS_CONNECT_TIMEOUT: Duration = Duration::from_millis(300);
+/// Сколько ждём поднятия порта после `systemctl --user start` (~5 с).
+const EGRESS_WAIT: Duration = Duration::from_secs(5);
+/// Шаг опроса порта в период ожидания.
+const EGRESS_POLL: Duration = Duration::from_millis(400);
+
+/// Адрес `host:port` из URL прокси (`http://127.0.0.1:12080` → сокет-адрес).
+/// Чистая функция — решение «куда пробовать» тестируется без сети.
+fn egress_addr(proxy: &str) -> Option<SocketAddr> {
+    let authority = proxy
+        .split_once("://")
+        .map(|(_, rest)| rest)
+        .unwrap_or(proxy)
+        .trim_end_matches('/');
+    authority.parse().ok()
+}
+
+/// Жив ли порт шлюза: один TCP-connect с коротким таймаутом.
+fn egress_reachable(addr: SocketAddr) -> bool {
+    TcpStream::connect_timeout(&addr, EGRESS_CONNECT_TIMEOUT).is_ok()
+}
+
+/// Обеспечить egress-шлюз для провайдера модели, если тот объявляет прокси
+/// (`ProviderInfo::proxy`, сейчас — только OpenRouter: доступ к openrouter.ai
+/// из РФ — через локальный sing-box на 127.0.0.1:12080, сервис vpn-egress).
+///
+/// Шлюз уже слушает — `None` (ничего сообщать не надо). Провайдеру прокси
+/// не нужен или модель неизвестна — тоже `None`. Иначе: запуск сервиса через
+/// `systemctl --user start vpn-egress` (единственный санкционированный способ
+/// управления; ручной запуск sing-box запрещён инвариантами платформы) и
+/// ожидание порта до ~5 с. Возвращаемая строка — заметка для статуса/лога:
+/// успех автозапуска либо мягкое предупреждение (без паники: запрос всё равно
+/// пойдёт и, возможно, завершится понятной сетевой ошибкой).
+pub fn ensure_egress(model_id: &str) -> Option<String> {
+    let provider = find_model(model_id).and_then(|m| find_provider(&m.provider))?;
+    let addr = egress_addr(provider.proxy.as_deref()?)?;
+    if egress_reachable(addr) {
+        return None;
+    }
+    let _ = std::process::Command::new("systemctl")
+        .args(["--user", "start", "vpn-egress"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status();
+    let started = std::time::Instant::now();
+    while started.elapsed() < EGRESS_WAIT {
+        std::thread::sleep(EGRESS_POLL);
+        if egress_reachable(addr) {
+            return Some(format!(
+                "🛰 vpn-egress запущен автоматически ({name})",
+                name = provider.name
+            ));
+        }
+    }
+    Some(format!(
+        "⚠ vpn-egress недоступен: {addr} не слушает после автозапуска — \
+         запросы {name} могут не пройти (проверьте systemctl --user status vpn-egress)",
+        name = provider.name
+    ))
+}
+
 /// До `limit` ближайших к `id` идентификаторов моделей по Левенштейну.
 ///
 /// Порог допуска — `len/2 + 1` редактирований: опечатки в 1–2 символа ловятся,
@@ -752,7 +895,7 @@ mod tests {
     fn registry_is_internally_consistent() {
         let providers = builtin_providers();
         let names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
-        for expected in ["deepseek", "kimi", "moonshot", "zhipu", "openai-compatible"] {
+        for expected in ["deepseek", "kimi", "moonshot", "zhipu", "openrouter", "openai-compatible"] {
             assert!(names.contains(&expected), "нет провайдера {expected}");
         }
         for p in &providers {
@@ -763,7 +906,7 @@ mod tests {
             assert!(p.requires_key(), "{}: ожидался env_key", p.name);
         }
         let models = builtin_models();
-        assert_eq!(models.len(), 12);
+        assert_eq!(models.len(), 14);
         let mut seen = HashSet::new();
         for m in &models {
             assert!(seen.insert(m.id.as_str()), "дубликат id {}", m.id);
@@ -792,6 +935,42 @@ mod tests {
         assert!(find_provider("нет-такого").is_none());
     }
 
+    /// Egress-прокси объявлен только у openrouter (локальный шлюз vpn-egress);
+    /// остальные провайдеры ходят напрямую.
+    #[test]
+    fn only_openrouter_declares_egress_proxy() {
+        let or = find_provider("openrouter").unwrap();
+        assert_eq!(or.proxy.as_deref(), Some("http://127.0.0.1:12080"));
+        for name in ["deepseek", "kimi", "moonshot", "zhipu", "openai-compatible"] {
+            assert!(find_provider(name).unwrap().proxy.is_none(), "{name}: прокси не ожидался");
+        }
+    }
+
+    /// Разбор адреса из URL прокси: со схемой и без, с завершающим слешем;
+    /// мусор — None. Чистая функция, сетевых вызовов нет.
+    #[test]
+    fn egress_addr_parses_proxy_urls() {
+        let want: SocketAddr = "127.0.0.1:12080".parse().unwrap();
+        assert_eq!(egress_addr("http://127.0.0.1:12080"), Some(want));
+        assert_eq!(egress_addr("http://127.0.0.1:12080/"), Some(want));
+        assert_eq!(egress_addr("socks5://127.0.0.1:12080"), Some(want));
+        assert_eq!(egress_addr("127.0.0.1:12080"), Some(want));
+        assert_eq!(egress_addr(""), None);
+        assert_eq!(egress_addr("http://"), None);
+        assert_eq!(egress_addr("не-адрес"), None);
+    }
+
+    /// ensure_egress — no-op для провайдеров без прокси и неизвестных моделей:
+    /// возвращает None без системных вызовов (решение принято чистой логикой
+    /// по реестру). Живой прогон автозапуска vpn-egress в тестах не делаем —
+    /// это территория ручной проверки.
+    #[test]
+    fn ensure_egress_noop_without_proxy() {
+        assert_eq!(ensure_egress("deepseek-v4-flash"), None);
+        assert_eq!(ensure_egress("k3"), None);
+        assert_eq!(ensure_egress("нет-такой-модели"), None);
+    }
+
     /// Flash и GLM-5.2 в реестре с правильными провайдерами и env-ключами
     /// (быстрый выбор /model: pro | flash | glm).
     #[test]
@@ -805,6 +984,10 @@ mod tests {
         let glm = find_model("glm-5.2").expect("glm-5.2 в реестре");
         assert_eq!(glm.provider, "zhipu");
         assert!(glm.supports_thinking && glm.supports_tools);
+        let glm53 = find_model("glm-5.3").expect("glm-5.3 в реестре");
+        assert_eq!(glm53.provider, "zhipu");
+        assert_eq!(glm53.context_limit, 1_000_000);
+        assert!(glm53.supports_thinking && glm53.supports_tools);
         let zhipu = find_provider("zhipu").expect("провайдер zhipu");
         assert_eq!(zhipu.env_key.as_deref(), Some("ZHIPU_API_KEY"));
         assert_eq!(zhipu.base_url, "https://api.z.ai/api/paas/v4");
@@ -1078,6 +1261,7 @@ mod tests {
             wire_api: WireApi::Chat,
             default_headers: vec![],
             base_url_env: None,
+            proxy: None,
             risk_note: None,
         };
         let model = find_model("k3").unwrap();
@@ -1170,8 +1354,31 @@ mod tests {
         let v = apply_effort("glm-5.2", empty.clone(), "high");
         assert_eq!(v["thinking"], serde_json::json!({"type": "enabled"}));
         assert!(v.get("reasoning_effort").is_none());
-        let v = apply_effort("glm-5.2", empty, "max");
+        let v = apply_effort("glm-5.2", empty.clone(), "max");
         assert_eq!(v["reasoning_effort"], serde_json::json!("max"));
+        // GLM-5.3: полный диапазон low|high|max — high шлём (кейс 20.08)
+        let v = apply_effort("glm-5.3", empty.clone(), "high");
+        assert_eq!(v["thinking"], serde_json::json!({"type": "enabled"}));
+        assert_eq!(v["reasoning_effort"], serde_json::json!("high"));
+        // GLM-5.3: thinking не отключается (HTTP 1210) — off эмулируется low
+        let v = apply_effort("glm-5.3", empty, "off");
+        assert_eq!(v["thinking"], serde_json::json!({"type": "enabled"}));
+        assert_eq!(v["reasoning_effort"], serde_json::json!("low"));
+    }
+
+    /// apply_effort: openrouter (stealth/ox-alpha) — нативный reasoning.effort,
+    /// thinking/reasoning_effort срезаются; «off» убирает ключ, «max» → high.
+    #[test]
+    fn apply_effort_openrouter_native_reasoning() {
+        let with_keys = serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"});
+        let v = apply_effort("stealth/ox-alpha", with_keys.clone(), "high");
+        assert_eq!(v["reasoning"], serde_json::json!({"effort": "high"}));
+        assert!(v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
+            "deepseek-ключи срезаны: {v}");
+        let v = apply_effort("stealth/ox-alpha", with_keys.clone(), "max");
+        assert_eq!(v["reasoning"], serde_json::json!({"effort": "high"}), "max → high");
+        let v = apply_effort("stealth/ox-alpha", with_keys, "off");
+        assert!(v.get("reasoning").is_none(), "off — ключ убран: {v}");
     }
 
     /// apply_effort: kimi и модели без thinking — ключи срезаются; неизвестная

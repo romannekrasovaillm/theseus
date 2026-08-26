@@ -104,7 +104,7 @@ static BUILTIN: &[SlashCmd] = &[
         name: "model",
         aliases: &["m"],
         summary: "Показать или сменить текущую модель",
-        usage: "/model [1|2|3|pro|flash|glm]",
+        usage: "/model [1|2|3|4|5|6|pro|flash|glm|k3|glm-5.3|ox]",
         kind: SlashKind::Local,
     },
     SlashCmd {

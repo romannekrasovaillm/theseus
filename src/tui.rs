@@ -1927,14 +1927,16 @@ fn push_lines(app: &mut TuiApp, text: &str, role: ThemeRole) {
 }
 
 /// Быстрый выбор модели в /model (порядок = нумерация в меню).
-const MODEL_CHOICES: [(&str, &str); 4] = [
+const MODEL_CHOICES: [(&str, &str); 6] = [
     ("deepseek-v4-pro", "DeepSeek V4 Pro — фронтир-ризонинг"),
     ("deepseek-v4-flash", "DeepSeek V4 Flash — быстрый и дешёвый (дефолт)"),
     ("glm-5.2", "GLM-5.2 (Zhipu, ключ ZHIPU_API_KEY)"),
     ("k3", "Kimi K3 (Kimi Code, ключ KIMI_API_KEY)"),
+    ("glm-5.3", "GLM-5.3 (Zhipu, 1M контекст, ключ ZHIPU_API_KEY)"),
+    ("stealth/ox-alpha", "OpenRouter Ox Alpha (stealth, reasoning)"),
 ];
 
-/// Разрешение аргумента /model: номер из меню, алиас или точный id из тройки.
+/// Разрешение аргумента /model: номер из меню, алиас или точный id из реестра.
 fn resolve_model_choice(arg: &str) -> Option<&'static str> {
     let a = arg.trim().to_lowercase();
     match a.as_str() {
@@ -1942,6 +1944,8 @@ fn resolve_model_choice(arg: &str) -> Option<&'static str> {
         "2" | "flash" | "v4flash" | "v4-flash" | "deepseek-v4-flash" => Some("deepseek-v4-flash"),
         "3" | "glm" | "glm5.2" | "glm-5.2" => Some("glm-5.2"),
         "4" | "k3" | "kimi" | "kimik3" | "kimi-k3" => Some("k3"),
+        "5" | "glm5.3" | "glm-5.3" | "glm53" => Some("glm-5.3"),
+        "6" | "openrouter" | "ox" | "ox-alpha" | "stealth/ox-alpha" => Some("stealth/ox-alpha"),
         _ => None,
     }
 }
@@ -1953,7 +1957,7 @@ fn model_menu_lines(model_info: &str) -> Vec<String> {
     for (i, (id, desc)) in MODEL_CHOICES.iter().enumerate() {
         out.push(format!("  {}. {id} — {desc}", i + 1));
     }
-    out.push("переключить: /model 1|2|3|4 или /model pro|flash|glm|k3".to_string());
+    out.push("переключить: /model 1|2|3|4|5|6 или /model pro|flash|glm|k3|glm-5.3|ox".to_string());
     out
 }
 
@@ -2572,7 +2576,7 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
                         }
                         None => {
                             app.push(vec![Span::styled(
-                                format!("неизвестная модель «{arg}» — варианты: /model 1|2|3 или pro|flash|glm"), error)]);
+                                format!("неизвестная модель «{arg}» — варианты: /model 1|2|3|4|5|6 или pro|flash|glm|k3|glm-5.3|ox"), error)]);
                         }
                     }
                 }
@@ -3324,6 +3328,10 @@ mod ui_helpers_tests {
             ("3", "glm-5.2"), ("glm", "glm-5.2"), ("GLM-5.2", "glm-5.2"),
             ("4", "k3"), ("k3", "k3"), ("kimi", "k3"),
             ("kimi-k3", "k3"),
+            ("5", "glm-5.3"), ("glm-5.3", "glm-5.3"), ("GLM53", "glm-5.3"),
+            ("6", "stealth/ox-alpha"), ("ox", "stealth/ox-alpha"),
+            ("openrouter", "stealth/ox-alpha"), ("ox-alpha", "stealth/ox-alpha"),
+            ("stealth/ox-alpha", "stealth/ox-alpha"),
         ] {
             assert_eq!(resolve_model_choice(arg), Some(expected), "аргумент: {arg}");
         }
@@ -3338,7 +3346,9 @@ mod ui_helpers_tests {
         assert!(menu[2].contains("2. deepseek-v4-flash"), "{menu:?}");
         assert!(menu[3].contains("3. glm-5.2"), "{menu:?}");
         assert!(menu[4].contains("4. k3"), "{menu:?}");
-        assert!(menu[5].contains("/model 1|2|3|4"), "{menu:?}");
+        assert!(menu[5].contains("5. glm-5.3"), "{menu:?}");
+        assert!(menu[6].contains("6. stealth/ox-alpha"), "{menu:?}");
+        assert!(menu[7].contains("/model 1|2|3|4|5|6"), "{menu:?}");
     }
 
     /// Пикер сессий: заголовок — первая user-реплика (одной строкой, с усечением),

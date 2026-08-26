@@ -73,8 +73,8 @@ pub struct Controls {
     /// (v0.7): BgRegistry пушит при спавне и помечает done при завершении
     pub bg_snapshot: Arc<Mutex<Vec<crate::background::BgTaskInfo>>>,
     /// запрос переключения модели из TUI (/model): id модели из реестра
-    /// (deepseek-v4-pro | deepseek-v4-flash | glm-5.2); применяется на
-    /// границе хода — следующий API-вызов уже идёт в новую модель
+    /// (deepseek-v4-pro | deepseek-v4-flash | glm-5.2 | glm-5.3 | k3);
+    /// применяется на границе хода — следующий API-вызов уже идёт в новую модель
     pub model_slot: Arc<Mutex<Option<String>>>,
     /// запрос смены уровня ризонинга из TUI (/think): off|high|max;
     /// применяется на границе хода (пересборка extra_body мышления)
@@ -396,7 +396,7 @@ impl Agent {
         tool_env.sandbox = cfg.sandbox;
         // общий атомик режима — для обхода sandbox в Max (ToolEnv::sandbox_effective)
         tool_env.set_mode_override(perms.mode_override_handle());
-        Ok(Agent {
+        let agent = Agent {
             api,
             perms,
             env: tool_env,
@@ -441,7 +441,19 @@ impl Agent {
             compact_prune_pct: cfg.compact_prune_pct,
             compact_summary_pct: cfg.compact_summary_pct,
             session_history: Vec::new(),
-        })
+        };
+        // egress-шлюз для провайдеров с явным прокси (OpenRouter): при
+        // стартовом резолве модели из конфига убеждаемся, что vpn-egress
+        // поднят (автозапуск при необходимости). Заметка — в транскрипт и,
+        // при подключённом канале событий, в TUI; без канала (старт до
+        // привязки TUI, headless -p) — в stderr, TUI её перерисует поверх.
+        if let Some(note) = crate::models::ensure_egress(&agent.model) {
+            agent.emit(AgentEvent::HookNote(note.clone()));
+            if agent.events.is_none() {
+                eprintln!("{note}");
+            }
+        }
+        Ok(agent)
     }
 
     /// Загрузить историю прежней сессии (resume в TUI из /resume N):
@@ -950,8 +962,16 @@ impl Agent {
                         .map(|m| m.context_limit)
                         .unwrap_or(self.context_limit);
                     match self.switch_model(&creds, limit) {
-                        Ok(()) => self.emit(AgentEvent::HookNote(format!(
-                            "⚡ модель → {id} ({})", creds.url))),
+                        Ok(()) => {
+                            self.emit(AgentEvent::HookNote(format!(
+                                "⚡ модель → {id} ({})", creds.url)));
+                            // egress-шлюз для провайдеров с явным прокси
+                            // (OpenRouter): автозапуск vpn-egress, заметка —
+                            // в статус TUI через тот же канал HookNote
+                            if let Some(note) = crate::models::ensure_egress(&id) {
+                                self.emit(AgentEvent::HookNote(note));
+                            }
+                        }
                         Err(e) => self.emit(AgentEvent::Error(format!(
                             "не удалось переключить модель на {id}: {e:#}"))),
                     }
