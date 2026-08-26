@@ -88,7 +88,37 @@ pub struct ApiClient {
     extra_body: serde_json::Value,
     max_output_tokens: usize,
     http: reqwest::blocking::Client,
+    /// Thinking+tools у DeepSeek и Zhipu GLM: assistant-сообщения истории обязаны
+    /// нести reasoning_content, иначе DeepSeek — HTTP 400 «reasoning_content ...
+    /// must be passed back» (доки thinking_mode#tool-calls), GLM — interleaved
+    /// thinking требует возврата thinking-блоков с tool-результатами, а Preserved
+    /// Thinking (clear_thinking: false) — полного немодифицированного reasoning
+    /// (доки docs.z.ai/guides/capabilities/thinking-mode). true → история
+    /// санитизируется перед отправкой (см. chat_inner, ensure_reasoning_passback).
+    reasoning_passback: bool,
     pub accounting: Accounting,
+}
+
+/// Плейсхолдер reasoning_content для assistant-реплик, чья цепочка утеряна
+/// (сессии старого формата без поля, обрыв стрима до reasoning-дельт): DeepSeek
+/// и GLM проверяют наличие непустого поля, содержимое вторично (Preserved
+/// Thinking GLM требует немодифицированный возврат — живые цепочки мы как раз
+/// не трогаем, заливаются только пробелы).
+const REASONING_PASSBACK_PLACEHOLDER: &str = "(reasoning утерян при компактификации истории)";
+
+/// Контракт thinking+tools (DeepSeek, Zhipu GLM): пробелы reasoning_content в
+/// assistant-сообщениях заливаются плейсхолдером. Существующие цепочки и прочие
+/// роли не трогаем; входная история не мутируется (работаем на копии для запроса).
+fn ensure_reasoning_passback(messages: &[Message]) -> Vec<Message> {
+    messages.iter().map(|m| {
+        if m.role == "assistant" && m.reasoning_content.as_deref().is_none_or(str::is_empty) {
+            let mut m = m.clone();
+            m.reasoning_content = Some(REASONING_PASSBACK_PLACEHOLDER.to_string());
+            m
+        } else {
+            m.clone()
+        }
+    }).collect()
 }
 
 impl ApiClient {
@@ -96,10 +126,21 @@ impl ApiClient {
         base_url: &str, api_key: &str, model: &str,
         timeout_secs: u64, extra_body: serde_json::Value, max_output_tokens: usize,
     ) -> Result<Self> {
-        let http = reqwest::blocking::Client::builder()
+        // Явный прокси провайдера из реестра (ProviderInfo::proxy — сейчас
+        // только OpenRouter → локальный egress-шлюз 127.0.0.1:12080, его
+        // автозапуск обеспечивает models::ensure_egress): через шлюз идёт
+        // трафик ТОЛЬКО этого провайдера, deepseek/kimi — напрямую, как
+        // раньше. Моделей вне реестра (openai-compatible) прокси не касается.
+        let mut builder = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(timeout_secs + 30))
-            .user_agent("theseus/0.1")
-            .build()?;
+            .user_agent("theseus/0.1");
+        if let Some(proxy) = crate::models::find_model(model)
+            .and_then(|m| crate::models::find_provider(&m.provider))
+            .and_then(|p| p.proxy)
+        {
+            builder = builder.proxy(reqwest::Proxy::all(&proxy)?);
+        }
+        let http = builder.build()?;
         // Kimi Code не принимает thinking без reasoning_content в истории
         // (HTTP 400, доки 08.08) — для провайдера kimi ключи мышления
         // выкидываем из extra_body на входе (единая точка: Agent::new,
@@ -112,6 +153,17 @@ impl ApiClient {
                 obj.remove("reasoning_effort");
             }
         }
+        // DeepSeek и Zhipu GLM thinking+tools: reasoning_content обязан вернуться
+        // на assistant-сообщениях истории (DeepSeek — на каждом, даже в ходах без
+        // tool_call, доки thinking_mode#tool-calls; GLM — interleaved thinking и
+        // Preserved Thinking, доки docs.z.ai/.../thinking-mode). Если цепочка
+        // где-то утеряна (компактификация, старый снимок сессии), подставим
+        // плейсхолдер на отправке — иначе 400 без ретрая (живой баг 25.08:
+        // L3-саммари без reasoning убивало сессию на DeepSeek).
+        let reasoning_passback =
+            crate::models::find_model(model)
+                .map(|m| m.provider == "deepseek" || m.provider == "zhipu") == Some(true)
+                && extra_body.pointer("/thinking/type").and_then(|t| t.as_str()) == Some("enabled");
         Ok(ApiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
@@ -119,6 +171,7 @@ impl ApiClient {
             extra_body,
             max_output_tokens,
             http,
+            reasoning_passback,
             accounting: Accounting::default(),
         })
     }
@@ -138,6 +191,16 @@ impl ApiClient {
     fn chat_inner(&mut self, messages: &[Message], tools: &serde_json::Value,
                   stream: bool, on_text: &mut dyn FnMut(&str),
                   should_stop: &dyn Fn() -> bool) -> Result<ChatResponse> {
+        // Санитизация истории под контракт thinking+tools (DeepSeek, Zhipu GLM) —
+        // только когда запрос несёт tools (без tools проброс reasoning не
+        // требуется и игнорируется).
+        let sanitized;
+        let messages: &[Message] = if self.reasoning_passback && !tools.is_null() {
+            sanitized = ensure_reasoning_passback(messages);
+            &sanitized
+        } else {
+            messages
+        };
         // Принудительная температура провайдера из реестра (Kimi K3 — ровно 1,
         // иначе HTTP 400); для остальных моделей — 0 (детерминизм ML-задач).
         let temperature = crate::models::find_model(&self.model)
@@ -422,5 +485,145 @@ mod tests {
         let custom = super::ApiClient::new(
             "http://127.0.0.1:9/v1", "k", "my-local-model", 1, thinking, 16).unwrap();
         assert!(custom.extra_body.get("thinking").is_some());
+    }
+
+    /// Флаг санитизации reasoning_passback — матрица провайдеров: sanitize
+    /// только у deepseek и zhipu (GLM interleaved/Preserved Thinking, доки
+    /// docs.z.ai) с явно включённым thinking. thinking disabled, kimi (thinking
+    /// срезается на входе), openrouter/ox-alpha (supports_thinking=false) и
+    /// модели вне реестра историю не трогают.
+    #[test]
+    fn reasoning_passback_flag_provider_matrix() {
+        let on = serde_json::json!({"thinking": {"type": "enabled"}});
+        let off = serde_json::json!({"thinking": {"type": "disabled"}});
+        let cases = [
+            // (модель, extra_body, ожидание флага)
+            ("deepseek-v4-flash", on.clone(), true),
+            ("deepseek-v4-pro", on.clone(), true),
+            ("deepseek-v4-flash", off.clone(), false),
+            ("deepseek-v4-flash", serde_json::json!({}), false),
+            ("glm-5.2", on.clone(), true),
+            ("glm-5.3", on.clone(), true),
+            ("glm-5.2", off.clone(), false),
+            ("k3", on.clone(), false),               // kimi — свой контракт
+            ("stealth/ox-alpha", on.clone(), false), // openrouter без thinking
+            ("my-local-model", on.clone(), false),   // вне реестра
+        ];
+        for (model, extra, expected) in cases {
+            let c = super::ApiClient::new("http://127.0.0.1:9/v1", "k", model, 1, extra, 16).unwrap();
+            assert_eq!(c.reasoning_passback, expected, "модель {model}");
+        }
+    }
+
+    /// ensure_reasoning_passback: заливает плейсхолдером ТОЛЬКО пробелы
+    /// (tool_calls без цепочки и финальный ответ без цепочки — DeepSeek требует
+    /// поле на каждом assistant-сообщении, когда запрос несёт tools); живые
+    /// цепочки и прочие роли не трогает; входная история не мутируется.
+    #[test]
+    fn ensure_reasoning_passback_fills_only_missing() {
+        use super::{ensure_reasoning_passback, Message, REASONING_PASSBACK_PLACEHOLDER, ToolCall, ToolFunction};
+        let tc = || ToolCall {
+            id: "c1".into(), kind: "function".into(),
+            function: ToolFunction { name: "bash".into(), arguments: "{}".into() },
+        };
+        let msgs = vec![
+            Message::system("s"),
+            Message::assistant(Some("CONTEXT COMPACTED: саммари".into()), None), // вставка L3
+            Message::assistant(None, Some(vec![tc()])),                          // tool_calls, цепочка утеряна
+            Message::tool("c1", "ok"),
+            Message::assistant(Some("a".into()), None).with_reasoning(Some("есть".into())),
+            Message::user("u"),
+        ];
+        let out = ensure_reasoning_passback(&msgs);
+        assert_eq!(out[1].reasoning_content.as_deref(), Some(REASONING_PASSBACK_PLACEHOLDER));
+        assert_eq!(out[2].reasoning_content.as_deref(), Some(REASONING_PASSBACK_PLACEHOLDER));
+        assert_eq!(out[4].reasoning_content.as_deref(), Some("есть"), "живая цепочка не тронута");
+        assert!(out[0].reasoning_content.is_none() && out[3].reasoning_content.is_none()
+            && out[5].reasoning_content.is_none(), "прочие роли не тронуты");
+        assert!(msgs[1].reasoning_content.is_none() && msgs[2].reasoning_content.is_none(),
+            "входная история не мутирована");
+        // плейсхолдер реально уходит в JSON (skip_serializing_if пропускает лишь None)
+        let wire = serde_json::to_string(&out[2]).unwrap();
+        assert!(wire.contains("reasoning_content"), "wire: {wire}");
+    }
+
+    /// Сквозная проверка на моке: deepseek + thinking + tools → в теле запроса у
+    /// КАЖДОГО assistant-сообщения есть reasoning_content (плейсхолдер на пробелах);
+    /// тот же клиент без tools шлёт историю как есть (контракт требует проброс
+    /// только для запросов с tools).
+    #[test]
+    fn deepseek_request_sanitizes_history_on_the_wire() {
+        use super::{Message, REASONING_PASSBACK_PLACEHOLDER};
+        use crate::mock_sse::{MockResponse, MockServer};
+        let server = MockServer::start(vec![MockResponse::text("ок"), MockResponse::text("ок")])
+            .expect("мок поднялся");
+        let mut client = super::ApiClient::new(
+            &format!("http://127.0.0.1:{}", server.port()), "k", "deepseek-v4-flash", 5,
+            serde_json::json!({"thinking": {"type": "enabled"}}), 16).unwrap();
+        let msgs = vec![
+            Message::system("s"),
+            Message::assistant(Some("CONTEXT COMPACTED: саммари без цепочки".into()), None),
+            Message::assistant(Some("a".into()), None).with_reasoning(Some("живая цепочка".into())),
+            Message::user("u"),
+        ];
+        let tools = serde_json::json!([{"type": "function",
+            "function": {"name": "bash", "parameters": {"type": "object"}}}]);
+        client.chat_stream(&msgs, &tools, &mut |_| {}, &|| false).expect("запрос с tools");
+        let reqs = server.requests();
+        let body: serde_json::Value = serde_json::from_str(&reqs[0].body).unwrap();
+        assert_eq!(body["messages"][1]["reasoning_content"], REASONING_PASSBACK_PLACEHOLDER,
+            "пробел залит на проводе: {}", body["messages"][1]);
+        assert_eq!(body["messages"][2]["reasoning_content"], "живая цепочка");
+        assert!(body["messages"][3].get("reasoning_content").is_none(), "user не тронут");
+        // без tools — как есть
+        client.chat_stream(&msgs, &serde_json::Value::Null, &mut |_| {}, &|| false).expect("запрос без tools");
+        let reqs = server.requests();
+        let body: serde_json::Value = serde_json::from_str(&reqs[1].body).unwrap();
+        assert!(body["messages"][1].get("reasoning_content").is_none(),
+            "без tools история не трогается: {}", body["messages"][1]);
+        // исходная история не мутирована обоими вызовами
+        assert!(msgs[1].reasoning_content.is_none());
+    }
+
+    /// Сквозная проверка для Zhipu GLM (interleaved/Preserved Thinking, доки
+    /// docs.z.ai/.../thinking-mode): glm-5.2 + thinking + tools → у каждого
+    /// assistant в запросе есть reasoning_content, а ЖИВАЯ цепочка уходит на
+    /// провод байт-в-байт (Preserved Thinking требует немодифицированный возврат
+    /// — sanitize заливает только пробелы). thinking=disabled → история как есть.
+    #[test]
+    fn zhipu_request_sanitizes_history_and_preserves_live_reasoning() {
+        use super::{Message, REASONING_PASSBACK_PLACEHOLDER};
+        use crate::mock_sse::{MockResponse, MockServer};
+        let server = MockServer::start(vec![MockResponse::text("ок"), MockResponse::text("ок")])
+            .expect("мок поднялся");
+        let msgs = vec![
+            Message::system("s"),
+            Message::assistant(Some("CONTEXT COMPACTED: саммари без цепочки".into()), None),
+            Message::assistant(Some("a".into()), None)
+                .with_reasoning(Some("живая GLM-цепочка: токены ↂ «» — не тронуть".into())),
+            Message::user("u"),
+        ];
+        let tools = serde_json::json!([{"type": "function",
+            "function": {"name": "bash", "parameters": {"type": "object"}}}]);
+        // thinking enabled → sanitize
+        let mut client = super::ApiClient::new(
+            &format!("http://127.0.0.1:{}", server.port()), "k", "glm-5.2", 5,
+            serde_json::json!({"thinking": {"type": "enabled"}}), 16).unwrap();
+        client.chat_stream(&msgs, &tools, &mut |_| {}, &|| false).expect("запрос с tools");
+        let body: serde_json::Value = serde_json::from_str(&server.requests()[0].body).unwrap();
+        assert_eq!(body["messages"][1]["reasoning_content"], REASONING_PASSBACK_PLACEHOLDER,
+            "пробел залит: {}", body["messages"][1]);
+        assert_eq!(body["messages"][2]["reasoning_content"],
+            "живая GLM-цепочка: токены ↂ «» — не тронуть",
+            "живая цепочка ушла немодифицированной: {}", body["messages"][2]);
+        // thinking disabled → sanitize выключен
+        let mut client = super::ApiClient::new(
+            &format!("http://127.0.0.1:{}", server.port()), "k", "glm-5.2", 5,
+            serde_json::json!({"thinking": {"type": "disabled"}}), 16).unwrap();
+        client.chat_stream(&msgs, &tools, &mut |_| {}, &|| false).expect("запрос, thinking off");
+        let body: serde_json::Value = serde_json::from_str(&server.requests()[1].body).unwrap();
+        assert!(body["messages"][1].get("reasoning_content").is_none(),
+            "thinking off — история не трогается: {}", body["messages"][1]);
+        assert!(msgs[1].reasoning_content.is_none(), "входная история не мутирована");
     }
 }

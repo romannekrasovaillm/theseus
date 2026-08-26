@@ -120,9 +120,16 @@ impl Agent {
                 return Err(e);
             }
         };
+        // цепочку рассуждений саммари тоже прикрепляем: DeepSeek thinking+tools
+        // требует reasoning_content на КАЖДОМ assistant-сообщении истории
+        // (доки thinking_mode#tool-calls), голая вставка саммари роняла
+        // следующий запрос с 400 «reasoning_content must be passed back»
+        // (живой баг 25.08, сессия 1787226001: L3 318→8 → 400 без ретрая)
+        let summary_reasoning = resp.reasoning.clone();
         let summary = resp.content.unwrap_or_else(|| "(пустая суммаризация)".into());
         let mut rebuilt = vec![messages[0].clone()];
-        rebuilt.push(Message::assistant(Some(format!("CONTEXT COMPACTED ({from} сообщений → саммари): {summary}")), None));
+        rebuilt.push(Message::assistant(Some(format!("CONTEXT COMPACTED ({from} сообщений → саммари): {summary}")), None)
+            .with_reasoning(summary_reasoning));
         rebuilt.extend_from_slice(&messages[cut..]);
         *messages = rebuilt;
         // перенос provider-overhead (урок Grok): калибруем счётчик заново, чтобы не зациклиться
@@ -240,6 +247,83 @@ mod compact_tests {
     use crate::api::Message;
 
     fn tool_msg(s: &str) -> Message { Message::tool("id1", s.to_string().repeat(30)) }
+
+    /// Регрессия (живой баг 25.08, сессия 1787226001): после компактификации
+    /// (L1+L2+L3) КАЖДОЕ assistant-сообщение истории обязано нести непустой
+    /// reasoning_content — контракт DeepSeek thinking+tools, иначе следующий
+    /// запрос падает с HTTP 400 «reasoning_content must be passed back» без
+    /// ретрая. Хвост L3 клонируется с цепочками, вставка саммари получает
+    /// цепочку ответа-суммаризатора.
+    #[test]
+    fn compaction_preserves_reasoning_passback_contract() {
+        use crate::api::ToolCall;
+        use crate::config::{Config, PermissionConfig};
+        use crate::mock_sse::{MockLlm, Scenario};
+        use crate::permissions::{Mode, PermissionEngine};
+
+        // суммаризатор отвечает с цепочкой рассуждений, как thinking-модель
+        let handle = MockLlm::with_scenarios(vec![
+            Scenario::new().reply_reasoning(&["обдумываю саммари"]).reply_text("краткое саммари"),
+        ]).serve_on_ephemeral().expect("мок поднялся");
+        let ws = std::env::temp_dir().join(format!(
+            "theseus_reason_passback_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        ));
+        std::fs::create_dir_all(&ws).expect("временный workspace");
+        let cfg = Config {
+            model: "mock-model".into(),
+            base_url: Some(handle.base_url.clone()),
+            api_key: Some("test-key".into()),
+            context_limit_tokens: 2_000,
+            max_output_tokens: 4_096,
+            api_timeout_secs: 30,
+            extra_body: serde_json::json!({}),
+            permission: PermissionConfig::default(),
+            mcp_servers: vec![],
+            permission_rules: vec![],
+            hooks: vec![],
+            skill_dirs: vec![],
+            web_allowed_domains: vec![],
+            sandbox: false,
+            compact_mask_pct: 70,
+            compact_prune_pct: 80,
+            compact_summary_pct: 95,
+            reasoning_effort: "high".into(),
+        };
+        let perms = PermissionEngine::new(Mode::Yolo, cfg.permission.clone(), &ws);
+        let mut agent = Agent::new(cfg, perms, &ws, 4, None).expect("агент создаётся");
+
+        // история с интерливинговым ризонингом: assistant(tool_calls+reasoning)
+        // + tool-результаты, объёма хватает на срабатывание всех трёх уровней
+        let big = "x".repeat(600);
+        let mut msgs = vec![Message::system("s")];
+        for i in 0..12 {
+            msgs.push(Message::assistant(Some(big.clone()), Some(vec![ToolCall {
+                id: format!("call_{i}"),
+                kind: "function".into(),
+                function: crate::api::ToolFunction { name: "read_file".into(), arguments: "{}".into() },
+            }])).with_reasoning(Some(format!("рассуждение {i}"))));
+            msgs.push(Message::tool(format!("call_{i}"), big.clone()));
+        }
+        agent.maybe_compact(&mut msgs, None).expect("компактификация");
+        assert!(msgs.iter().any(|m| m.role == "assistant"
+            && m.content.as_deref().is_some_and(|c| c.starts_with("CONTEXT COMPACTED"))),
+            "L3 реально отработала");
+        for (i, m) in msgs.iter().enumerate() {
+            if m.role == "assistant" {
+                assert!(m.reasoning_content.as_deref().is_some_and(|r| !r.is_empty()),
+                    "assistant #{i} (tools={}) без reasoning_content после компактификации",
+                    m.tool_calls.is_some());
+            }
+        }
+        // вставка саммари несёт цепочку суммаризатора, хвост — исходные цепочки
+        assert_eq!(msgs[1].reasoning_content.as_deref(), Some("обдумываю саммари"));
+        assert!(msgs.iter().any(|m| m.reasoning_content.as_deref() == Some("рассуждение 11")),
+            "хвост сохранил свежие цепочки");
+        std::fs::remove_dir_all(&ws).ok();
+    }
 
     #[test]
     fn dedupe_replaces_second_identical() {
