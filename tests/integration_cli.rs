@@ -147,7 +147,12 @@ impl ChildGuard {
                 .unwrap_or_else(|_| panic!("поток-читатель stderr запаниковал")),
         )
         .into_owned();
-        RunOutcome { status, stdout, stderr, timed_out }
+        RunOutcome {
+            status,
+            stdout,
+            stderr,
+            timed_out,
+        }
     }
 }
 
@@ -263,7 +268,10 @@ fn mock_url(server: &MockServer) -> String {
 
 /// Ответ-сценарий: вызов инструмента finish с заданным резюме.
 fn finish_call(summary: &str) -> MockResponse {
-    MockResponse::tool_call("finish", &serde_json::json!({"summary": summary}).to_string())
+    MockResponse::tool_call(
+        "finish",
+        &serde_json::json!({"summary": summary}).to_string(),
+    )
 }
 
 /// Ответ-сценарий: вызов инструмента bash с заданной командой.
@@ -297,11 +305,8 @@ fn max_tokens(req: &RecordedRequest) -> u64 {
 #[test]
 fn finish_tool_exits_zero_and_prints_finish() {
     let ws = TempWs::new("finish_ok");
-    let server = MockServer::start(vec![
-        finish_call("задача выполнена: мок-проверка"),
-        spare(),
-    ])
-    .expect("старт мок-сервера");
+    let server = MockServer::start(vec![finish_call("задача выполнена: мок-проверка"), spare()])
+        .expect("старт мок-сервера");
     let out = spawn_headless(&ws, &mock_url(&server), "сделай простую задачу", &[])
         .expect("spawn theseus")
         .wait_with_output(TIMEOUT);
@@ -498,9 +503,14 @@ fn unknown_tool_error_flows_back_to_model() {
         spare(),
     ])
     .expect("старт мок-сервера");
-    let out = spawn_headless(&ws, &mock_url(&server), "вызови несуществующий инструмент", &[])
-        .expect("spawn theseus")
-        .wait_with_output(TIMEOUT);
+    let out = spawn_headless(
+        &ws,
+        &mock_url(&server),
+        "вызови несуществующий инструмент",
+        &[],
+    )
+    .expect("spawn theseus")
+    .wait_with_output(TIMEOUT);
     out.assert_ok();
     let reqs = server.requests();
     assert!(
@@ -555,9 +565,14 @@ fn max_turns_limit_terminates_loop() {
         spare(),
     ])
     .expect("старт мок-сервера");
-    let out = spawn_headless(&ws, &mock_url(&server), "крутись вечно", &["--max-turns", "3"])
-        .expect("spawn theseus")
-        .wait_with_output(TIMEOUT);
+    let out = spawn_headless(
+        &ws,
+        &mock_url(&server),
+        "крутись вечно",
+        &["--max-turns", "3"],
+    )
+    .expect("spawn theseus")
+    .wait_with_output(TIMEOUT);
     // QA-TH-AGENT-002: обрыв по лимиту ходов — ненулевой код (3) для CI,
     // диагностика лимита остаётся в stdout
     assert!(!out.timed_out, "процесс превысил таймаут");
@@ -598,7 +613,11 @@ fn missing_api_key_fails_fast() {
     let out = ChildGuard::spawn(&mut cmd)
         .expect("spawn theseus")
         .wait_with_output(TIMEOUT);
-    assert!(!out.timed_out, "процесс завис без API-ключа:\n{}", out.stderr);
+    assert!(
+        !out.timed_out,
+        "процесс завис без API-ключа:\n{}",
+        out.stderr
+    );
     assert!(
         !out.status.success(),
         "без API-ключа процесс обязан завершаться ошибкой"

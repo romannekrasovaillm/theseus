@@ -70,8 +70,15 @@ fn live_client_with(
     timeout_secs: u64,
 ) -> Option<ApiClient> {
     let creds = live_credentials()?;
-    let client = ApiClient::new(&creds.url, &creds.key, &creds.model, timeout_secs, extra_body, max_output)
-        .unwrap_or_else(|e| panic!("ApiClient::new: {e:#}"));
+    let client = ApiClient::new(
+        &creds.url,
+        &creds.key,
+        &creds.model,
+        timeout_secs,
+        extra_body,
+        max_output,
+    )
+    .unwrap_or_else(|e| panic!("ApiClient::new: {e:#}"));
     Some(client)
 }
 
@@ -178,7 +185,9 @@ fn session_files(ws: &Path) -> Vec<PathBuf> {
 #[test]
 #[ignore = "live DeepSeek API"]
 fn models_resolve_live() -> Result<()> {
-    let Some(creds) = live_credentials() else { return Ok(()) };
+    let Some(creds) = live_credentials() else {
+        return Ok(());
+    };
     assert!(
         creds.url.contains("api.deepseek.com"),
         "ожидался URL api.deepseek.com, получен: {}",
@@ -229,7 +238,10 @@ fn chat_stream_text() -> Result<()> {
     assert!(!collected.trim().is_empty(), "собранный текст пуст");
     assert_eq!(resp.content.as_deref(), Some(collected.as_str()));
     assert!(resp.prompt_tokens > 0, "usage стрима: prompt_tokens");
-    assert!(resp.completion_tokens > 0, "usage стрима: completion_tokens");
+    assert!(
+        resp.completion_tokens > 0,
+        "usage стрима: completion_tokens"
+    );
     assert!(client.accounting.calls >= 1, "accounting.calls");
     assert!(client.accounting.prompt_tokens >= resp.prompt_tokens);
     Ok(())
@@ -244,7 +256,9 @@ fn chat_stream_text() -> Result<()> {
 #[test]
 #[ignore = "live DeepSeek API"]
 fn chat_stream_tool_call() -> Result<()> {
-    let Some(mut client) = live_client() else { return Ok(()) };
+    let Some(mut client) = live_client() else {
+        return Ok(());
+    };
     let tools = serde_json::json!([{
         "type": "function",
         "function": {
@@ -268,7 +282,10 @@ fn chat_stream_tool_call() -> Result<()> {
     )?;
     eprintln!(
         "chat_stream_tool_call: tool_calls={:?}, finish_reason={:?}",
-        resp.tool_calls.iter().map(|c| c.function.name.as_str()).collect::<Vec<_>>(),
+        resp.tool_calls
+            .iter()
+            .map(|c| c.function.name.as_str())
+            .collect::<Vec<_>>(),
         resp.finish_reason
     );
     assert!(
@@ -328,9 +345,18 @@ fn thinking_param() -> Result<()> {
 #[test]
 #[ignore = "live DeepSeek API"]
 fn auth_error_classified() -> Result<()> {
-    let Some(creds) = live_credentials() else { return Ok(()) };
-    let mut client = ApiClient::new(&creds.url, "sk-invalid", &creds.model, 30, serde_json::Value::Null, 64)
-        .unwrap_or_else(|e| panic!("ApiClient::new: {e:#}"));
+    let Some(creds) = live_credentials() else {
+        return Ok(());
+    };
+    let mut client = ApiClient::new(
+        &creds.url,
+        "sk-invalid",
+        &creds.model,
+        30,
+        serde_json::Value::Null,
+        64,
+    )
+    .unwrap_or_else(|e| panic!("ApiClient::new: {e:#}"));
     let err = match client.chat(&[Message::user("ping")], &serde_json::Value::Null) {
         Ok(resp) => panic!("невалидный ключ неожиданно прошёл: {resp:?}"),
         Err(e) => e,
@@ -338,14 +364,19 @@ fn auth_error_classified() -> Result<()> {
     let text = format!("{err:#}");
     eprintln!("auth_error_classified: {text}");
     // статус из текста «HTTP <code>: ...» (формат ApiClient::chat_inner)
-    let pos = text.find("HTTP ").context("в тексте ошибки нет «HTTP <статус>»")?;
+    let pos = text
+        .find("HTTP ")
+        .context("в тексте ошибки нет «HTTP <статус>»")?;
     let status: u16 = text[pos + 5..]
         .split(|c: char| !c.is_ascii_digit())
         .next()
         .unwrap_or_default()
         .parse()
         .context("не распарсить HTTP-статус после «HTTP »")?;
-    assert!(status == 401 || status == 403, "ожидался 401/403, получен {status}");
+    assert!(
+        status == 401 || status == 403,
+        "ожидался 401/403, получен {status}"
+    );
 
     let kind = retry::classify(Some(status), &text);
     assert_eq!(kind, ErrorKind::Auth);
@@ -367,17 +398,25 @@ fn auth_error_classified() -> Result<()> {
 fn agent_headless_live() -> Result<()> {
     let ws = TempWs::new("agent_headless");
     std::fs::write(ws.path().join("hello.txt"), "содержимое: 42")?;
-    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run("Прочитай hello.txt и ответь числом оттуда, затем вызови finish")?;
     eprintln!("agent_headless_live: {out}");
-    assert!(out.contains("42"), "финальный вывод обязан содержать «42»: {out}");
+    assert!(
+        out.contains("42"),
+        "финальный вывод обязан содержать «42»: {out}"
+    );
     let sessions = session_files(ws.path());
     assert!(
         !sessions.is_empty(),
         "снапшот сессии не записан в {}",
         ws.path().join(".theseus").display()
     );
-    assert!(std::fs::metadata(&sessions[0])?.len() > 0, "файл сессии пуст");
+    assert!(
+        std::fs::metadata(&sessions[0])?.len() > 0,
+        "файл сессии пуст"
+    );
     Ok(())
 }
 
@@ -427,7 +466,12 @@ fn run_child(cmd: &mut Command, timeout: Duration) -> std::io::Result<RunOutcome
             None => String::new(),
         }
     };
-    Ok(RunOutcome { status, stdout: join(stdout), stderr: join(stderr), timed_out })
+    Ok(RunOutcome {
+        status,
+        stdout: join(stdout),
+        stderr: join(stderr),
+        timed_out,
+    })
 }
 
 /// Читатель пайпа в отдельном потоке: дочитывает до EOF, отдаёт байты.
@@ -441,7 +485,13 @@ fn pipe_to_vec(mut pipe: impl std::io::Read + Send + 'static) -> std::thread::Jo
 
 /// Последние `n` символов строки (UTF-8-безопасно, для компактного лога).
 fn tail(s: &str, n: usize) -> String {
-    s.chars().rev().take(n).collect::<String>().chars().rev().collect()
+    s.chars()
+        .rev()
+        .take(n)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect()
 }
 
 /// target/debug/theseus --yolo -w <tempdir> -p "...": процесс завершается кодом
@@ -457,7 +507,11 @@ fn binary_e2e_live() -> Result<()> {
         "# Тестовый workspace\nРаботай только внутри этого каталога.\n",
     )?;
     let bin = theseus_bin();
-    assert!(bin.exists(), "бинарник не найден: {} (нужен cargo build)", bin.display());
+    assert!(
+        bin.exists(),
+        "бинарник не найден: {} (нужен cargo build)",
+        bin.display()
+    );
     let home = ws.path().join("home");
     std::fs::create_dir_all(&home)?;
     let mut cmd = Command::new(&bin);
@@ -465,15 +519,21 @@ fn binary_e2e_live() -> Result<()> {
         .env_remove("THESEUS_API_KEY")
         .env_remove("THESEUS_BASE_URL")
         .current_dir(ws.path())
-        .arg("-w").arg(ws.path())
+        .arg("-w")
+        .arg(ws.path())
         .arg("--yolo")
-        .arg("--max-turns").arg("8")
-        .arg("-p").arg("Создай файл answer.txt со строкой ГОТОВО и заверши")
+        .arg("--max-turns")
+        .arg("8")
+        .arg("-p")
+        .arg("Создай файл answer.txt со строкой ГОТОВО и заверши")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let out = run_child(&mut cmd, Duration::from_secs(300))?;
-    eprintln!("binary_e2e_live stderr (хвост):\n{}", tail(&out.stderr, 1_500));
+    eprintln!(
+        "binary_e2e_live stderr (хвост):\n{}",
+        tail(&out.stderr, 1_500)
+    );
     assert!(
         !out.timed_out,
         "процесс превысил таймаут\n--- stdout ---\n{}\n--- stderr ---\n{}",
@@ -482,7 +542,9 @@ fn binary_e2e_live() -> Result<()> {
     assert!(
         out.status.success(),
         "код выхода: {:?}\n--- stdout ---\n{}\n--- stderr ---\n{}",
-        out.status.code(), out.stdout, out.stderr
+        out.status.code(),
+        out.stdout,
+        out.stderr
     );
     let content = std::fs::read_to_string(ws.path().join("answer.txt"))
         .with_context(|| format!("answer.txt не создан; stdout:\n{}", out.stdout))?;
@@ -506,14 +568,19 @@ fn ml_task_live() -> Result<()> {
         lines.push_str(&format!("{{\"reward\": {}}}\n", 0.5 + f64::from(i) * 0.05));
     }
     std::fs::write(ws.path().join("rewards.jsonl"), &lines)?;
-    let Some(mut agent) = live_agent(ws.path(), 10, 131_072, None) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 10, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "В каталоге лежит rewards.jsonl (10 строк JSON с полем reward). \
          Напиши и запусти python3-скрипт, который считает mean/min/max по reward \
          (округли до 3 знаков), и назови результат. Затем вызови finish.",
     )?;
     eprintln!("ml_task_live: {out}");
-    assert!(out.contains("0.725"), "в ответе обязан быть mean 0.725: {out}");
+    assert!(
+        out.contains("0.725"),
+        "в ответе обязан быть mean 0.725: {out}"
+    );
     assert!(out.contains("0.95"), "в ответе обязан быть max 0.95: {out}");
     Ok(())
 }
@@ -541,14 +608,18 @@ fn compaction_live() -> Result<()> {
     }
     std::fs::write(ws.path().join("big.txt"), &big)?;
     let (tx, rx) = channel::<AgentEvent>();
-    let Some(mut agent) = live_agent(ws.path(), 6, 2_000, Some(tx)) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 6, 2_000, Some(tx)) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Прочитай файл big.txt инструментом read_file целиком, \
          затем вызови finish с кратким резюме прочитанного.",
     )?;
     eprintln!("compaction_live: {out}");
     let events: Vec<AgentEvent> = rx.try_iter().collect();
-    let compact_event = events.iter().any(|e| matches!(e, AgentEvent::Compact { .. }));
+    let compact_event = events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::Compact { .. }));
     let session_marker = session_files(ws.path())
         .iter()
         .filter_map(|p| std::fs::read_to_string(p).ok())
@@ -556,7 +627,11 @@ fn compaction_live() -> Result<()> {
     assert!(
         compact_event || session_marker,
         "компактификация не сработала (ни события Compact, ни маркера)\nсобытия: {}",
-        events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>().join("\n")
+        events
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
     );
     Ok(())
 }
@@ -572,7 +647,9 @@ fn compaction_live() -> Result<()> {
 #[ignore = "live DeepSeek API"]
 fn multi_turn_tools_live() -> Result<()> {
     let ws = TempWs::new("multi_turn");
-    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, None) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Выполни строго по шагам: 1) создай файл chain.txt с содержимым «alpha»; \
          2) через edit_file замени «alpha» на «alpha beta»; 3) прочитай chain.txt; \
@@ -581,8 +658,14 @@ fn multi_turn_tools_live() -> Result<()> {
     eprintln!("multi_turn_tools_live: {out}");
     let content = std::fs::read_to_string(ws.path().join("chain.txt"))
         .context("chain.txt не создан агентом")?;
-    assert!(content.contains("alpha beta"), "финальное содержимое файла: {content:?}");
-    assert!(out.contains("alpha beta"), "finish-резюме обязано содержать итог: {out}");
+    assert!(
+        content.contains("alpha beta"),
+        "финальное содержимое файла: {content:?}"
+    );
+    assert!(
+        out.contains("alpha beta"),
+        "finish-резюме обязано содержать итог: {out}"
+    );
     Ok(())
 }
 
@@ -594,16 +677,26 @@ fn multi_turn_tools_live() -> Result<()> {
 #[test]
 #[ignore = "live DeepSeek API"]
 fn chat_non_stream() -> Result<()> {
-    let Some(mut client) = live_client() else { return Ok(()) };
+    let Some(mut client) = live_client() else {
+        return Ok(());
+    };
     let resp = client.chat(
         &[Message::user("Ответь ровно: OK")],
         &serde_json::Value::Null,
     )?;
-    eprintln!("chat_non_stream: content={:?}, usage={}+{}, calls={}",
-        resp.content, resp.prompt_tokens, resp.completion_tokens, client.accounting.calls);
-    assert!(resp.content.as_deref().unwrap_or("").contains("OK"), "пустой ответ");
+    eprintln!(
+        "chat_non_stream: content={:?}, usage={}+{}, calls={}",
+        resp.content, resp.prompt_tokens, resp.completion_tokens, client.accounting.calls
+    );
+    assert!(
+        resp.content.as_deref().unwrap_or("").contains("OK"),
+        "пустой ответ"
+    );
     assert!(resp.prompt_tokens > 0, "prompt_tokens обязан быть >0");
-    assert!(resp.completion_tokens > 0, "completion_tokens обязан быть >0");
+    assert!(
+        resp.completion_tokens > 0,
+        "completion_tokens обязан быть >0"
+    );
     assert_eq!(client.accounting.calls, 1, "ровно 1 API-вызов");
     Ok(())
 }
@@ -612,14 +705,15 @@ fn chat_non_stream() -> Result<()> {
 #[test]
 #[ignore = "live DeepSeek API"]
 fn empty_tools_array() -> Result<()> {
-    let Some(mut client) = live_client() else { return Ok(()) };
-    let resp = client.chat(
-        &[Message::user("Скажи «принято».")],
-        &serde_json::json!([]),
-    )?;
+    let Some(mut client) = live_client() else {
+        return Ok(());
+    };
+    let resp = client.chat(&[Message::user("Скажи «принято».")], &serde_json::json!([]))?;
     eprintln!("empty_tools_array: {:?}", resp.content);
-    assert!(resp.content.as_deref().unwrap_or("").contains("принято"),
-        "модель должна ответить текстом: {resp:?}");
+    assert!(
+        resp.content.as_deref().unwrap_or("").contains("принято"),
+        "модель должна ответить текстом: {resp:?}"
+    );
     Ok(())
 }
 
@@ -633,15 +727,22 @@ fn empty_tools_array() -> Result<()> {
 fn agent_list_files_grep() -> Result<()> {
     let ws = TempWs::new("ls_grep");
     std::fs::create_dir_all(ws.path().join("src"))?;
-    std::fs::write(ws.path().join("src/main.rs"), "fn main() { println!(\"MARKER_HELLO_42\"); }")?;
-    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, None) else { return Ok(()) };
+    std::fs::write(
+        ws.path().join("src/main.rs"),
+        "fn main() { println!(\"MARKER_HELLO_42\"); }",
+    )?;
+    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Сначала вызови list_files для корня workspace, затем grep с паттерном MARKER_HELLO, \
          затем вызови finish с тем, что нашёл.",
     )?;
     eprintln!("agent_list_files_grep: {out}");
-    assert!(out.contains("MARKER_HELLO") || out.contains("main.rs"),
-        "агент обязан найти файл или маркер: {out}");
+    assert!(
+        out.contains("MARKER_HELLO") || out.contains("main.rs"),
+        "агент обязан найти файл или маркер: {out}"
+    );
     Ok(())
 }
 
@@ -650,12 +751,17 @@ fn agent_list_files_grep() -> Result<()> {
 #[ignore = "live DeepSeek API"]
 fn agent_bash_python() -> Result<()> {
     let ws = TempWs::new("bash_py");
-    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Выполни bash командой python3 -c 'print(2**10)' и вызови finish с результатом (число).",
     )?;
     eprintln!("agent_bash_python: {out}");
-    assert!(out.contains("1024"), "результат 2**10 обязан быть в ответе: {out}");
+    assert!(
+        out.contains("1024"),
+        "результат 2**10 обязан быть в ответе: {out}"
+    );
     Ok(())
 }
 
@@ -664,13 +770,18 @@ fn agent_bash_python() -> Result<()> {
 #[ignore = "live DeepSeek API"]
 fn agent_error_recovery() -> Result<()> {
     let ws = TempWs::new("err_rec");
-    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, None) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Выполни bash команду `nonexistent_command_xyz_123`. Когда получишь ошибку, \
          НЕ повторяй команду — сразу вызови finish с объяснением что произошло.",
     )?;
     eprintln!("agent_error_recovery: {out}");
-    assert!(!out.contains("лимит ходов"), "агент не должен был исчерпать лимит ходов: {out}");
+    assert!(
+        !out.contains("лимит ходов"),
+        "агент не должен был исчерпать лимит ходов: {out}"
+    );
     Ok(())
 }
 
@@ -684,7 +795,9 @@ fn agent_error_recovery() -> Result<()> {
 fn todo_gate_blocks_finish() -> Result<()> {
     let ws = TempWs::new("todogate");
     let (tx, rx) = channel::<AgentEvent>();
-    let Some(mut agent) = live_agent(ws.path(), 10, 131_072, Some(tx)) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 10, 131_072, Some(tx)) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Создай todo_write с одной задачей «разведка» в статусе pending. \
          Затем СРАЗУ вызови finish с резюме «проверил». \
@@ -692,9 +805,18 @@ fn todo_gate_blocks_finish() -> Result<()> {
     )?;
     eprintln!("todo_gate_blocks_finish: {out}");
     let events: Vec<AgentEvent> = rx.try_iter().collect();
-    let had_reject = events.iter().any(|e| matches!(e, AgentEvent::TodoRejected(_)));
-    assert!(had_reject, "ожидалось событие TodoRejected (гейт отклонил finish)\nсобытия: {}",
-        events.iter().map(|e| format!("{e:?}")).collect::<Vec<_>>().join("\n"));
+    let had_reject = events
+        .iter()
+        .any(|e| matches!(e, AgentEvent::TodoRejected(_)));
+    assert!(
+        had_reject,
+        "ожидалось событие TodoRejected (гейт отклонил finish)\nсобытия: {}",
+        events
+            .iter()
+            .map(|e| format!("{e:?}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
     Ok(())
 }
 
@@ -709,14 +831,18 @@ fn todo_gate_blocks_finish() -> Result<()> {
 #[ignore = "live DeepSeek API"]
 fn max_turns_enforced() -> Result<()> {
     let ws = TempWs::new("maxturns");
-    let Some(mut agent) = live_agent(ws.path(), 2, 131_072, None) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 2, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Создай пять файлов f1.txt, f2.txt, f3.txt, f4.txt, f5.txt \
          (в каждом — его номер), потом прочитай все пять обратно и вызови finish.",
     )?;
     eprintln!("max_turns_enforced: {out}");
-    assert!(out.contains("лимит ходов") || out.contains("лимит"),
-        "диагностика лимита ходов обязана быть в ответе: {out}");
+    assert!(
+        out.contains("лимит ходов") || out.contains("лимит"),
+        "диагностика лимита ходов обязана быть в ответе: {out}"
+    );
     Ok(())
 }
 
@@ -730,22 +856,31 @@ fn max_turns_enforced() -> Result<()> {
 fn memory_write_and_search() -> Result<()> {
     let ws = TempWs::new("memwrite");
     // Файл-маркер чтобы агент мог прочитать и «запомнить»
-    std::fs::write(ws.path().join("info.txt"), "СекретныйПароль=THESEUS_REVIEW_2026")?;
-    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else { return Ok(()) };
+    std::fs::write(
+        ws.path().join("info.txt"),
+        "СекретныйПароль=THESEUS_REVIEW_2026",
+    )?;
+    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Прочитай info.txt, запомни содержимое через memory_write как важный факт, затем finish.",
     )?;
     eprintln!("memory_write_and_search (write): {out}");
 
     // Второй агент в том же workspace ищет факт
-    let Some(mut agent2) = live_agent(ws.path(), 4, 131_072, None) else { return Ok(()) };
-    let out2 = agent2.run(
-        "Вызови memory_search с запросом «СекретныйПароль» и finish с найденным.",
-    )?;
+    let Some(mut agent2) = live_agent(ws.path(), 4, 131_072, None) else {
+        return Ok(());
+    };
+    let out2 =
+        agent2.run("Вызови memory_search с запросом «СекретныйПароль» и finish с найденным.")?;
     eprintln!("memory_write_and_search (search): {out2}");
     // Мягкий ассерт: memory_search мог не найти если память в ~/.theseus (не в workspace)
     // Проверяем что второй агент хотя бы отработал без ошибок
-    assert!(!out2.contains("лимит ходов"), "второй агент не должен исчерпать лимит");
+    assert!(
+        !out2.contains("лимит ходов"),
+        "второй агент не должен исчерпать лимит"
+    );
     Ok(())
 }
 
@@ -760,14 +895,21 @@ fn subagent_explore_live() -> Result<()> {
     let ws = TempWs::new("subagent");
     std::fs::create_dir_all(ws.path().join("data"))?;
     std::fs::write(ws.path().join("data/numbers.txt"), "один\nдва\nтри\n")?;
-    std::fs::write(ws.path().join("data/README.md"), "# Данные\nСекретный ключ: XYZ-789\n")?;
-    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else { return Ok(()) };
+    std::fs::write(
+        ws.path().join("data/README.md"),
+        "# Данные\nСекретный ключ: XYZ-789\n",
+    )?;
+    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, None) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Используй субагента task (subagent_type=Explore) чтобы найти файл data/README.md, \
          прочитать его и вернуть «Секретный ключ». Затем основным агентом вызови finish с ключом.",
     )?;
     eprintln!("subagent_explore_live: {out}");
-    assert!(out.contains("XYZ-789") || !out.contains("лимит ходов"),
-        "агент должен найти ключ или хотя бы не исчерпать лимит: {out}");
+    assert!(
+        out.contains("XYZ-789") || !out.contains("лимит ходов"),
+        "агент должен найти ключ или хотя бы не исчерпать лимит: {out}"
+    );
     Ok(())
 }

@@ -136,7 +136,11 @@ fn parallel_readonly_keeps_tool_contract() -> Result<()> {
     eprintln!("parallel_readonly_keeps_tool_contract: {out}");
 
     let requests = handle.requests();
-    assert!(requests.len() >= 2, "ожидалось >=2 запросов к моку: {}", requests.len());
+    assert!(
+        requests.len() >= 2,
+        "ожидалось >=2 запросов к моку: {}",
+        requests.len()
+    );
     let messages = requests[1]["messages"].as_array().unwrap();
     assert_tool_contract(messages);
     // spiral-напоминание (5 read-only подряд) допустимо, но только ПОСЛЕ
@@ -215,8 +219,14 @@ fn second_question_in_same_session_gets_fresh_answer() -> Result<()> {
     assert!(out1.contains("ПЕРВЫЙ"), "первый ответ: {out1}");
 
     let out2 = agent.run("вопрос второй")?;
-    assert!(out2.contains("ВТОРОЙ"), "второй ответ обязан быть свежим: {out2}");
-    assert!(!out2.contains("ПЕРВЫЙ"), "второй ответ не должен повторять первый: {out2}");
+    assert!(
+        out2.contains("ВТОРОЙ"),
+        "второй ответ обязан быть свежим: {out2}"
+    );
+    assert!(
+        !out2.contains("ПЕРВЫЙ"),
+        "второй ответ не должен повторять первый: {out2}"
+    );
     Ok(())
 }
 
@@ -242,15 +252,20 @@ fn session_history_carries_previous_qa_into_next_question() -> Result<()> {
     assert!(requests.len() >= 3, "запросов: {}", requests.len());
     // второй запрос (вопрос «а теперь короче») обязан содержать ПЕРВЫЙ вопрос
     let messages = requests[2]["messages"].as_array().unwrap();
-    let texts: Vec<&str> = messages.iter()
+    let texts: Vec<&str> = messages
+        .iter()
         .filter_map(|m| m["content"].as_str())
         .collect();
-    assert!(texts.iter().any(|c| c.contains("расскажи про Марс")),
+    assert!(
+        texts.iter().any(|c| c.contains("расскажи про Марс")),
         "первый вопрос потерян из истории второго запроса:\n{}",
-        serde_json::to_string_pretty(&requests[2]["messages"])?);
+        serde_json::to_string_pretty(&requests[2]["messages"])?
+    );
     // и финиш первого ответа (assistant) тоже в истории
-    assert!(messages.iter().any(|m| m["role"] == "assistant"),
-        "ответ ассистента потерян из истории второго запроса");
+    assert!(
+        messages.iter().any(|m| m["role"] == "assistant"),
+        "ответ ассистента потерян из истории второго запроса"
+    );
     // системный промпт — ровно один, первым
     let sys_count = messages.iter().filter(|m| m["role"] == "system").count();
     assert_eq!(sys_count, 1, "системных сообщений: {sys_count}");
@@ -272,12 +287,24 @@ fn abort_flag_does_not_kill_next_task() -> Result<()> {
 
     let mut agent = mock_agent(&handle.base_url, ws.path(), 4);
     // имитируем состояние «после Esc»: флаг abort взведён
-    agent.controls.abort.store(true, std::sync::atomic::Ordering::Relaxed);
+    agent
+        .controls
+        .abort
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let out = agent.run("новая задача после Esc")?;
-    assert!(out.contains("задача выполнена"), "новая задача убита флагом abort: {out}");
-    assert!(!out.contains("прервано пользователем"), "ложное прерывание: {out}");
+    assert!(
+        out.contains("задача выполнена"),
+        "новая задача убита флагом abort: {out}"
+    );
+    assert!(
+        !out.contains("прервано пользователем"),
+        "ложное прерывание: {out}"
+    );
     // и флаг сброшен
-    assert!(!agent.controls.abort.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!agent
+        .controls
+        .abort
+        .load(std::sync::atomic::Ordering::Relaxed));
     Ok(())
 }
 
@@ -297,22 +324,31 @@ fn reset_session_clears_history_on_next_run() -> Result<()> {
     let mut agent = mock_agent(&handle.base_url, ws.path(), 4);
     let _ = agent.run("вопрос первый")?;
     // пользователь вызвал /new — следующая задача начинает чистую сессию
-    agent.controls.reset_session.store(true, std::sync::atomic::Ordering::Relaxed);
+    agent
+        .controls
+        .reset_session
+        .store(true, std::sync::atomic::Ordering::Relaxed);
     let _ = agent.run("второй вопрос")?;
 
     let requests = handle.requests();
     let second = &requests[2];
     let messages = second["messages"].as_array().unwrap();
     // история второго вопроса НЕ содержит первый — только system + новый user
-    let user_texts: Vec<&str> = messages.iter()
+    let user_texts: Vec<&str> = messages
+        .iter()
         .filter(|m| m["role"] == "user")
         .filter_map(|m| m["content"].as_str())
         .collect();
-    assert!(!user_texts.iter().any(|c| c.contains("вопрос первый")),
-        "история не очищена: {user_texts:?}");
+    assert!(
+        !user_texts.iter().any(|c| c.contains("вопрос первый")),
+        "история не очищена: {user_texts:?}"
+    );
     assert!(user_texts.iter().any(|c| c.contains("второй вопрос")));
     // флаг сброшен
-    assert!(!agent.controls.reset_session.load(std::sync::atomic::Ordering::Relaxed));
+    assert!(!agent
+        .controls
+        .reset_session
+        .load(std::sync::atomic::Ordering::Relaxed));
     Ok(())
 }
 
@@ -325,7 +361,8 @@ fn turn_limit_extends_on_expert_confirm() -> Result<()> {
     std::fs::write(ws.path().join("a.txt"), "данные\n")?;
     let mk_server = || {
         MockLlm::with_scenarios(vec![
-            Scenario::new().reply_tool_call("read_file", r#"{"path":"a.txt"}"#)
+            Scenario::new()
+                .reply_tool_call("read_file", r#"{"path":"a.txt"}"#)
                 .finish_reason("tool_calls"),
             Scenario::new().reply_tool_call("finish", r#"{"summary":"готово после продления"}"#),
             Scenario::new().reply_text("ок"),
@@ -337,7 +374,10 @@ fn turn_limit_extends_on_expert_confirm() -> Result<()> {
     let mut agent = mock_agent(&handle.base_url, ws.path(), 1);
     agent.perm_answerer = Some(Box::new(|_q: &str| true));
     let out = agent.run("прочитай a.txt и заверши")?;
-    assert!(out.contains("готово после продления"), "продление не сработало: {out}");
+    assert!(
+        out.contains("готово после продления"),
+        "продление не сработало: {out}"
+    );
     assert!(!out.contains("лимит ходов"), "ложный лимит: {out}");
     // HookNote о продлении записан в транскрипт сессии (1 → 2)
     let events = std::fs::read_dir(ws.path().join(".theseus"))?
@@ -345,7 +385,10 @@ fn turn_limit_extends_on_expert_confirm() -> Result<()> {
         .filter(|e| e.file_name().to_string_lossy().starts_with("events-"))
         .filter_map(|e| std::fs::read_to_string(e.path()).ok())
         .collect::<String>();
-    assert!(events.contains("лимит ходов продлён до 2"), "нет HookNote: {events}");
+    assert!(
+        events.contains("лимит ходов продлён до 2"),
+        "нет HookNote: {events}"
+    );
     // 2) эксперт отклоняет (perm_answerer → false): прежняя ошибка на 1-м ходу
     let handle2 = mk_server().serve_on_ephemeral()?;
     let mut agent2 = mock_agent(&handle2.base_url, ws.path(), 1);
@@ -379,14 +422,20 @@ fn empty_model_response_not_persisted_to_history() -> Result<()> {
     eprintln!("empty_model_response_not_persisted: {out}");
 
     let requests = handle.requests();
-    assert!(requests.len() >= 2, "ожидалось >=2 запросов к моку: {}", requests.len());
+    assert!(
+        requests.len() >= 2,
+        "ожидалось >=2 запросов к моку: {}",
+        requests.len()
+    );
     for (i, req) in requests.iter().enumerate() {
         for m in req["messages"].as_array().unwrap() {
             if m["role"] == "assistant" {
                 let has_content = m["content"].as_str().is_some_and(|c| !c.is_empty());
                 let has_calls = m["tool_calls"].as_array().is_some_and(|c| !c.is_empty());
-                assert!(has_content || has_calls,
-                    "запрос #{i}: пустое assistant-сообщение в истории → 400: {m}");
+                assert!(
+                    has_content || has_calls,
+                    "запрос #{i}: пустое assistant-сообщение в истории → 400: {m}"
+                );
             }
         }
     }
@@ -400,7 +449,7 @@ fn api_error_surfaces_error_event() -> Result<()> {
     let ws = TempWs::new("err_visible");
     // expect_tool_call на несуществующий инструмент → мок отвечает HTTP 400
     let handle = MockLlm::with_scenarios(vec![
-        Scenario::new().expect_tool_call("definitely_missing_tool"),
+        Scenario::new().expect_tool_call("definitely_missing_tool")
     ])
     .serve_on_ephemeral()?;
 
@@ -412,8 +461,12 @@ fn api_error_surfaces_error_event() -> Result<()> {
     assert!(out.is_err(), "HTTP 400 обязан вернуть ошибку: {out:?}");
 
     let events: Vec<String> = rx.try_iter().map(|ev| format!("{ev:?}")).collect();
-    assert!(events.iter().any(|e| e.starts_with("Error") && e.contains("400")),
-        "нет Error-события про HTTP 400: {events:?}");
+    assert!(
+        events
+            .iter()
+            .any(|e| e.starts_with("Error") && e.contains("400")),
+        "нет Error-события про HTTP 400: {events:?}"
+    );
     Ok(())
 }
 
@@ -441,11 +494,21 @@ fn switch_model_applies_to_next_request() -> Result<()> {
     let _ = agent.run("второй запрос")?;
 
     let requests = handle.requests();
-    assert!(requests.len() >= 2, "ожидалось >=2 запросов: {}", requests.len());
-    assert_eq!(requests[0]["model"].as_str().unwrap_or(""), "mock-model",
-        "первый запрос — исходная модель");
-    assert_eq!(requests[1]["model"].as_str().unwrap_or(""), "glm-5.2",
-        "второй запрос обязан идти в новую модель");
+    assert!(
+        requests.len() >= 2,
+        "ожидалось >=2 запросов: {}",
+        requests.len()
+    );
+    assert_eq!(
+        requests[0]["model"].as_str().unwrap_or(""),
+        "mock-model",
+        "первый запрос — исходная модель"
+    );
+    assert_eq!(
+        requests[1]["model"].as_str().unwrap_or(""),
+        "glm-5.2",
+        "второй запрос обязан идти в новую модель"
+    );
     Ok(())
 }
 
@@ -472,28 +535,41 @@ fn switch_model_to_kimi_clears_thinking_extra_body() -> Result<()> {
 
     // переключение на k3 → thinking уходит из тела запроса
     let creds = theseus::models::Credentials {
-        url: handle.base_url.clone(), key: "k".into(), model: "k3".into(),
+        url: handle.base_url.clone(),
+        key: "k".into(),
+        model: "k3".into(),
     };
     agent.switch_model(&creds, 262_144)?;
     let _ = agent.run("запрос после k3")?;
     let requests = handle.requests();
     let last = requests.last().unwrap();
-    assert!(last.get("thinking").is_none(),
-        "thinking не сброшен для kimi: {}", &last.to_string()[..200.min(last.to_string().len())]);
+    assert!(
+        last.get("thinking").is_none(),
+        "thinking не сброшен для kimi: {}",
+        &last.to_string()[..200.min(last.to_string().len())]
+    );
 
     // обратно на deepseek — тело мышления пересобирается по уровню high:
     // thinking enabled + reasoning_effort на месте (раньше терялось насовсем)
     let creds2 = theseus::models::Credentials {
-        url: handle.base_url.clone(), key: "k".into(), model: "deepseek-v4-flash".into(),
+        url: handle.base_url.clone(),
+        key: "k".into(),
+        model: "deepseek-v4-flash".into(),
     };
     agent.switch_model(&creds2, 131_072)?;
     let _ = agent.run("запрос после flash")?;
     let requests = handle.requests();
     let last2 = requests.last().unwrap();
-    assert_eq!(last2["thinking"], serde_json::json!({"type": "enabled"}),
-        "после возврата на deepseek thinking пересобран: {last2}");
-    assert_eq!(last2["reasoning_effort"], serde_json::json!("high"),
-        "уровень ризонинга применён: {last2}");
+    assert_eq!(
+        last2["thinking"],
+        serde_json::json!({"type": "enabled"}),
+        "после возврата на deepseek thinking пересобран: {last2}"
+    );
+    assert_eq!(
+        last2["reasoning_effort"],
+        serde_json::json!("high"),
+        "уровень ризонинга применён: {last2}"
+    );
     Ok(())
 }
 
@@ -516,29 +592,49 @@ fn effort_slot_applies_at_turn_boundary() -> Result<()> {
     let mut agent = mock_agent(&handle.base_url, ws.path(), 3);
     // модель из реестра, чтобы apply_effort работал (mock-model вне реестра)
     let creds = theseus::models::Credentials {
-        url: handle.base_url.clone(), key: "k".into(), model: "deepseek-v4-flash".into(),
+        url: handle.base_url.clone(),
+        key: "k".into(),
+        model: "deepseek-v4-flash".into(),
     };
     agent.switch_model(&creds, 131_072)?;
-    let _ = agent.run("раз")?;    let requests = handle.requests();
+    let _ = agent.run("раз")?;
+    let requests = handle.requests();
     let last = requests.last().unwrap();
-    assert_eq!(last["thinking"], serde_json::json!({"type": "enabled"}),
-        "дефолт high: thinking enabled: {last}");
+    assert_eq!(
+        last["thinking"],
+        serde_json::json!({"type": "enabled"}),
+        "дефолт high: thinking enabled: {last}"
+    );
 
     // /think off → следующий ход без рассуждений
     *agent.controls.effort_slot.lock().unwrap() = Some("off".into());
     let _ = agent.run("два")?;
     let requests = handle.requests();
     let last = requests.last().unwrap();
-    assert_eq!(last["thinking"], serde_json::json!({"type": "disabled"}),
-        "после /think off: disabled: {last}");
-    assert!(last.get("reasoning_effort").is_none(), "при off effort не шлём: {last}");
+    assert_eq!(
+        last["thinking"],
+        serde_json::json!({"type": "disabled"}),
+        "после /think off: disabled: {last}"
+    );
+    assert!(
+        last.get("reasoning_effort").is_none(),
+        "при off effort не шлём: {last}"
+    );
 
     // /think max → enabled + effort max
     *agent.controls.effort_slot.lock().unwrap() = Some("max".into());
     let _ = agent.run("три")?;
     let requests = handle.requests();
     let last = requests.last().unwrap();
-    assert_eq!(last["thinking"], serde_json::json!({"type": "enabled"}), "max: {last}");
-    assert_eq!(last["reasoning_effort"], serde_json::json!("max"), "max: {last}");
+    assert_eq!(
+        last["thinking"],
+        serde_json::json!({"type": "enabled"}),
+        "max: {last}"
+    );
+    assert_eq!(
+        last["reasoning_effort"],
+        serde_json::json!("max"),
+        "max: {last}"
+    );
     Ok(())
 }

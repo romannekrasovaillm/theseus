@@ -40,7 +40,9 @@ impl TempWs {
         TempWs(dir)
     }
 
-    fn path(&self) -> &Path { &self.0 }
+    fn path(&self) -> &Path {
+        &self.0
+    }
 }
 
 impl Drop for TempWs {
@@ -50,12 +52,17 @@ impl Drop for TempWs {
 }
 
 fn live_agent(
-    ws: &Path, max_turns: usize, context_limit_tokens: usize,
+    ws: &Path,
+    max_turns: usize,
+    context_limit_tokens: usize,
     events: Option<Sender<AgentEvent>>,
 ) -> Option<Agent> {
     let creds = match models::resolve(MODEL) {
         Ok(c) => c,
-        Err(e) => { eprintln!("SKIP: {e:#}"); return None; }
+        Err(e) => {
+            eprintln!("SKIP: {e:#}");
+            return None;
+        }
     };
     let cfg = Config {
         model: creds.model,
@@ -99,13 +106,16 @@ fn stress_parallel_readonly() -> Result<()> {
         )?;
     }
     let (tx, rx) = channel::<AgentEvent>();
-    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, Some(tx)) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 6, 131_072, Some(tx)) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Прочитай ВСЕ 5 файлов file_1.txt..file_5.txt, собери маркеры DATA_* и finish с их списком.",
     )?;
     eprintln!("stress_parallel_readonly: {out}");
     let events: Vec<AgentEvent> = rx.try_iter().collect();
-    let tool_calls = events.iter()
+    let tool_calls = events
+        .iter()
         .filter(|e| matches!(e, AgentEvent::ToolCall { .. }))
         .count();
     eprintln!("stress_parallel_readonly: всего tool-событий = {tool_calls}");
@@ -126,7 +136,9 @@ fn stress_long_conversation() -> Result<()> {
     let ws = TempWs::new("long_conv");
     std::fs::write(ws.path().join("step.txt"), "0")?;
     let (tx, rx) = channel::<AgentEvent>();
-    let Some(mut agent) = live_agent(ws.path(), 12, 131_072, Some(tx)) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 12, 131_072, Some(tx)) else {
+        return Ok(());
+    };
     let out = agent.run(
         "Выполняй задачу ПОШАГОВО, не более 1 действия за ход:\n\
          1) read_file step.txt — там число;\n\
@@ -137,11 +149,15 @@ fn stress_long_conversation() -> Result<()> {
     )?;
     eprintln!("stress_long_conversation: {out}");
     let events: Vec<AgentEvent> = rx.try_iter().collect();
-    let tool_count = events.iter()
+    let tool_count = events
+        .iter()
         .filter(|e| matches!(e, AgentEvent::ToolCall { .. }))
         .count();
     eprintln!("stress_long_conversation: ходов с инструментами = {tool_count}");
-    assert!(!out.contains("лимит ходов"), "агент не должен исчерпать лимит: {out}");
+    assert!(
+        !out.contains("лимит ходов"),
+        "агент не должен исчерпать лимит: {out}"
+    );
     // Проверяем финальное значение в файле
     if let Ok(content) = std::fs::read_to_string(ws.path().join("step.txt")) {
         let val: i32 = content.trim().parse().unwrap_or(0);
@@ -158,9 +174,14 @@ fn stress_long_conversation() -> Result<()> {
 fn stress_subagent_explore() -> Result<()> {
     let ws = TempWs::new("sub_explore");
     std::fs::create_dir_all(ws.path().join("nested"))?;
-    std::fs::write(ws.path().join("nested/secret.txt"), "КЛЮЧ: SUPER_SECRET_2026")?;
+    std::fs::write(
+        ws.path().join("nested/secret.txt"),
+        "КЛЮЧ: SUPER_SECRET_2026",
+    )?;
     let (tx, rx) = channel::<AgentEvent>();
-    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, Some(tx)) else { return Ok(()) };
+    let Some(mut agent) = live_agent(ws.path(), 8, 131_072, Some(tx)) else {
+        return Ok(());
+    };
     let out = agent.run(
         "В этом workspace есть nested/secret.txt с секретным ключом. \
          Используй субагента task(subagent_type='Explore') чтобы найти и прочитать его. \
@@ -169,8 +190,11 @@ fn stress_subagent_explore() -> Result<()> {
     eprintln!("stress_subagent_explore: {out}");
     let events: Vec<AgentEvent> = rx.try_iter().collect();
     let subagent_spawned = events.iter().any(|e| {
-        if let AgentEvent::HookNote(n) = e { n.contains("task") || n.contains("explore") }
-        else { false }
+        if let AgentEvent::HookNote(n) = e {
+            n.contains("task") || n.contains("explore")
+        } else {
+            false
+        }
     });
     eprintln!("stress_subagent_explore: субагент запущен = {subagent_spawned}");
     // Мягкий ассерт: либо ключ найден, либо агент не исчерпал лимит
