@@ -70,6 +70,7 @@ fn mock_config(base_url: &str) -> Config {
         compact_prune_pct: 80,
         compact_summary_pct: 95,
         reasoning_effort: "high".into(),
+        memory: false,
     }
 }
 

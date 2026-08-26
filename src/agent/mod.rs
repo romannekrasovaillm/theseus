@@ -415,11 +415,16 @@ impl Agent {
             skill_dirs.push(home.join(".theseus/skills"));
         }
         let skill_list = skills::discover(&skill_dirs);
-        // память (v0.3)
-        let memory = std::env::var("HOME")
-            .ok()
-            .map(PathBuf::from)
-            .map(|h| Memory::open(&h.join(".theseus")));
+        // память (v0.3); выключается конфигом (тесты: иначе авто-консолидация
+        // делает лишний API-вызов в зависимости от $HOME/.theseus)
+        let memory = if cfg.memory {
+            std::env::var("HOME")
+                .ok()
+                .map(PathBuf::from)
+                .map(|h| Memory::open(&h.join(".theseus")))
+        } else {
+            None
+        };
         let mut tool_env = ToolEnv::new(workspace);
         tool_env.sandbox = cfg.sandbox;
         // общий атомик режима — для обхода sandbox в Max (ToolEnv::sandbox_effective)
@@ -1895,6 +1900,7 @@ mod tests {
             compact_prune_pct: 80,
             compact_summary_pct: 95,
             reasoning_effort: "high".into(),
+            memory: false,
         };
         let perms =
             PermissionEngine::new(crate::permissions::Mode::Yolo, cfg.permission.clone(), ws);

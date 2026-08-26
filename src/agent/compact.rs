@@ -379,6 +379,7 @@ mod compact_tests {
             compact_prune_pct: 80,
             compact_summary_pct: 95,
             reasoning_effort: "high".into(),
+            memory: false,
         };
         let perms = PermissionEngine::new(Mode::Yolo, cfg.permission.clone(), &ws);
         let mut agent = Agent::new(cfg, perms, &ws, 4, None).expect("агент создаётся");
@@ -583,6 +584,7 @@ mod compact_tests {
             compact_prune_pct: 80,
             compact_summary_pct: 95,
             reasoning_effort: "high".into(),
+            memory: false,
         };
         let perms = PermissionEngine::new(Mode::Yolo, cfg.permission.clone(), &ws);
         let mut agent = Agent::new(cfg, perms, &ws, 4, None).expect("агент создаётся");

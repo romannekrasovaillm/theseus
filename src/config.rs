@@ -106,6 +106,12 @@ pub struct Config {
     /// ядерный sandbox (landlock) для bash (v0.3.1); default: включён
     #[serde(default = "default_true")]
     pub sandbox: bool,
+    /// Память (v0.3): ~/.theseus/MEMORY.md, инструменты memory_* и
+    /// авто-консолидация при finish; default: включена. Тесты выключают —
+    /// консолидация жжёт лишний API-вызов в зависимости от содержимого
+    /// $HOME/.theseus (CI-падение 26.08: очередь сценариев мока исчерпана).
+    #[serde(default = "default_true")]
+    pub memory: bool,
     /// Пороги трёхуровневой компактификации, % окна (v0.3.2, по OpenDev ACC)
     #[serde(default = "pct70")]
     pub compact_mask_pct: usize,
