@@ -11,7 +11,7 @@
 //! * [`WsKind::Hidden`] — файл скрыт: его имя или имя любого родительского
 //!   каталога начинается с точки. Содержимое скрытых файлов не sniff'ается:
 //!   показывать их агенту всё равно не планируется.
-//! * [`WsKind::Binary`] — в первых [`SNIFF_LEN`] байтах встретился NUL
+//! * [`WsKind::Binary`] — в первых `SNIFF_LEN` байтах встретился NUL
 //!   (эвристика `grep -I`, как в `filetype.rs`).
 //! * [`WsKind::Text`] — всё остальное, включая пустые и нечитаемые файлы:
 //!   класс — лишь подсказка, реальное чтение случится позже и само даст
@@ -178,7 +178,7 @@ impl WsMap {
     }
 
     /// Человеко-читаемая сводка карты: заголовок с числом файлов и байт,
-    /// затем топ-[`SUMMARY_TOP`] языковых групп по расширениям
+    /// затем топ-`SUMMARY_TOP` языковых групп по расширениям
     /// (сортировка по суммарному размеру группы, колонки выровнены).
     pub fn summary(&self) -> String {
         let mut text = 0usize;
@@ -412,12 +412,13 @@ fn component_match(pattern: &str, name: &str) -> bool {
 /// Ключ языковой группы: `.rs`, `.py`, ... в нижнем регистре;
 /// [`NO_EXT_GROUP`] — когда расширения нет или оно не UTF-8.
 fn group_key(path: &Path) -> String {
-    path.extension()
-        .and_then(OsStr::to_str)
-        .map_or_else(|| NO_EXT_GROUP.to_string(), |ext| {
+    path.extension().and_then(OsStr::to_str).map_or_else(
+        || NO_EXT_GROUP.to_string(),
+        |ext| {
             let lower = ext.to_lowercase();
             format!(".{lower}")
-        })
+        },
+    )
 }
 
 /// Русская плюрализация: 1 файл / 3 файла / 5 файлов, с исключением
@@ -520,7 +521,10 @@ mod tests {
             .unwrap();
         assert_eq!(main.bytes, 13);
         assert_eq!(main.kind, WsKind::Text);
-        assert!(main.mtime_secs > 0, "свежесозданный файл должен иметь mtime");
+        assert!(
+            main.mtime_secs > 0,
+            "свежесозданный файл должен иметь mtime"
+        );
     }
 
     #[test]
@@ -581,14 +585,21 @@ mod tests {
         // На глубине MAX_DEPTH + 1 — уже нет.
         let mut deep = shallow.clone();
         deep.push("d12");
-        write_file(dir.path(), &shallow.join("here.txt").to_string_lossy(), b"a\n");
+        write_file(
+            dir.path(),
+            &shallow.join("here.txt").to_string_lossy(),
+            b"a\n",
+        );
         write_file(dir.path(), &deep.join("gone.txt").to_string_lossy(), b"b\n");
         write_file(dir.path(), "top.txt", b"c\n");
 
         let map = WsMap::scan(dir.path(), 100);
         let got = paths(&map);
         let want = rel_slash(&shallow.join("here.txt"));
-        assert!(got.contains(&want), "глубина {MAX_DEPTH} должна входить: {got:?}");
+        assert!(
+            got.contains(&want),
+            "глубина {MAX_DEPTH} должна входить: {got:?}"
+        );
         assert!(
             got.iter().all(|p| !p.ends_with("gone.txt")),
             "глубина {} входить не должна: {got:?}",
@@ -676,7 +687,11 @@ mod tests {
     fn glob_double_star_matches_any_depth() {
         let (_dir, map) = glob_fixture();
         let want = vec![
-            "src/a.rs", "src/agent/loop.rs", "src/agent/nested/deep.rs", "src/lib.rs", "src/main.rs",
+            "src/a.rs",
+            "src/agent/loop.rs",
+            "src/agent/nested/deep.rs",
+            "src/lib.rs",
+            "src/main.rs",
         ];
         assert_eq!(glob_paths(&map, "**/*.rs"), want);
     }
@@ -686,7 +701,11 @@ mod tests {
         let (_dir, map) = glob_fixture();
         // «**» между компонентами может не поглотить ничего.
         let want = vec![
-            "src/a.rs", "src/agent/loop.rs", "src/agent/nested/deep.rs", "src/lib.rs", "src/main.rs",
+            "src/a.rs",
+            "src/agent/loop.rs",
+            "src/agent/nested/deep.rs",
+            "src/lib.rs",
+            "src/main.rs",
         ];
         assert_eq!(glob_paths(&map, "src/**/*.rs"), want);
         // Одинокая «**» матчит всё дерево.
@@ -737,8 +756,8 @@ mod tests {
             ("*.rs", "main.py", false),
             ("*", "", true), // звезда матчит и пустое имя
             ("*", "anything", true),
-            ("?", "", false),   // а «?» требует ровно один символ
-            ("?", "ё", true),   // один Unicode-символ — это один символ
+            ("?", "", false), // а «?» требует ровно один символ
+            ("?", "ё", true), // один Unicode-символ — это один символ
             ("a*c", "abc", true),
             ("a*c", "ac", true), // звезда может быть пустой
             ("a*c", "ab", false),
@@ -862,7 +881,10 @@ mod tests {
         assert!(s.contains("топ-10 из 12):"), "должно быть 12 групп: {s}");
         // Показаны 10 самых «тяжёлых» групп: .e11 (11 байт) … .e02 (2 байта).
         for i in (2..=11).rev() {
-            assert!(s.contains(&format!(".e{i:02}")), "группа .e{i:02} в топе: {s}");
+            assert!(
+                s.contains(&format!(".e{i:02}")),
+                "группа .e{i:02} в топе: {s}"
+            );
         }
         assert!(!s.contains(".e00"), "нулевая группа в топ не входит: {s}");
         assert!(!s.contains(".e01"), "мелкая группа в топ не входит: {s}");

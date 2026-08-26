@@ -138,8 +138,12 @@ const AUTH_MARKERS: &[&str] = &[
 ];
 
 /// Маркеры битого запроса (сравнение в lower-case).
-const BAD_REQUEST_MARKERS: &[&str] =
-    &["bad request", "invalid request", "malformed", "validation failed"];
+const BAD_REQUEST_MARKERS: &[&str] = &[
+    "bad request",
+    "invalid request",
+    "malformed",
+    "validation failed",
+];
 
 /// Классифицирует ошибку API-вызова в [`ErrorKind`].
 ///
@@ -464,7 +468,11 @@ mod tests {
         // Успех/редирект/внерядовые коды — вне матрицы (418 — это 4xx,
         // он по правилу «прочие 4xx» уходит в BadRequest и здесь не проверяется).
         for code in [100u16, 200, 301, 600] {
-            assert_eq!(classify(Some(code), ""), ErrorKind::Unknown, "status: {code}");
+            assert_eq!(
+                classify(Some(code), ""),
+                ErrorKind::Unknown,
+                "status: {code}"
+            );
         }
     }
 
@@ -535,7 +543,10 @@ mod tests {
     #[test]
     fn classifies_garbage_and_empty_text_as_unknown() {
         assert_eq!(classify(None, ""), ErrorKind::Unknown);
-        assert_eq!(classify(None, "something weird happened"), ErrorKind::Unknown);
+        assert_eq!(
+            classify(None, "something weird happened"),
+            ErrorKind::Unknown
+        );
     }
 
     // ---- приоритет и устойчивость классификации ----
@@ -631,15 +642,24 @@ mod tests {
     fn backoff_yields_max_attempts_minus_one_delays() {
         let policy = exact_policy();
         let delays: Vec<Duration> = policy.delays(42).collect();
-        assert_eq!(delays.len(), usize::try_from(policy.max_attempts).unwrap_or(0) - 1);
+        assert_eq!(
+            delays.len(),
+            usize::try_from(policy.max_attempts).unwrap_or(0) - 1
+        );
         // ExactSizeIterator согласован с реальным числом элементов.
         assert_eq!(policy.delays(42).len(), delays.len());
     }
 
     #[test]
     fn zero_or_one_attempt_policy_yields_no_delays() {
-        let zero = RetryPolicy { max_attempts: 0, ..exact_policy() };
-        let one = RetryPolicy { max_attempts: 1, ..exact_policy() };
+        let zero = RetryPolicy {
+            max_attempts: 0,
+            ..exact_policy()
+        };
+        let one = RetryPolicy {
+            max_attempts: 1,
+            ..exact_policy()
+        };
         assert_eq!(zero.delays(1).count(), 0);
         assert_eq!(one.delays(1).count(), 0);
         assert_eq!(zero.delays(1).next(), None);

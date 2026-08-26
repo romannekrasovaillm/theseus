@@ -104,26 +104,44 @@ pub fn canonicalize_command(cmd: &str) -> Vec<String> {
     let mut chars = cmd.chars().peekable();
     while let Some(c) = chars.next() {
         match (quote, c) {
-            (Quote::Single, '\'') => { cur.push(c); quote = Quote::None; }
+            (Quote::Single, '\'') => {
+                cur.push(c);
+                quote = Quote::None;
+            }
             (Quote::Single, _) => cur.push(c),
-            (Quote::Double, '"') => { cur.push(c); quote = Quote::None; }
+            (Quote::Double, '"') => {
+                cur.push(c);
+                quote = Quote::None;
+            }
             // В "..." слэш экранирует лишь $ ` " \ и \n, но для разбора
             // разделителей важно только не потерять следующий символ.
             (Quote::Double, '\\') | (Quote::None, '\\') => {
                 cur.push(c);
-                if let Some(next) = chars.next() { cur.push(next); }
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                }
             }
             (Quote::Double, _) => cur.push(c),
-            (Quote::None, '\'') => { cur.push(c); quote = Quote::Single; }
-            (Quote::None, '"') => { cur.push(c); quote = Quote::Double; }
+            (Quote::None, '\'') => {
+                cur.push(c);
+                quote = Quote::Single;
+            }
+            (Quote::None, '"') => {
+                cur.push(c);
+                quote = Quote::Double;
+            }
             // `&&` и одиночный `&` (фон) — оба разделители.
             (Quote::None, '&') => {
-                if chars.peek() == Some(&'&') { chars.next(); }
+                if chars.peek() == Some(&'&') {
+                    chars.next();
+                }
                 push_sub(&mut out, &mut cur);
             }
             // `||`, `|` и `|&` — разделители.
             (Quote::None, '|') => {
-                if matches!(chars.peek(), Some('|') | Some('&')) { chars.next(); }
+                if matches!(chars.peek(), Some('|') | Some('&')) {
+                    chars.next();
+                }
                 push_sub(&mut out, &mut cur);
             }
             (Quote::None, ';') | (Quote::None, '\n') => push_sub(&mut out, &mut cur),
@@ -137,7 +155,9 @@ pub fn canonicalize_command(cmd: &str) -> Vec<String> {
 /// Добавить накопленный сегмент в список, если после обрезки он не пуст.
 fn push_sub(out: &mut Vec<String>, cur: &mut String) {
     let trimmed = cur.trim();
-    if !trimmed.is_empty() { out.push(trimmed.to_string()); }
+    if !trimmed.is_empty() {
+        out.push(trimmed.to_string());
+    }
     cur.clear();
 }
 
@@ -170,16 +190,29 @@ pub fn split_words(cmd: &str) -> Vec<String> {
                     has = false;
                 }
             }
-            (Quote::None, '\'') => { quote = Quote::Single; has = true; }
-            (Quote::None, '"') => { quote = Quote::Double; has = true; }
-            (Quote::None, '\\') => {
-                if let Some(next) = chars.next() { cur.push(next); }
+            (Quote::None, '\'') => {
+                quote = Quote::Single;
                 has = true;
             }
-            (Quote::None, _) => { cur.push(c); has = true; }
+            (Quote::None, '"') => {
+                quote = Quote::Double;
+                has = true;
+            }
+            (Quote::None, '\\') => {
+                if let Some(next) = chars.next() {
+                    cur.push(next);
+                }
+                has = true;
+            }
+            (Quote::None, _) => {
+                cur.push(c);
+                has = true;
+            }
         }
     }
-    if has { words.push(cur); }
+    if has {
+        words.push(cur);
+    }
     words
 }
 
@@ -195,7 +228,10 @@ struct ScanFlags {
 /// не раскрываем (это работа полноценного парсера), но сам факт её наличия делает
 /// классификацию по первому слову небезопасной: за `echo $(rm -rf x)` что угодно.
 fn scan_special(cmd: &str) -> ScanFlags {
-    let mut flags = ScanFlags { redirect: false, subst: false };
+    let mut flags = ScanFlags {
+        redirect: false,
+        subst: false,
+    };
     let mut quote = Quote::None;
     let mut chars = cmd.chars().peekable();
     while let Some(c) = chars.next() {
@@ -203,15 +239,23 @@ fn scan_special(cmd: &str) -> ScanFlags {
             (Quote::Single, '\'') => quote = Quote::None,
             (Quote::Single, _) => {}
             (Quote::Double, '"') => quote = Quote::None,
-            (Quote::Double, '\\') | (Quote::None, '\\') => { chars.next(); }
+            (Quote::Double, '\\') | (Quote::None, '\\') => {
+                chars.next();
+            }
             (Quote::None, '\'') => quote = Quote::Single,
             (Quote::None, '"') => quote = Quote::Double,
             (Quote::None, '>') => {
                 // `2>&1` — дубль дескриптора, а не запись в файл.
-                if chars.peek() == Some(&'&') { chars.next(); } else { flags.redirect = true; }
+                if chars.peek() == Some(&'&') {
+                    chars.next();
+                } else {
+                    flags.redirect = true;
+                }
             }
             (Quote::Double, '`') | (Quote::None, '`') => flags.subst = true,
-            (Quote::Double, '$') | (Quote::None, '$') if chars.peek() == Some(&'(') => flags.subst = true,
+            (Quote::Double, '$') | (Quote::None, '$') if chars.peek() == Some(&'(') => {
+                flags.subst = true
+            }
             _ => {}
         }
     }
@@ -227,9 +271,15 @@ fn scan_special(cmd: &str) -> ScanFlags {
 /// вывода поднимает Readonly до Write.
 pub fn classify(cmd: &str) -> CmdClass {
     let flags = scan_special(cmd);
-    if flags.subst { return CmdClass::Unknown; }
+    if flags.subst {
+        return CmdClass::Unknown;
+    }
     let class = classify_by_words(cmd);
-    if flags.redirect && class == CmdClass::Readonly { CmdClass::Write } else { class }
+    if flags.redirect && class == CmdClass::Readonly {
+        CmdClass::Write
+    } else {
+        class
+    }
 }
 
 /// Класс по словам подкоманды (без учёта редиректов/подстановок).
@@ -238,26 +288,46 @@ fn classify_by_words(cmd: &str) -> CmdClass {
     let mut i = 0;
     // Разворачиваем обёртки и префиксные VAR=value, пока не доберёмся до программы.
     loop {
-        let Some(w) = words.get(i) else { return CmdClass::Unknown };
+        let Some(w) = words.get(i) else {
+            return CmdClass::Unknown;
+        };
         if is_env_assignment(w) {
             i += 1;
             continue;
         }
         match basename(w) {
             "command" | "builtin" | "nohup" | "exec" => i += 1,
-            "env" => i = skip_wrapper_args(&words, i + 1, &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]),
+            "env" => {
+                i = skip_wrapper_args(
+                    &words,
+                    i + 1,
+                    &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+                )
+            }
             "sudo" => {
-                let vf = ["-u", "-g", "-h", "-p", "-C", "-T", "--user", "--group", "--host", "--prompt"];
+                let vf = [
+                    "-u", "-g", "-h", "-p", "-C", "-T", "--user", "--group", "--host", "--prompt",
+                ];
                 i = skip_wrapper_args(&words, i + 1, &vf);
             }
             "nice" => i = skip_wrapper_args(&words, i + 1, &["-n", "--adjustment"]),
-            "stdbuf" => i = skip_wrapper_args(&words, i + 1, &["-i", "-o", "-e", "--input", "--output", "--error"]),
+            "stdbuf" => {
+                i = skip_wrapper_args(
+                    &words,
+                    i + 1,
+                    &["-i", "-o", "-e", "--input", "--output", "--error"],
+                )
+            }
             // После флагов timeout идёт ДЛИТЕЛЬНОСТЬ, и только потом команда.
-            "timeout" => i = skip_wrapper_args(&words, i + 1, &["-k", "-s", "--kill-after", "--signal"]) + 1,
+            "timeout" => {
+                i = skip_wrapper_args(&words, i + 1, &["-k", "-s", "--kill-after", "--signal"]) + 1
+            }
             _ => break,
         }
     }
-    let Some(prog) = words.get(i) else { return CmdClass::Unknown };
+    let Some(prog) = words.get(i) else {
+        return CmdClass::Unknown;
+    };
     classify_prog(basename(prog), &words[i + 1..])
 }
 
@@ -266,9 +336,9 @@ fn classify_prog(prog: &str, args: &[String]) -> CmdClass {
     use CmdClass::*;
     match prog {
         // --- только чтение ---
-        "ls" | "cat" | "grep" | "egrep" | "fgrep" | "rg" | "echo" | "printf" | "pwd"
-        | "head" | "tail" | "wc" | "sort" | "uniq" | "date" | "uname" | "df" | "du" | "free"
-        | "stat" | "file" | "which" | "whereis" | "whoami" | "id" | "hostname" | "true" | "false"
+        "ls" | "cat" | "grep" | "egrep" | "fgrep" | "rg" | "echo" | "printf" | "pwd" | "head"
+        | "tail" | "wc" | "sort" | "uniq" | "date" | "uname" | "df" | "du" | "free" | "stat"
+        | "file" | "which" | "whereis" | "whoami" | "id" | "hostname" | "true" | "false"
         | "printenv" | "diff" | "cmp" | "comm" | "tr" | "cut" | "paste" | "join" | "nl" | "od"
         | "readlink" | "realpath" | "basename" | "dirname" | "cal" | "uptime" | "w" | "who"
         | "ps" | "lsof" | "ss" | "netstat" | "lsblk" | "lsmod" | "dmesg" | "man" | "less"
@@ -276,22 +346,24 @@ fn classify_prog(prog: &str, args: &[String]) -> CmdClass {
 
         // --- запись в пределах ФС ---
         "touch" | "mkdir" | "cp" | "mv" | "ln" | "tee" | "chmod" | "chown" | "chgrp"
-        | "truncate" | "install" | "patch" | "rmdir" | "mktemp" | "split" | "cpio"
-        | "zip" | "unzip" | "gzip" | "gunzip" | "bzip2" | "bunzip2" | "xz" | "unxz"
-        | "ssh-keygen" | "rustc" => Write,
+        | "truncate" | "install" | "patch" | "rmdir" | "mktemp" | "split" | "cpio" | "zip"
+        | "unzip" | "gzip" | "gunzip" | "bzip2" | "bunzip2" | "xz" | "unxz" | "ssh-keygen"
+        | "rustc" => Write,
 
         // --- сеть ---
         "curl" | "wget" | "ssh" | "scp" | "sftp" | "ftp" | "telnet" | "ping" | "ping6"
         | "traceroute" | "tracepath" | "dig" | "host" | "nslookup" | "whois" | "nc" | "ncat"
-        | "netcat" | "socat" | "nmap" | "rsync" | "rclone" | "mosh" | "aria2c" | "rustup" => Network,
+        | "netcat" | "socat" | "nmap" | "rsync" | "rclone" | "mosh" | "aria2c" | "rustup" => {
+            Network
+        }
 
         // --- разрушение данных/состояния системы ---
         "rm" | "dd" | "shred" | "wipe" | "fdisk" | "sfdisk" | "parted" | "wipefs" | "mkswap"
-        | "mount" | "umount" | "swapon" | "swapoff" | "kill" | "killall" | "pkill"
-        | "shutdown" | "reboot" | "halt" | "poweroff" | "init" | "passwd" | "useradd"
-        | "userdel" | "usermod" | "groupadd" | "groupdel" | "sysctl" | "modprobe" | "insmod"
-        | "rmmod" | "apt" | "apt-get" | "dpkg" | "dnf" | "yum" | "pacman" | "zypper"
-        | "snap" | "flatpak" | "brew" | "visudo" => Destructive,
+        | "mount" | "umount" | "swapon" | "swapoff" | "kill" | "killall" | "pkill" | "shutdown"
+        | "reboot" | "halt" | "poweroff" | "init" | "passwd" | "useradd" | "userdel"
+        | "usermod" | "groupadd" | "groupdel" | "sysctl" | "modprobe" | "insmod" | "rmmod"
+        | "apt" | "apt-get" | "dpkg" | "dnf" | "yum" | "pacman" | "zypper" | "snap" | "flatpak"
+        | "brew" | "visudo" => Destructive,
 
         // `mkfs` и все `mkfs.*`.
         _ if prog.starts_with("mkfs") => Destructive,
@@ -321,23 +393,34 @@ fn classify_git(args: &[String]) -> CmdClass {
     while let Some(a) = args.get(i) {
         match a.as_str() {
             "-C" | "-c" | "--git-dir" | "--work-tree" | "--namespace" => i += 2,
-            s if s.starts_with("--git-dir=") || s.starts_with("--work-tree=") || s.starts_with("--namespace=") => i += 1,
+            s if s.starts_with("--git-dir=")
+                || s.starts_with("--work-tree=")
+                || s.starts_with("--namespace=") =>
+            {
+                i += 1
+            }
             // Неизвестный глобальный флаг — считаем унарным (без значения).
             s if s.starts_with('-') => i += 1,
             _ => break,
         }
     }
-    let Some(sub) = args.get(i) else { return Readonly }; // голый `git`, `git --version`, `git help`
+    let Some(sub) = args.get(i) else {
+        return Readonly;
+    }; // голый `git`, `git --version`, `git help`
     let rest = &args[i + 1..];
     match sub.as_str() {
         "status" | "log" | "diff" | "show" | "rev-parse" | "rev-list" | "ls-files" | "ls-tree"
         | "grep" | "blame" | "annotate" | "shortlog" | "describe" | "count-objects" | "var"
-        | "whatchanged" | "verify-commit" | "verify-tag" | "cat-file" | "name-rev" | "show-ref" => Readonly,
+        | "whatchanged" | "verify-commit" | "verify-tag" | "cat-file" | "name-rev" | "show-ref" => {
+            Readonly
+        }
         "branch" => {
             if has_short_flag(rest, 'D') {
                 Destructive // принудительное удаление ветки
             } else if "dmMcC".chars().any(|c| has_short_flag(rest, c))
-                || has_long_flag(rest, "--delete") || has_long_flag(rest, "--move") || has_long_flag(rest, "--copy")
+                || has_long_flag(rest, "--delete")
+                || has_long_flag(rest, "--move")
+                || has_long_flag(rest, "--copy")
                 || has_positional(rest)
             {
                 Write // удаление/переименование/создание ветки
@@ -346,34 +429,56 @@ fn classify_git(args: &[String]) -> CmdClass {
             }
         }
         // -d/--delete или позиционный аргумент — изменение; иначе листинг.
-        "tag" => if has_short_flag(rest, 'd') || has_long_flag(rest, "--delete") || has_positional(rest) {
-            Write
-        } else {
-            Readonly
-        },
+        "tag" => {
+            if has_short_flag(rest, 'd') || has_long_flag(rest, "--delete") || has_positional(rest)
+            {
+                Write
+            } else {
+                Readonly
+            }
+        }
         "remote" => match first_non_flag(rest) {
             None => Readonly, // `git remote`, `git remote -v`
             Some("show") | Some("prune") | Some("update") => Network, // ходит на remote
-            Some(_) => Write,  // add/remove/set-url/rename
+            Some(_) => Write, // add/remove/set-url/rename
         },
         "stash" => match first_non_flag(rest) {
             Some("drop") | Some("clear") => Destructive,
             Some("list") | Some("show") | None => Readonly,
             Some(_) => Write, // push/pop/apply/save
         },
-        "reflog" => if matches!(first_non_flag(rest), Some("expire") | Some("delete")) { Destructive } else { Readonly },
-        "add" | "commit" | "checkout" | "switch" | "restore" | "merge" | "rebase" | "cherry-pick"
-        | "revert" | "mv" | "am" | "apply" | "format-patch" | "gc" | "worktree" | "bisect"
-        | "notes" | "update-index" | "read-tree" | "write-tree" | "commit-tree" | "prune" => Write,
+        "reflog" => {
+            if matches!(first_non_flag(rest), Some("expire") | Some("delete")) {
+                Destructive
+            } else {
+                Readonly
+            }
+        }
+        "add" | "commit" | "checkout" | "switch" | "restore" | "merge" | "rebase"
+        | "cherry-pick" | "revert" | "mv" | "am" | "apply" | "format-patch" | "gc" | "worktree"
+        | "bisect" | "notes" | "update-index" | "read-tree" | "write-tree" | "commit-tree"
+        | "prune" => Write,
         // --soft/--mixed/--keep пишут индекс; --hard ещё и сносит рабочее дерево.
-        "reset" => if has_long_flag(rest, "--hard") { Destructive } else { Write },
+        "reset" => {
+            if has_long_flag(rest, "--hard") {
+                Destructive
+            } else {
+                Write
+            }
+        }
         // `git clean` по дизайну требует -f; -n (dry-run) — редкость, считаем строго.
         "clean" => Destructive,
         // `git rm` удаляет файлы и из рабочего дерева.
         "rm" => Destructive,
         "fetch" | "pull" | "clone" | "submodule" | "ls-remote" | "archive" => Network,
         // --force/-f — слепая перезапись remote; --force-with-lease мягче — Network.
-        "push" => if has_long_flag(rest, "--force") || has_short_flag(rest, 'f') { Destructive } else { Network },
+        "push" => {
+            if has_long_flag(rest, "--force") || has_short_flag(rest, 'f') {
+                Destructive
+            } else {
+                Network
+            }
+        }
         "config" => classify_git_config(rest),
         _ => Unknown,
     }
@@ -382,10 +487,16 @@ fn classify_git(args: &[String]) -> CmdClass {
 /// `git config`: чтение значений — Readonly, установка — Write.
 fn classify_git_config(rest: &[String]) -> CmdClass {
     const READONLY_FLAGS: &[&str] = &["--get", "--get-all", "--get-regexp", "-l", "--list"];
-    if rest.iter().any(|a| READONLY_FLAGS.contains(&a.as_str())) { return CmdClass::Readonly; }
+    if rest.iter().any(|a| READONLY_FLAGS.contains(&a.as_str())) {
+        return CmdClass::Readonly;
+    }
     // `git config user.name` (один позиционный, без значения) — чтение.
     let positional = rest.iter().filter(|a| !a.starts_with('-')).count();
-    if positional <= 1 { CmdClass::Readonly } else { CmdClass::Write }
+    if positional <= 1 {
+        CmdClass::Readonly
+    } else {
+        CmdClass::Write
+    }
 }
 
 /// Класс cargo-подкоманды (учитываем `+toolchain` и глобальные флаги).
@@ -393,16 +504,25 @@ fn classify_cargo(args: &[String]) -> CmdClass {
     use CmdClass::*;
     let mut i = 0;
     while let Some(a) = args.get(i) {
-        if a.starts_with('+') || a.starts_with('-') { i += 1; } else { break; }
+        if a.starts_with('+') || a.starts_with('-') {
+            i += 1;
+        } else {
+            break;
+        }
     }
-    let Some(sub) = args.get(i) else { return Readonly }; // `cargo --version`
+    let Some(sub) = args.get(i) else {
+        return Readonly;
+    }; // `cargo --version`
     match sub.as_str() {
         // По заданию check/clippy/test — read-only уровень доверия (как SAFE_BASH_PREFIXES
         // в permissions.rs), хотя build-скрипты формально выполняются.
-        "check" | "clippy" | "test" | "bench" | "metadata" | "tree" | "verify-project" | "pkgid"
-        | "locate-project" | "version" | "help" => Readonly,
-        "build" | "run" | "doc" | "fix" | "fmt" | "add" | "remove" | "new" | "init" | "uninstall" => Write,
-        "install" | "update" | "search" | "publish" | "login" | "logout" | "owner" | "yank" => Network,
+        "check" | "clippy" | "test" | "bench" | "metadata" | "tree" | "verify-project"
+        | "pkgid" | "locate-project" | "version" | "help" => Readonly,
+        "build" | "run" | "doc" | "fix" | "fmt" | "add" | "remove" | "new" | "init"
+        | "uninstall" => Write,
+        "install" | "update" | "search" | "publish" | "login" | "logout" | "owner" | "yank" => {
+            Network
+        }
         "clean" => Destructive,
         _ => Unknown,
     }
@@ -421,10 +541,11 @@ fn classify_pip(args: &[String]) -> CmdClass {
 /// Класс npm-подобных пакетных менеджеров (npm/pnpm/yarn/bun).
 fn classify_npm(args: &[String]) -> CmdClass {
     match first_non_flag(args) {
-        Some("ls") | Some("list") | Some("outdated") | Some("view") | Some("info") | None => CmdClass::Readonly,
-        Some("install") | Some("add") | Some("update") | Some("upgrade") | Some("publish") | Some("link") => {
-            CmdClass::Network
+        Some("ls") | Some("list") | Some("outdated") | Some("view") | Some("info") | None => {
+            CmdClass::Readonly
         }
+        Some("install") | Some("add") | Some("update") | Some("upgrade") | Some("publish")
+        | Some("link") => CmdClass::Network,
         Some("remove") | Some("uninstall") | Some("prune") | Some("dedupe") => CmdClass::Write,
         // run/test/exec/dlx и всё прочее выполняет произвольные скрипты.
         Some(_) => CmdClass::Unknown,
@@ -433,14 +554,25 @@ fn classify_npm(args: &[String]) -> CmdClass {
 
 /// `sed -i` перезаписывает файл на месте; без `-i` — фильтр в stdout.
 fn classify_sed(args: &[String]) -> CmdClass {
-    let long_in_place = args.iter().any(|a| a.as_str() == "--in-place" || a.starts_with("--in-place="));
-    if long_in_place || has_short_flag(args, 'i') { CmdClass::Write } else { CmdClass::Readonly }
+    let long_in_place = args
+        .iter()
+        .any(|a| a.as_str() == "--in-place" || a.starts_with("--in-place="));
+    if long_in_place || has_short_flag(args, 'i') {
+        CmdClass::Write
+    } else {
+        CmdClass::Readonly
+    }
 }
 
 /// `find -delete` удаляет найденное; `-exec`/`-ok` выполняет произвольную команду.
 fn classify_find(args: &[String]) -> CmdClass {
-    if args.iter().any(|a| a.as_str() == "-delete") { return CmdClass::Destructive; }
-    if args.iter().any(|a| matches!(a.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir")) {
+    if args.iter().any(|a| a.as_str() == "-delete") {
+        return CmdClass::Destructive;
+    }
+    if args
+        .iter()
+        .any(|a| matches!(a.as_str(), "-exec" | "-execdir" | "-ok" | "-okdir"))
+    {
         return CmdClass::Unknown;
     }
     CmdClass::Readonly
@@ -452,7 +584,11 @@ fn classify_tar(args: &[String]) -> CmdClass {
     match args.first() {
         Some(mode) => {
             let m = mode.trim_start_matches('-');
-            if m.contains('t') && !m.contains('x') && !m.contains('c') { CmdClass::Readonly } else { CmdClass::Write }
+            if m.contains('t') && !m.contains('x') && !m.contains('c') {
+                CmdClass::Readonly
+            } else {
+                CmdClass::Write
+            }
         }
         None => CmdClass::Unknown,
     }
@@ -460,9 +596,13 @@ fn classify_tar(args: &[String]) -> CmdClass {
 
 /// `crontab -l` читает, `-e` пишет, `-r` сносит всю таблицу.
 fn classify_crontab(args: &[String]) -> CmdClass {
-    if has_short_flag(args, 'r') { CmdClass::Destructive }
-    else if has_short_flag(args, 'e') { CmdClass::Write }
-    else { CmdClass::Readonly }
+    if has_short_flag(args, 'r') {
+        CmdClass::Destructive
+    } else if has_short_flag(args, 'e') {
+        CmdClass::Write
+    } else {
+        CmdClass::Readonly
+    }
 }
 
 /// systemctl: запросы статуса — Readonly, управление юнитами — Destructive.
@@ -483,39 +623,56 @@ fn classify_systemctl(args: &[String]) -> CmdClass {
 }
 
 /// Имя программы без пути: `/usr/bin/ls` → `ls`.
-fn basename(path: &str) -> &str { path.rsplit('/').next().unwrap_or(path) }
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
 
 /// Похоже ли слово на префиксное присваивание `VAR=value`.
 fn is_env_assignment(w: &str) -> bool {
     let Some(eq) = w.find('=') else { return false };
     let key = &w[..eq];
-    !key.is_empty() && !key.starts_with(|c: char| c.is_ascii_digit()) && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !key.is_empty()
+        && !key.starts_with(|c: char| c.is_ascii_digit())
+        && key.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// Пропустить флаги обёртки; флаги из `value_flags` забирают и следующее слово.
 /// Присваивания `VAR=value` тоже пропускаются (для `env A=1 cmd`).
 fn skip_wrapper_args(words: &[String], mut i: usize, value_flags: &[&str]) -> usize {
     while let Some(w) = words.get(i) {
-        if value_flags.contains(&w.as_str()) { i += 2; }
-        else if w.starts_with('-') || is_env_assignment(w) { i += 1; }
-        else { break; }
+        if value_flags.contains(&w.as_str()) {
+            i += 2;
+        } else if w.starts_with('-') || is_env_assignment(w) {
+            i += 1;
+        } else {
+            break;
+        }
     }
     i
 }
 
 /// Есть ли среди аргументов короткий флаг с символом `c` (учитывает слипшиеся `-rf`).
 fn has_short_flag(args: &[String], c: char) -> bool {
-    args.iter().any(|a| a.starts_with('-') && !a.starts_with("--") && a[1..].contains(c))
+    args.iter()
+        .any(|a| a.starts_with('-') && !a.starts_with("--") && a[1..].contains(c))
 }
 
 /// Есть ли точный длинный флаг `--name`.
-fn has_long_flag(args: &[String], name: &str) -> bool { args.iter().any(|a| a.as_str() == name) }
+fn has_long_flag(args: &[String], name: &str) -> bool {
+    args.iter().any(|a| a.as_str() == name)
+}
 
 /// Есть ли позиционный (не начинающийся с `-`) аргумент.
-fn has_positional(args: &[String]) -> bool { args.iter().any(|a| !a.starts_with('-')) }
+fn has_positional(args: &[String]) -> bool {
+    args.iter().any(|a| !a.starts_with('-'))
+}
 
 /// Первый позиционный аргумент (не флаг).
-fn first_non_flag(args: &[String]) -> Option<&str> { args.iter().find(|a| !a.starts_with('-')).map(String::as_str) }
+fn first_non_flag(args: &[String]) -> Option<&str> {
+    args.iter()
+        .find(|a| !a.starts_with('-'))
+        .map(String::as_str)
+}
 
 /// Правило политики: regex по ТЕКСТУ команды/подкоманды → решение.
 ///
@@ -534,8 +691,16 @@ pub struct Rule {
 
 impl Rule {
     /// Скомпилировать правило из строки-паттерна.
-    pub fn compile(pattern: &str, decision: Decision, reason: impl Into<String>) -> Result<Self, regex::Error> {
-        Ok(Self { pattern: Regex::new(pattern)?, decision, reason: reason.into() })
+    pub fn compile(
+        pattern: &str,
+        decision: Decision,
+        reason: impl Into<String>,
+    ) -> Result<Self, regex::Error> {
+        Ok(Self {
+            pattern: Regex::new(pattern)?,
+            decision,
+            reason: reason.into(),
+        })
     }
 }
 
@@ -555,7 +720,9 @@ pub struct PolicyEngine {
 
 impl PolicyEngine {
     /// Движок с явным набором правил (пустой вектор — только эвристика классов).
-    pub fn new(rules: Vec<Rule>) -> Self { Self { rules } }
+    pub fn new(rules: Vec<Rule>) -> Self {
+        Self { rules }
+    }
 
     /// Базовый набор hard-deny правил (урок permissions.rs: катастрофическое
     /// запрещено даже в yolo). Константные паттерны проверены тестами; на всякий
@@ -563,12 +730,24 @@ impl PolicyEngine {
     /// (как RegexSet в permissions.rs).
     pub fn default_rules() -> Vec<Rule> {
         let raw: &[(&str, &str)] = &[
-            (r"\brm\s+(-[\w-]*\s+)*(--no-preserve-root\s+)?(/|/\*|~|\$HOME)\s*$", "rm корня/домашней директории"),
+            (
+                r"\brm\s+(-[\w-]*\s+)*(--no-preserve-root\s+)?(/|/\*|~|\$HOME)\s*$",
+                "rm корня/домашней директории",
+            ),
             (r"\bmkfs(\.\w+)?\b", "форматирование устройства"),
             (r"\bdd\b.*\bof=/dev/", "dd на блочное устройство"),
-            (r">\s*/dev/sd[a-z]", "запись редиректом в блочное устройство"),
-            (r"\b(shutdown|reboot|halt|poweroff)\b", "выключение/перезагрузка машины"),
-            (r"\bgit\s+push\b.*(--force|\s-f)(\s|$).*\b(main|master)\b", "force-push в main/master"),
+            (
+                r">\s*/dev/sd[a-z]",
+                "запись редиректом в блочное устройство",
+            ),
+            (
+                r"\b(shutdown|reboot|halt|poweroff)\b",
+                "выключение/перезагрузка машины",
+            ),
+            (
+                r"\bgit\s+push\b.*(--force|\s-f)(\s|$).*\b(main|master)\b",
+                "force-push в main/master",
+            ),
             (r":\(\)\s*\{[^}]*\}\s*;\s*:", "fork-бомба"),
             (r"\bchmod\s+(-[\w-]*\s+)*777\s+/\s*$", "chmod 777 на корень"),
         ];
@@ -588,12 +767,16 @@ impl PolicyEngine {
         let mut reasons = Vec::new();
         // Голос правил по полному тексту (ловим конструкции из операторов).
         if let Some((d, mut rs)) = self.rule_decision(cmd) {
-            if d > Decision::Allow { reasons.append(&mut rs); }
+            if d > Decision::Allow {
+                reasons.append(&mut rs);
+            }
             decision = decision.max(d);
         }
         for sub in &subs {
             let (d, mut rs) = self.decide_sub(sub, mode);
-            if d > Decision::Allow { reasons.append(&mut rs); }
+            if d > Decision::Allow {
+                reasons.append(&mut rs);
+            }
             decision = decision.max(d);
         }
         // Дедупликация: целая команда из одной подкоманды даёт те же строки.
@@ -604,10 +787,16 @@ impl PolicyEngine {
 
     /// Решение по одной подкоманде: сначала правила, потом класс + режим.
     fn decide_sub(&self, sub: &str, mode: Mode) -> (Decision, Vec<String>) {
-        if let Some(rd) = self.rule_decision(sub) { return rd; }
+        if let Some(rd) = self.rule_decision(sub) {
+            return rd;
+        }
         let class = classify(sub);
         let decision = decide_by_class(class, mode);
-        let reason = format!("«{sub}»: класс «{}» → {}", class.ru_label(), decision.as_str());
+        let reason = format!(
+            "«{sub}»: класс «{}» → {}",
+            class.ru_label(),
+            decision.as_str()
+        );
         (decision, vec![reason])
     }
 
@@ -618,7 +807,11 @@ impl PolicyEngine {
         for rule in &self.rules {
             if rule.pattern.is_match(text) {
                 let why = if rule.reason.is_empty() {
-                    format!("«{text}»: правило /{}/ → {}", rule.pattern.as_str(), rule.decision.as_str())
+                    format!(
+                        "«{text}»: правило /{}/ → {}",
+                        rule.pattern.as_str(),
+                        rule.decision.as_str()
+                    )
                 } else {
                     format!("«{text}»: {} → {}", rule.reason, rule.decision.as_str())
                 };
@@ -645,11 +838,17 @@ fn decide_by_class(class: CmdClass, mode: Mode) -> Decision {
 mod tests {
     use super::*;
 
-    fn subs(cmd: &str) -> Vec<String> { canonicalize_command(cmd) }
+    fn subs(cmd: &str) -> Vec<String> {
+        canonicalize_command(cmd)
+    }
 
-    fn rule(pat: &str, d: Decision) -> Rule { Rule::compile(pat, d, "").unwrap() }
+    fn rule(pat: &str, d: Decision) -> Rule {
+        Rule::compile(pat, d, "").unwrap()
+    }
 
-    fn deny(pat: &str, why: &str) -> Rule { Rule::compile(pat, Decision::Deny, why).unwrap() }
+    fn deny(pat: &str, why: &str) -> Rule {
+        Rule::compile(pat, Decision::Deny, why).unwrap()
+    }
 
     // --- каноникализация ---
 
@@ -660,7 +859,7 @@ mod tests {
         assert_eq!(subs("ls & top"), vec!["ls", "top"]); // одиночный & — фон
         assert_eq!(subs("first\nsecond"), vec!["first", "second"]);
         assert_eq!(subs("a |& b"), vec!["a", "b"]); // bash: пайп с stderr
-        // Пустые сегменты отбрасываются.
+                                                    // Пустые сегменты отбрасываются.
         assert_eq!(subs("ls;;;ls"), vec!["ls", "ls"]);
         assert_eq!(subs("  &&  && ls"), vec!["ls"]);
         assert!(subs("   ").is_empty());
@@ -686,7 +885,10 @@ mod tests {
 
     #[test]
     fn split_words_quotes_and_escapes() {
-        assert_eq!(split_words("echo 'a b' \"c\" d\\ e"), vec!["echo", "a b", "c", "d e"]);
+        assert_eq!(
+            split_words("echo 'a b' \"c\" d\\ e"),
+            vec!["echo", "a b", "c", "d e"]
+        );
         // Пустые кавычки — отдельное пустое слово.
         assert_eq!(split_words("echo '' x"), vec!["echo", "", "x"]);
         assert_eq!(
@@ -700,10 +902,27 @@ mod tests {
     #[test]
     fn classify_readonly_basics() {
         for cmd in [
-            "ls -la", "cat file.txt", "grep -r TODO src", "rg pattern", "pwd", "head -n 5 x",
-            "tail -f log", "wc -l f", "sort -u f", "uniq -c f", "echo hello", "find . -name '*.rs'",
-            "cargo check", "cargo clippy -- -D warnings", "cargo test -p foo", "sed 's/a/b/' f",
-            "git status", "git log --oneline -5", "git diff HEAD~1", "git show abc123", "git branch",
+            "ls -la",
+            "cat file.txt",
+            "grep -r TODO src",
+            "rg pattern",
+            "pwd",
+            "head -n 5 x",
+            "tail -f log",
+            "wc -l f",
+            "sort -u f",
+            "uniq -c f",
+            "echo hello",
+            "find . -name '*.rs'",
+            "cargo check",
+            "cargo clippy -- -D warnings",
+            "cargo test -p foo",
+            "sed 's/a/b/' f",
+            "git status",
+            "git log --oneline -5",
+            "git diff HEAD~1",
+            "git show abc123",
+            "git branch",
         ] {
             assert_eq!(classify(cmd), CmdClass::Readonly, "cmd: {cmd}");
         }
@@ -712,9 +931,19 @@ mod tests {
     #[test]
     fn classify_write_basics() {
         for cmd in [
-            "touch f", "mkdir -p a/b", "cp a b", "mv a b", "ln -s a b", "tee out.log",
-            "sed -i 's/a/b/' f", "chmod +x s.sh", "cargo build", "git add .", "git commit -m x",
-            "git checkout -b feat", "git reset --soft HEAD~1",
+            "touch f",
+            "mkdir -p a/b",
+            "cp a b",
+            "mv a b",
+            "ln -s a b",
+            "tee out.log",
+            "sed -i 's/a/b/' f",
+            "chmod +x s.sh",
+            "cargo build",
+            "git add .",
+            "git commit -m x",
+            "git checkout -b feat",
+            "git reset --soft HEAD~1",
         ] {
             assert_eq!(classify(cmd), CmdClass::Write, "cmd: {cmd}");
         }
@@ -723,8 +952,13 @@ mod tests {
     #[test]
     fn classify_destructive_basics() {
         for cmd in [
-            "rm -rf build", "dd if=/dev/zero of=/dev/sda", "mkfs.ext4 /dev/sda1", "shred secret",
-            "kill -9 1234", "shutdown now", "apt install htop",
+            "rm -rf build",
+            "dd if=/dev/zero of=/dev/sda",
+            "mkfs.ext4 /dev/sda1",
+            "shred secret",
+            "kill -9 1234",
+            "shutdown now",
+            "apt install htop",
         ] {
             assert_eq!(classify(cmd), CmdClass::Destructive, "cmd: {cmd}");
         }
@@ -733,9 +967,18 @@ mod tests {
     #[test]
     fn classify_network_basics() {
         for cmd in [
-            "curl https://x", "wget -q url", "ssh host ls", "scp f host:", "ping 1.1.1.1",
-            "git fetch", "git pull", "git push origin main", "git clone url", "cargo install ripgrep",
-            "pip install requests", "npm install",
+            "curl https://x",
+            "wget -q url",
+            "ssh host ls",
+            "scp f host:",
+            "ping 1.1.1.1",
+            "git fetch",
+            "git pull",
+            "git push origin main",
+            "git clone url",
+            "cargo install ripgrep",
+            "pip install requests",
+            "npm install",
         ] {
             assert_eq!(classify(cmd), CmdClass::Network, "cmd: {cmd}");
         }
@@ -745,7 +988,10 @@ mod tests {
     fn classify_git_dangerous_flags() {
         assert_eq!(classify("git reset --hard HEAD"), CmdClass::Destructive);
         assert_eq!(classify("git reset --mixed"), CmdClass::Write);
-        assert_eq!(classify("git push --force origin main"), CmdClass::Destructive);
+        assert_eq!(
+            classify("git push --force origin main"),
+            CmdClass::Destructive
+        );
         assert_eq!(classify("git push -f"), CmdClass::Destructive);
         // lease мягче: перезапись remote с проверкой — уровень сети.
         assert_eq!(classify("git push --force-with-lease"), CmdClass::Network);
@@ -834,8 +1080,14 @@ mod tests {
         assert_eq!(e.decide("ls && touch f", Mode::Ask).0, Decision::Ask);
         assert_eq!(e.decide("touch f && rm -rf x", Mode::Ask).0, Decision::Ask);
         // Deny от класса в DontAsk перекрывает Allow readonly-подкоманд.
-        assert_eq!(e.decide("ls && curl https://x", Mode::DontAsk).0, Decision::Deny);
-        assert_eq!(e.decide("ls | grep x && pwd", Mode::Yolo).0, Decision::Allow);
+        assert_eq!(
+            e.decide("ls && curl https://x", Mode::DontAsk).0,
+            Decision::Deny
+        );
+        assert_eq!(
+            e.decide("ls | grep x && pwd", Mode::Yolo).0,
+            Decision::Allow
+        );
     }
 
     #[test]
@@ -856,16 +1108,28 @@ mod tests {
         // Allow + Ask по одной команде → Ask.
         assert_eq!(e.decide("git push origin main", Mode::Ask).0, Decision::Ask);
         // Deny бьёт Allow/Ask даже в yolo.
-        assert_eq!(e.decide("git push --force origin main", Mode::Yolo).0, Decision::Deny);
+        assert_eq!(
+            e.decide("git push --force origin main", Mode::Yolo).0,
+            Decision::Deny
+        );
         let (d, reasons) = e.decide("git push --force origin main", Mode::Yolo);
         assert_eq!(d, Decision::Deny);
-        assert!(reasons.iter().any(|r| r.contains("форс-пуш")), "reasons: {reasons:?}");
+        assert!(
+            reasons.iter().any(|r| r.contains("форс-пуш")),
+            "reasons: {reasons:?}"
+        );
     }
 
     #[test]
     fn deny_rule_in_compound_wins() {
-        let e = PolicyEngine::new(vec![deny(r"\bmkfs\b", "форматирование"), rule(r".*", Decision::Allow)]);
-        assert_eq!(e.decide("ls && mkfs.ext4 /dev/sda1", Mode::Yolo).0, Decision::Deny);
+        let e = PolicyEngine::new(vec![
+            deny(r"\bmkfs\b", "форматирование"),
+            rule(r".*", Decision::Allow),
+        ]);
+        assert_eq!(
+            e.decide("ls && mkfs.ext4 /dev/sda1", Mode::Yolo).0,
+            Decision::Deny
+        );
         // Allow-правило на всё — и ничего строже нет.
         assert_eq!(e.decide("ls && pwd", Mode::Ask).0, Decision::Allow);
     }
@@ -874,13 +1138,22 @@ mod tests {
     fn default_rules_block_catastrophic_even_in_yolo() {
         let e = PolicyEngine::new(PolicyEngine::default_rules());
         for cmd in [
-            "rm -rf /", "rm -rf /*", "rm -rf ~", "dd if=/dev/zero of=/dev/sda", "mkfs /dev/sda",
-            "shutdown -h now", "git push --force origin main", ":(){ :|:& };:",
+            "rm -rf /",
+            "rm -rf /*",
+            "rm -rf ~",
+            "dd if=/dev/zero of=/dev/sda",
+            "mkfs /dev/sda",
+            "shutdown -h now",
+            "git push --force origin main",
+            ":(){ :|:& };:",
         ] {
             assert_eq!(e.decide(cmd, Mode::Yolo).0, Decision::Deny, "cmd: {cmd}");
         }
         // Обычная работа не страдает от false positive.
-        assert_eq!(e.decide("cargo check && git status", Mode::DontAsk).0, Decision::Allow);
+        assert_eq!(
+            e.decide("cargo check && git status", Mode::DontAsk).0,
+            Decision::Allow
+        );
         assert_eq!(e.decide("touch f", Mode::Yolo).0, Decision::Allow);
     }
 

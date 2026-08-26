@@ -1,8 +1,8 @@
 //! Инструменты агента: схемы + исполнение. Уроки: read-before-edit НЕ требуем (Grok),
 //! но edit — exact-match (Claude); выводы ограничены 20 КБ; .git защищён.
 
-use anyhow::{anyhow, Result};
 use crate::matchers::{MatchError, MatchKind};
+use anyhow::{anyhow, Result};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -276,7 +276,10 @@ impl ToolEnv {
     }
 
     /// Подключить общий атомик режима (обход sandbox в Max — /mode и --max).
-    pub fn set_mode_override(&mut self, atomic: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>) {
+    pub fn set_mode_override(
+        &mut self,
+        atomic: Option<std::sync::Arc<std::sync::atomic::AtomicU8>>,
+    ) {
         self.mode_override = atomic;
     }
 
@@ -297,10 +300,7 @@ impl ToolEnv {
         let root = Path::new(CONCEPTS_ROOT);
         self.concepts
             .get_or_insert_with(|| {
-                crate::ml_concepts::ConceptCache::new(
-                    root,
-                    crate::ml_concepts::DEFAULT_REINDEX_TTL,
-                )
+                crate::ml_concepts::ConceptCache::new(root, crate::ml_concepts::DEFAULT_REINDEX_TTL)
             })
             .current(root)
     }
@@ -308,14 +308,19 @@ impl ToolEnv {
     /// Ленивый индекс ML-библиотеки (recipes_taxonomy); None — корень недоступен
     fn library_index(&self) -> Option<&crate::library::LibraryIndex> {
         self.library
-            .get_or_init(|| crate::library::LibraryIndex::load(
-                Path::new(crate::library::DEFAULT_ROOT)).ok())
+            .get_or_init(|| {
+                crate::library::LibraryIndex::load(Path::new(crate::library::DEFAULT_ROOT)).ok()
+            })
             .as_ref()
     }
 
     fn resolve(&self, path: &str) -> PathBuf {
         let p = Path::new(path);
-        if p.is_absolute() { p.to_path_buf() } else { self.workspace.join(p) }
+        if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.workspace.join(p)
+        }
     }
 
     pub fn call(&mut self, name: &str, args: &serde_json::Value) -> String {
@@ -350,13 +355,17 @@ impl ToolEnv {
                 let idx = self.concept_index();
                 let hits = idx.search(&q, limit);
                 if hits.is_empty() {
-                    return Ok(format!("концептов по запросу «{q}» не найдено (индекс: {} шт.)",
-                        idx.stats().0));
+                    return Ok(format!(
+                        "концептов по запросу «{q}» не найдено (индекс: {} шт.)",
+                        idx.stats().0
+                    ));
                 }
                 let mut out = format!("концептов: {} (показано {})\n", idx.stats().0, hits.len());
                 for c in hits {
-                    out.push_str(&format!("- {} [{}|{}] {} — семья «{}»\n",
-                        c.slug, c.card_type, c.level, c.title, c.family));
+                    out.push_str(&format!(
+                        "- {} [{}|{}] {} — семья «{}»\n",
+                        c.slug, c.card_type, c.level, c.title, c.family
+                    ));
                 }
                 Ok(out)
             }
@@ -380,8 +389,7 @@ impl ToolEnv {
                 });
                 cache.force_rebuild(root);
                 let (total, by_type) = cache.index().stats();
-                let types: Vec<String> =
-                    by_type.iter().map(|(t, n)| format!("{t}: {n}")).collect();
+                let types: Vec<String> = by_type.iter().map(|(t, n)| format!("{t}: {n}")).collect();
                 Ok(format!(
                     "индекс концептов перестроен: {total} карточек, {} типов ({}); пересборок за сессию: {}",
                     by_type.len(),
@@ -401,7 +409,12 @@ impl ToolEnv {
                 }
                 let mut out = String::new();
                 for h in hits {
-                    out.push_str(&format!("- {} (score {})\n  {}\n", h.path.display(), h.score, h.snippet));
+                    out.push_str(&format!(
+                        "- {} (score {})\n  {}\n",
+                        h.path.display(),
+                        h.score,
+                        h.snippet
+                    ));
                 }
                 Ok(out)
             }
@@ -418,7 +431,8 @@ impl ToolEnv {
                 let cfg = crate::ariadna::AriadnaConfig::default();
                 if !crate::ariadna::is_available(&cfg) {
                     return Ok("Ариадна недоступна: нет бинаря llama-server или GGUF \
-                        (проверьте пути в AriadnaConfig)".into());
+                        (проверьте пути в AriadnaConfig)"
+                        .into());
                 }
                 // локализованный вызов: русский промпт + императивная рамка,
                 // фолбэк на английский при потере ответа (скрин 23.07)
@@ -430,10 +444,12 @@ impl ToolEnv {
                 let limit = args["limit"].as_u64().unwrap_or(6) as usize;
                 let days = args["days"].as_u64().map(|d| d as u32);
                 // новостные дайджесты + HF-дайджесты: один формат YYYY-MM-DD_*.md
-                let mut entries = crate::digests::scan_digests(
-                    Path::new(crate::digests::NEWS_ROOT), "новости");
+                let mut entries =
+                    crate::digests::scan_digests(Path::new(crate::digests::NEWS_ROOT), "новости");
                 entries.extend(crate::digests::scan_digests(
-                    Path::new(crate::digests::HF_ROOT), "HF"));
+                    Path::new(crate::digests::HF_ROOT),
+                    "HF",
+                ));
                 entries.sort_by(|a, b| b.date.cmp(&a.date));
                 let hits = crate::digests::search_digests(&entries, &q, days, limit);
                 if hits.is_empty() {
@@ -441,34 +457,44 @@ impl ToolEnv {
                 }
                 let mut out = String::new();
                 for h in hits {
-                    out.push_str(&format!("- [{}|{}] {} — {}\n  {}\n",
-                        h.entry.date, h.entry.source, h.entry.title,
-                        h.entry.path.display(), h.snippet));
+                    out.push_str(&format!(
+                        "- [{}|{}] {} — {}\n  {}\n",
+                        h.entry.date,
+                        h.entry.source,
+                        h.entry.title,
+                        h.entry.path.display(),
+                        h.snippet
+                    ));
                 }
                 Ok(out)
             }
             "digest_read" => {
                 let path = args["path"].as_str().unwrap_or("");
                 let max = args["max_chars"].as_u64().unwrap_or(6000) as usize;
-                crate::digests::read_digest(Path::new(path), max)
-                    .map_err(|e| anyhow!("{e}"))
+                crate::digests::read_digest(Path::new(path), max).map_err(|e| anyhow!("{e}"))
             }
             "hf_collections" => {
                 let q = args["query"].as_str().unwrap_or("").to_string();
                 let limit = args["limit"].as_u64().unwrap_or(8) as usize;
                 let provider = args["provider"].as_str();
-                let cols = crate::digests::load_collections(Path::new(crate::digests::HF_ROOT)
-                    .join("collections_data.json").as_path())?;
+                let cols = crate::digests::load_collections(
+                    Path::new(crate::digests::HF_ROOT)
+                        .join("collections_data.json")
+                        .as_path(),
+                )?;
                 let hits = crate::digests::search_collections(&cols, &q, provider, limit);
                 if hits.is_empty() {
-                    return Ok(format!("коллекций по «{q}» не найдено (всего: {})", cols.len()));
+                    return Ok(format!(
+                        "коллекций по «{q}» не найдено (всего: {})",
+                        cols.len()
+                    ));
                 }
                 let mut out = format!("коллекций: {} (показано {})\n", cols.len(), hits.len());
                 for c in hits {
                     out.push_str(&format!(
                         "- {} [{}|▲{}|{} шт.] {}\n  тема: {} | {}\n",
-                        c.slug, c.provider_key, c.upvotes, c.item_count, c.title,
-                        c.theme, c.url));
+                        c.slug, c.provider_key, c.upvotes, c.item_count, c.title, c.theme, c.url
+                    ));
                 }
                 Ok(out)
             }
@@ -483,8 +509,13 @@ impl ToolEnv {
                 // модель флаила несколько ходов (живой кейс 21.07: модель
                 // вызвала «agent-sessions» — это скилл, а не инструмент)
                 let specs = tool_specs();
-                let names: Vec<&str> = specs.as_array()
-                    .map(|a| a.iter().filter_map(|t| t["function"]["name"].as_str()).collect())
+                let names: Vec<&str> = specs
+                    .as_array()
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|t| t["function"]["name"].as_str())
+                            .collect()
+                    })
                     .unwrap_or_default();
                 Err(anyhow!(
                     "unknown tool {other}. Доступные инструменты: {}. \
@@ -498,8 +529,7 @@ impl ToolEnv {
 
     fn read_file(&self, args: &serde_json::Value) -> Result<String> {
         let path = self.resolve(args["path"].as_str().unwrap_or(""));
-        let bytes = std::fs::read(&path)
-            .map_err(|e| anyhow!("{e}: {}", path.display()))?;
+        let bytes = std::fs::read(&path).map_err(|e| anyhow!("{e}: {}", path.display()))?;
         // бинарные файлы (баг 23.07: агент флаил read_file по PDF-библиотеке,
         // получая лишь «stream did not contain valid UTF-8»): PDF — извлекаем
         // текст pdftotext, прочие бинарники — честный маркер с размером
@@ -514,12 +544,23 @@ impl ToolEnv {
         let limit = args["limit"].as_u64().unwrap_or(400) as usize;
         let lines: Vec<&str> = text.lines().collect();
         let total = lines.len();
-        let slice: Vec<String> = lines.iter().skip(offset - 1).take(limit)
-            .enumerate().map(|(i, l)| format!("{:>6}\t{}", offset + i, l)).collect();
-        if slice.is_empty() && total == 0 { return Ok("(пустой файл)".into()); }
+        let slice: Vec<String> = lines
+            .iter()
+            .skip(offset - 1)
+            .take(limit)
+            .enumerate()
+            .map(|(i, l)| format!("{:>6}\t{}", offset + i, l))
+            .collect();
+        if slice.is_empty() && total == 0 {
+            return Ok("(пустой файл)".into());
+        }
         let mut out = slice.join("\n");
         if offset - 1 + limit < total {
-            out += &format!("\n... (ещё {} строк; offset {})", total - (offset - 1 + limit), offset + limit);
+            out += &format!(
+                "\n... (ещё {} строк; offset {})",
+                total - (offset - 1 + limit),
+                offset + limit
+            );
         }
         Ok(cap(out))
     }
@@ -531,18 +572,26 @@ impl ToolEnv {
         if raw_path.is_empty() {
             return Err(anyhow!(
                 "write_file: параметр path обязателен — укажите путь к файлу \
-                 (например, \"notes/out.md\"), а не только content"));
+                 (например, \"notes/out.md\"), а не только content"
+            ));
         }
         let path = self.resolve(raw_path);
         if path.is_dir() {
             return Err(anyhow!(
                 "write_file: путь является каталогом — укажите путь к файлу: {}",
-                path.display()));
+                path.display()
+            ));
         }
         let content = args["content"].as_str().unwrap_or("");
-        if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
         std::fs::write(&path, content)?;
-        Ok(format!("OK: записано {} байт в {}", content.len(), path.display()))
+        Ok(format!(
+            "OK: записано {} байт в {}",
+            content.len(),
+            path.display()
+        ))
     }
 
     fn edit_file(&self, args: &serde_json::Value) -> Result<String> {
@@ -551,7 +600,8 @@ impl ToolEnv {
         let old = args["old_string"].as_str().unwrap_or("\u{0}");
         let new = args["new_string"].as_str().unwrap_or("");
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
-        let text = std::fs::read_to_string(&path).map_err(|e| anyhow!("{e}: {}", path.display()))?;
+        let text =
+            std::fs::read_to_string(&path).map_err(|e| anyhow!("{e}: {}", path.display()))?;
         // Уровень 0 (классика): exact-substring — сохраняет семантику v0.1 для подстрок в строке
         let sub_count = text.matches(old).count();
         if sub_count > 0 {
@@ -564,17 +614,28 @@ impl ToolEnv {
                     .collect();
                 lines.sort_unstable();
                 lines.dedup();
-                let list = lines.iter().map(usize::to_string).collect::<Vec<_>>().join(", ");
+                let list = lines
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 return Err(anyhow!(
                     "old_string встречается {sub_count} раз (строки: {list}); \
                      уточните контекст или replace_all=true"
                 ));
             }
-            let out = if replace_all { text.replace(old, new) } else { text.replacen(old, new, 1) };
+            let out = if replace_all {
+                text.replace(old, new)
+            } else {
+                text.replacen(old, new, 1)
+            };
             let preview = diff_preview(&text, &out, rel);
             std::fs::write(&path, &out)?;
-            return Ok(format!("OK: заменено {} вхождение(й) в {} (exact){preview}",
-                if replace_all { sub_count } else { 1 }, path.display()));
+            return Ok(format!(
+                "OK: заменено {} вхождение(й) в {} (exact){preview}",
+                if replace_all { sub_count } else { 1 },
+                path.display()
+            ));
         }
 
         // Fuzzy-каскад crate::matchers (урок OpenDev 9-pass): 8 матчеров от строгого
@@ -594,15 +655,21 @@ impl ToolEnv {
                     // нормализация: свой '\r' (CRLF-вход от модели) снимаем,
                     // затем восстанавливаем по доминирующему окончанию файла
                     let l = l.strip_suffix('\r').unwrap_or(l);
-                    if crlf { format!("{l}\r") } else { l.to_string() }
+                    if crlf {
+                        format!("{l}\r")
+                    } else {
+                        l.to_string()
+                    }
                 })
                 .collect();
             let (out, count) = replace_all_trim_blocks(&text, &old_lines, &new_lines);
             if count > 0 {
                 let preview = diff_preview(&text, &out, rel);
                 std::fs::write(&path, &out)?;
-                return Ok(format!("OK: заменено {count} вхождение(й) в {} (fuzzy: trim){preview}",
-                    path.display()));
+                return Ok(format!(
+                    "OK: заменено {count} вхождение(й) в {} (fuzzy: trim){preview}",
+                    path.display()
+                ));
             }
         }
         match crate::matchers::find_match(&text, old) {
@@ -623,10 +690,17 @@ impl ToolEnv {
                 };
                 let preview = diff_preview(&text, &out, rel);
                 std::fs::write(&path, &out)?;
-                Ok(format!("OK: заменено 1 вхождение(й) в {}{level_note}{preview}", path.display()))
+                Ok(format!(
+                    "OK: заменено 1 вхождение(й) в {}{level_note}{preview}",
+                    path.display()
+                ))
             }
             Err(MatchError::Ambiguous { lines }) => {
-                let list = lines.iter().map(usize::to_string).collect::<Vec<_>>().join(", ");
+                let list = lines
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 Err(anyhow!(
                     "old_string встречается {} раз (строки: {list}); уточните контекст или replace_all=true",
                     lines.len()
@@ -637,8 +711,10 @@ impl ToolEnv {
                     Some(line) => format!("ближайшее похожее место — строка {line}"),
                     None => "совпадающих блоков нет".to_string(),
                 };
-                Err(anyhow!("old_string не найден в {} (9-уровневый fuzzy-каскад).\nПодсказка: {hint}",
-                    path.display()))
+                Err(anyhow!(
+                    "old_string не найден в {} (9-уровневый fuzzy-каскад).\nПодсказка: {hint}",
+                    path.display()
+                ))
             }
         }
     }
@@ -663,7 +739,10 @@ impl ToolEnv {
             Err(_) => Vec::new(),
         };
         let touched = crate::patch::apply_patch(patch, &self.workspace)?;
-        let mut out = format!("OK: apply_patch применён, затронуто файлов: {}", touched.len());
+        let mut out = format!(
+            "OK: apply_patch применён, затронуто файлов: {}",
+            touched.len()
+        );
         for p in &touched {
             out += &format!("\n- {}", p.display());
         }
@@ -672,7 +751,12 @@ impl ToolEnv {
         let mut diffs = String::new();
         for ((rel, old), abs) in before.iter().zip(touched.iter()) {
             let new = std::fs::read_to_string(abs).unwrap_or_default();
-            diffs.push_str(&crate::diffview::unified_diff(old.as_deref().unwrap_or(""), &new, rel, 2));
+            diffs.push_str(&crate::diffview::unified_diff(
+                old.as_deref().unwrap_or(""),
+                &new,
+                rel,
+                2,
+            ));
         }
         out += &preview_block(&diffs);
         Ok(out)
@@ -692,7 +776,9 @@ impl ToolEnv {
         }
         let mut out = vec![];
         walk(&base, &base, &mut out, max, 0)?;
-        if out.is_empty() { return Ok("(пусто)".into()); }
+        if out.is_empty() {
+            return Ok("(пусто)".into());
+        }
         Ok(out.join("\n"))
     }
 
@@ -701,7 +787,9 @@ impl ToolEnv {
         let base = self.resolve(args["path"].as_str().unwrap_or("."));
         let mut out = vec![];
         grep_walk(&base, &base, &pat, &mut out, 50)?;
-        if out.is_empty() { return Ok("(совпадений нет)".into()); }
+        if out.is_empty() {
+            return Ok("(совпадений нет)".into());
+        }
         // cap — страховка поверх бюджетов grep_walk (баг 06.08: 37,9 МБ в истории)
         Ok(cap(out.join("\n")))
     }
@@ -724,7 +812,9 @@ impl ToolEnv {
         }
         let in_prog = todos.iter().filter(|t| t.status == "in_progress").count();
         if in_prog > 1 {
-            return Err(anyhow!("должен быть ровно один in_progress (сейчас {in_prog})"));
+            return Err(anyhow!(
+                "должен быть ровно один in_progress (сейчас {in_prog})"
+            ));
         }
         // Внутреннее хранилище — crate::todo::TodoList (валидация id, метки времени,
         // события для TUI). id генерируем позиционно: внешний JSON-контракт id не имеет,
@@ -742,7 +832,9 @@ impl ToolEnv {
                 crate::todo::TodoItem::new(&format!("t{i}"), &t.content, status)
             })
             .collect();
-        self.todo_list.set_full(stored).map_err(|e| anyhow!("todo: {e}"))?;
+        self.todo_list
+            .set_full(stored)
+            .map_err(|e| anyhow!("todo: {e}"))?;
         self.todos = todos;
         Ok(format!("OK: {} задач в списке", self.todos.len()))
     }
@@ -762,22 +854,32 @@ fn concept_not_found_message(slug: &str, near: &[&crate::ml_concepts::ConceptCar
     if near.is_empty() {
         format!("концепт «{slug}» не найден")
     } else {
-        let list = near.iter().map(|c| c.slug.as_str()).collect::<Vec<_>>().join(", ");
+        let list = near
+            .iter()
+            .map(|c| c.slug.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
         format!("концепт «{slug}» не найден. Похожие: {list}")
     }
 }
 
 fn walk(base: &Path, dir: &Path, out: &mut Vec<String>, max: usize, depth: usize) -> Result<()> {
-    if out.len() >= max || depth > 8 { return Ok(()); }
+    if out.len() >= max || depth > 8 {
+        return Ok(());
+    }
     let entries = match std::fs::read_dir(dir) {
         Ok(e) => e,
         Err(_) => return Ok(()),
     };
     for e in entries.flatten() {
-        if out.len() >= max { break; }
+        if out.len() >= max {
+            break;
+        }
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
-        if name == ".git" || name == "target" || name == "node_modules" { continue; }
+        if name == ".git" || name == "target" || name == "node_modules" {
+            continue;
+        }
         let rel = p.strip_prefix(base).unwrap_or(&p).display().to_string();
         if p.is_dir() {
             walk(base, &p, out, max, depth + 1)?;
@@ -798,14 +900,22 @@ fn walk(base: &Path, dir: &Path, out: &mut Vec<String>, max: usize, depth: usize
 fn dominant_newline(text: &str) -> &'static str {
     let total = text.bytes().filter(|&b| b == b'\n').count();
     let crlf = text.matches("\r\n").count();
-    if crlf > total - crlf { "\r\n" } else { "\n" }
+    if crlf > total - crlf {
+        "\r\n"
+    } else {
+        "\n"
+    }
 }
 
 /// Приводит переводы строк замены к доминирующему окончанию файла `nl`
 /// (BUG-QA-EDIT-02): сначала нормализация к LF (на случай смешанных
 /// окончаний в присланном моделью блоке), затем развёртывание до CRLF.
 fn adapt_newlines(s: &str, nl: &str) -> String {
-    if nl == "\n" { s.to_string() } else { s.replace("\r\n", "\n").replace('\n', "\r\n") }
+    if nl == "\n" {
+        s.to_string()
+    } else {
+        s.replace("\r\n", "\n").replace('\n', "\r\n")
+    }
 }
 
 /// Заменить все блоки `old_lines`, совпадающие построчно по trim, на `new_lines`.
@@ -813,7 +923,11 @@ fn adapt_newlines(s: &str, nl: &str) -> String {
 /// Семантика ветки replace_all из v0.1: хвостовой \n файла сохраняется.
 /// `new_lines` — уже приведённые к доминирующему окончанию строк файла
 /// (для CRLF-файла каждая строка несёт '\r' на конце, см. edit_file).
-fn replace_all_trim_blocks(text: &str, old_lines: &[&str], new_lines: &[String]) -> (String, usize) {
+fn replace_all_trim_blocks(
+    text: &str,
+    old_lines: &[&str],
+    new_lines: &[String],
+) -> (String, usize) {
     let trailing_nl = text.ends_with('\n');
     let file_lines: Vec<&str> = text.split('\n').collect();
     if old_lines.is_empty() || old_lines.len() > file_lines.len() {
@@ -825,7 +939,10 @@ fn replace_all_trim_blocks(text: &str, old_lines: &[&str], new_lines: &[String])
     let mut i = 0;
     while i < file_lines.len() {
         let block_matches = i + n <= file_lines.len()
-            && file_lines[i..i + n].iter().zip(old_lines.iter()).all(|(a, b)| a.trim() == b.trim());
+            && file_lines[i..i + n]
+                .iter()
+                .zip(old_lines.iter())
+                .all(|(a, b)| a.trim() == b.trim());
         if block_matches {
             out_lines.extend(new_lines.iter().cloned());
             i += n;
@@ -836,7 +953,9 @@ fn replace_all_trim_blocks(text: &str, old_lines: &[&str], new_lines: &[String])
         }
     }
     let mut out = out_lines.join("\n");
-    if trailing_nl && !out.ends_with('\n') { out.push('\n'); }
+    if trailing_nl && !out.ends_with('\n') {
+        out.push('\n');
+    }
     (out, count)
 }
 
@@ -844,11 +963,16 @@ fn replace_all_trim_blocks(text: &str, old_lines: &[&str], new_lines: &[String])
 fn preview_block(diff: &str) -> String {
     const MAX_LINES: usize = 40;
     let trimmed = diff.trim_end_matches('\n');
-    if trimmed.is_empty() { return String::new(); }
+    if trimmed.is_empty() {
+        return String::new();
+    }
     let lines: Vec<&str> = trimmed.lines().collect();
     let body = if lines.len() > MAX_LINES {
-        format!("{}\n... (diff обрезан: показаны {MAX_LINES} из {} строк)",
-            lines[..MAX_LINES].join("\n"), lines.len())
+        format!(
+            "{}\n... (diff обрезан: показаны {MAX_LINES} из {} строк)",
+            lines[..MAX_LINES].join("\n"),
+            lines.len()
+        )
     } else {
         trimmed.to_string()
     };
@@ -869,14 +993,23 @@ const GREP_TOTAL_MAX_BYTES: usize = 16 * 1024;
 
 fn grep_walk(base: &Path, dir: &Path, pat: &str, out: &mut Vec<String>, max: usize) -> Result<()> {
     let mut total_bytes: usize = out.iter().map(String::len).sum();
-    if out.len() >= max || total_bytes >= GREP_TOTAL_MAX_BYTES { return Ok(()); }
-    let entries = match std::fs::read_dir(dir) { Ok(e) => e, Err(_) => return Ok(()) };
+    if out.len() >= max || total_bytes >= GREP_TOTAL_MAX_BYTES {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return Ok(()),
+    };
     for e in entries.flatten() {
         total_bytes = out.iter().map(String::len).sum();
-        if out.len() >= max || total_bytes >= GREP_TOTAL_MAX_BYTES { break; }
+        if out.len() >= max || total_bytes >= GREP_TOTAL_MAX_BYTES {
+            break;
+        }
         let p = e.path();
         let name = e.file_name().to_string_lossy().to_string();
-        if name == ".git" || name == "target" || name == "node_modules" { continue; }
+        if name == ".git" || name == "target" || name == "node_modules" {
+            continue;
+        }
         if p.is_dir() {
             grep_walk(base, &p, pat, out, max)?;
         } else if let Ok(text) = std::fs::read_to_string(&p) {
@@ -892,7 +1025,9 @@ fn grep_walk(base: &Path, dir: &Path, pat: &str, out: &mut Vec<String>, max: usi
                         head
                     };
                     out.push(format!("{rel}:{}: {shown}", i + 1));
-                    if out.len() >= max { break; }
+                    if out.len() >= max {
+                        break;
+                    }
                 }
             }
         }
@@ -905,11 +1040,15 @@ pub fn run_bash(cmd: &str, cwd: &Path, timeout: Duration, sandbox_on: bool) -> R
     // протекал в строку ввода TUI (агент работает в фоне, ratatui перерисовывает
     // экран, а сырой stderr печатается в позиции курсора — в поле ввода)
     if std::env::var_os("THESEUS_DEBUG").is_some() {
-        eprintln!("[debug] run_bash sandbox_on={sandbox_on} status={:?}", crate::sandbox::status());
+        eprintln!(
+            "[debug] run_bash sandbox_on={sandbox_on} status={:?}",
+            crate::sandbox::status()
+        );
     }
     let mut command = Command::new("bash");
     command
-        .arg("-lc").arg(cmd)
+        .arg("-lc")
+        .arg(cmd)
         .current_dir(cwd)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -939,13 +1078,18 @@ pub fn run_bash(cmd: &str, cwd: &Path, timeout: Duration, sandbox_on: bool) -> R
         Ok(Err(e)) => return Err(anyhow!("wait: {e}")),
         Err(_) => {
             let _ = libc_kill(pid);
-            return Ok(format!("ERROR: таймаут {}s — процесс убит", timeout.as_secs()));
+            return Ok(format!(
+                "ERROR: таймаут {}s — процесс убит",
+                timeout.as_secs()
+            ));
         }
     };
     let mut s = String::from_utf8_lossy(&out.stdout).to_string();
     let err = String::from_utf8_lossy(&out.stderr).to_string();
     if !err.trim().is_empty() {
-        if !s.is_empty() { s.push('\n'); }
+        if !s.is_empty() {
+            s.push('\n');
+        }
         s.push_str(&err);
     }
     let code = out.status.code().unwrap_or(-1);
@@ -954,7 +1098,9 @@ pub fn run_bash(cmd: &str, cwd: &Path, timeout: Duration, sandbox_on: bool) -> R
 }
 
 fn libc_kill(pid: u32) -> i32 {
-    extern "C" { fn kill(pid: i32, sig: i32) -> i32; }
+    extern "C" {
+        fn kill(pid: i32, sig: i32) -> i32;
+    }
     unsafe { kill(pid as i32, 9) }
 }
 
@@ -962,12 +1108,14 @@ fn libc_kill(pid: u32) -> i32 {
 
 pub fn read_file_free(workspace: &Path, args: &serde_json::Value) -> String {
     let env = ToolEnv::new(workspace);
-    env.read_file(args).unwrap_or_else(|e| format!("ERROR: {e}"))
+    env.read_file(args)
+        .unwrap_or_else(|e| format!("ERROR: {e}"))
 }
 
 pub fn list_files_free(workspace: &Path, args: &serde_json::Value) -> String {
     let env = ToolEnv::new(workspace);
-    env.list_files(args).unwrap_or_else(|e| format!("ERROR: {e}"))
+    env.list_files(args)
+        .unwrap_or_else(|e| format!("ERROR: {e}"))
 }
 
 pub fn grep_free(workspace: &Path, args: &serde_json::Value) -> String {
@@ -986,12 +1134,18 @@ pub fn web_fetch(url: &str, timeout_secs: u64) -> Result<String> {
     let resp = client.get(url).send()?;
     let status = resp.status();
     let html = resp.text().unwrap_or_default();
-    Ok(format!("HTTP {}\n\n{}", status.as_u16(), html_to_text(&html)))
+    Ok(format!(
+        "HTTP {}\n\n{}",
+        status.as_u16(),
+        html_to_text(&html)
+    ))
 }
 
 /// Грубый HTML→text: вырезать script/style, теги → пробелы, сущности, сжать пробелы
 fn html_to_text(html: &str) -> String {
-    let re_script = regex::Regex::new(r"(?is)<(script|style|noscript)[^>]*>.*?</(script|style|noscript)>").unwrap();
+    let re_script =
+        regex::Regex::new(r"(?is)<(script|style|noscript)[^>]*>.*?</(script|style|noscript)>")
+            .unwrap();
     let re_tags = regex::Regex::new(r"(?s)<[^>]+>").unwrap();
     let re_ws = regex::Regex::new(r"[ \t]+").unwrap();
     let re_nl = regex::Regex::new(r"\n\s*\n+").unwrap();
@@ -1006,7 +1160,11 @@ fn html_to_text(html: &str) -> String {
         .replace("&#39;", "'");
     let collapsed = re_ws.replace_all(&unescaped, " ");
     let clean = re_nl.replace_all(&collapsed, "\n");
-    let trimmed: Vec<&str> = clean.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let trimmed: Vec<&str> = clean
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     cap(trimmed.join("\n"))
 }
 
@@ -1025,14 +1183,18 @@ fn read_binary_file(path: &Path, bytes: &[u8]) -> Result<String> {
             Ok(text) => {
                 let note = format!(
                     "[PDF → текст извлечён pdftotext из {} ({} байт)]\n",
-                    path.display(), bytes.len());
+                    path.display(),
+                    bytes.len()
+                );
                 Ok(cap(format!("{note}{text}")))
             }
             Err(e) => Err(anyhow!(
                 "бинарный PDF ({} байт): pdftotext недоступен или упал ({e}). \
                  Установите poppler-utils или извлеките текст через bash: \
                  pdftotext \"{}\" - | head -400",
-                bytes.len(), path.display())),
+                bytes.len(),
+                path.display()
+            )),
         };
     }
     let sig: Vec<String> = bytes.iter().take(8).map(|b| format!("{b:02X}")).collect();
@@ -1040,7 +1202,9 @@ fn read_binary_file(path: &Path, bytes: &[u8]) -> Result<String> {
         "бинарный файл ({} байт, сигнатура {}), чтение как текст невозможно. \
          Используйте подходящий инструмент через bash (file, strings, \
          специализированные конвертеры)",
-        bytes.len(), sig.join(" ")))
+        bytes.len(),
+        sig.join(" ")
+    ))
 }
 
 /// Извлечение текста из PDF через `pdftotext <path> -` (без shell, аргумент
@@ -1070,7 +1234,10 @@ fn pdftotext_extract(path: &Path) -> Result<String> {
     };
     let Some(status) = status else {
         let _ = child.wait();
-        return Err(anyhow!("pdftotext не завершился за 60 с ({})", path.display()));
+        return Err(anyhow!(
+            "pdftotext не завершился за 60 с ({})",
+            path.display()
+        ));
     };
     let mut out = String::new();
     if let Some(mut so) = child.stdout.take() {
@@ -1088,12 +1255,15 @@ fn pdftotext_extract(path: &Path) -> Result<String> {
             err = String::from_utf8_lossy(&buf).into_owned();
         }
         let short: String = err.trim().chars().take(300).collect();
-        return Err(anyhow!("pdftotext завершился со статусом {status}: {short}"));
+        return Err(anyhow!(
+            "pdftotext завершился со статусом {status}: {short}"
+        ));
     }
     if out.trim().is_empty() {
         return Err(anyhow!(
             "pdftotext вернул пустой текст (скан-PDF без текстового слоя?) — \
-             нужен OCR, это вне read_file"));
+             нужен OCR, это вне read_file"
+        ));
     }
     Ok(out)
 }
@@ -1102,7 +1272,8 @@ fn pdftotext_extract(path: &Path) -> Result<String> {
 /// по половинному байтовому лимиту, срезы только на границах символов
 /// UTF-8; маркер показывает реальное число выкинутых байт (всегда > 0:
 /// хвост начинается строго позже конца головы, т.к. s.len() > OUTPUT_LIMIT).
-fn cap(s: String) -> String {    if s.len() > OUTPUT_LIMIT {
+fn cap(s: String) -> String {
+    if s.len() > OUTPUT_LIMIT {
         let half = OUTPUT_LIMIT / 2;
         // голова — первые `half` байт, отступ назад до границы символа
         let mut head_end = half;
@@ -1116,24 +1287,34 @@ fn cap(s: String) -> String {    if s.len() > OUTPUT_LIMIT {
             tail_start += 1;
         }
         let skipped = tail_start - head_end;
-        format!("{}\n... [обрезано {skipped} байт] ...\n{}", &s[..head_end], &s[tail_start..])
+        format!(
+            "{}\n... [обрезано {skipped} байт] ...\n{}",
+            &s[..head_end],
+            &s[tail_start..]
+        )
     } else {
         s
     }
 }
 
 /// Публичная обёртка cap для других модулей (v0.3)
-pub fn cap_pub(s: String) -> String { cap(s) }
+pub fn cap_pub(s: String) -> String {
+    cap(s)
+}
 
 // ---------------- web_search (v0.3.1) ----------------
 
 /// Минимальный percent-encoding (alnum + -_.~)
 fn urlencode(s: &str) -> String {
-    s.bytes().map(|b| match b {
-        b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (b as char).to_string(),
-        b' ' => "+".into(),
-        _ => format!("%{b:02X}"),
-    }).collect()
+    s.bytes()
+        .map(|b| match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            b' ' => "+".into(),
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }
 
 pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
@@ -1145,7 +1326,8 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
 
     // 1) DuckDuckGo Lite (POST) — полноценный HTML-поиск, не блокирует ботов.
     let body = format!("q={}&kl=&df=", urlencode(query));
-    if let Ok(resp) = client.post("https://lite.duckduckgo.com/lite/")
+    if let Ok(resp) = client
+        .post("https://lite.duckduckgo.com/lite/")
         .header("Content-Type", "application/x-www-form-urlencoded")
         .body(body)
         .send()
@@ -1162,8 +1344,10 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
     }
 
     // 2) DuckDuckGo Instant Answer JSON (дополнение — мгновенные ответы)
-    let ddg = format!("https://api.duckduckgo.com/?q={}&format=json&no_html=1&no_redirect=1",
-                      urlencode(query));
+    let ddg = format!(
+        "https://api.duckduckgo.com/?q={}&format=json&no_html=1&no_redirect=1",
+        urlencode(query)
+    );
     if let Ok(resp) = client.get(&ddg).send() {
         if let Ok(text) = resp.text() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -1196,10 +1380,17 @@ pub fn web_search(query: &str, timeout_secs: u64) -> Result<String> {
 }
 
 /// Wikipedia OpenSearch API: до 5 ссылок по запросу с языка `lang` → в `out`.
-fn wiki_opensearch(client: &reqwest::blocking::Client, lang: &str, label: &str,
-                   query: &str, out: &mut String) {
-    let url = format!("https://{lang}.wikipedia.org/w/api.php?action=opensearch&format=json&limit=5&search={}",
-                      urlencode(query));
+fn wiki_opensearch(
+    client: &reqwest::blocking::Client,
+    lang: &str,
+    label: &str,
+    query: &str,
+    out: &mut String,
+) {
+    let url = format!(
+        "https://{lang}.wikipedia.org/w/api.php?action=opensearch&format=json&limit=5&search={}",
+        urlencode(query)
+    );
     if let Ok(resp) = client.get(&url).send() {
         if let Ok(text) = resp.text() {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
@@ -1208,7 +1399,11 @@ fn wiki_opensearch(client: &reqwest::blocking::Client, lang: &str, label: &str,
                         *out += &format!("Wikipedia ({label}):\n");
                     }
                     for (t, u) in titles.iter().zip(urls.iter()) {
-                        *out += &format!("- {} — {}\n", t.as_str().unwrap_or(""), u.as_str().unwrap_or(""));
+                        *out += &format!(
+                            "- {} — {}\n",
+                            t.as_str().unwrap_or(""),
+                            u.as_str().unwrap_or("")
+                        );
                     }
                 }
             }
@@ -1235,7 +1430,9 @@ struct DdgHit {
 /// ячейках таблицы).
 fn parse_ddg_lite(html: &str) -> Vec<DdgHit> {
     let item_re = regex::Regex::new(
-        r#"(?s)<a\b[^>]*>(.*?)</a>|<td\b[^>]*class=['"]result-snippet['"][^>]*>(.*?)</td>"#).unwrap();
+        r#"(?s)<a\b[^>]*>(.*?)</a>|<td\b[^>]*class=['"]result-snippet['"][^>]*>(.*?)</td>"#,
+    )
+    .unwrap();
     let link_class_re = regex::Regex::new(r#"class=['"]result-link['"]"#).unwrap();
     let href_re = regex::Regex::new(r#"href="([^"]+)""#).unwrap();
 
@@ -1243,12 +1440,24 @@ fn parse_ddg_lite(html: &str) -> Vec<DdgHit> {
     for cap in item_re.captures_iter(html) {
         if let Some(anchor_inner) = cap.get(1) {
             let tag = &cap[0];
-            if !link_class_re.is_match(tag) { continue; }
-            let Some(href) = href_re.captures(tag).map(|c| c[1].to_string()) else { continue };
-            if !href.starts_with("http") || href.contains("duckduckgo.com") { continue; }
+            if !link_class_re.is_match(tag) {
+                continue;
+            }
+            let Some(href) = href_re.captures(tag).map(|c| c[1].to_string()) else {
+                continue;
+            };
+            if !href.starts_with("http") || href.contains("duckduckgo.com") {
+                continue;
+            }
             let title = strip_html(anchor_inner.as_str());
-            if title.is_empty() { continue; }
-            hits.push(DdgHit { title, url: href, snippet: String::new() });
+            if title.is_empty() {
+                continue;
+            }
+            hits.push(DdgHit {
+                title,
+                url: href,
+                snippet: String::new(),
+            });
         } else if let Some(snippet_html) = cap.get(2) {
             // сниппет — к последнему результату без сниппета
             if let Some(last) = hits.iter_mut().rev().find(|h| h.snippet.is_empty()) {
@@ -1268,14 +1477,23 @@ fn strip_html(s: &str) -> String {
     while let Some(c) = chars.next() {
         match c {
             '<' => {
-                for c2 in chars.by_ref() { if c2 == '>' { break; } }
+                for c2 in chars.by_ref() {
+                    if c2 == '>' {
+                        break;
+                    }
+                }
             }
             '&' => {
                 let mut ent = String::new();
                 let mut closed = false;
                 for c2 in chars.by_ref() {
-                    if c2 == ';' { closed = true; break; }
-                    if ent.len() >= 7 { break; }
+                    if c2 == ';' {
+                        closed = true;
+                        break;
+                    }
+                    if ent.len() >= 7 {
+                        break;
+                    }
                     ent.push(c2);
                 }
                 let decoded = if closed { decode_entity(&ent) } else { None };
@@ -1284,7 +1502,9 @@ fn strip_html(s: &str) -> String {
                     None => {
                         out.push('&');
                         out.push_str(&ent);
-                        if closed { out.push(';'); }
+                        if closed {
+                            out.push(';');
+                        }
                     }
                 }
             }
@@ -1307,11 +1527,15 @@ fn decode_entity(ent: &str) -> Option<String> {
         "hellip" => Some("…".into()),
         _ => {
             if let Some(num) = ent.strip_prefix("#x").or_else(|| ent.strip_prefix("#X")) {
-                u32::from_str_radix(num, 16).ok()
-                    .and_then(char::from_u32).map(|c| c.to_string())
+                u32::from_str_radix(num, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|c| c.to_string())
             } else if let Some(num) = ent.strip_prefix('#') {
-                num.parse::<u32>().ok()
-                    .and_then(char::from_u32).map(|c| c.to_string())
+                num.parse::<u32>()
+                    .ok()
+                    .and_then(char::from_u32)
+                    .map(|c| c.to_string())
             } else {
                 None
             }
@@ -1327,7 +1551,10 @@ mod tests {
     /// (в т.ч. hex) сущности декодируются, незакрытый тег отбрасывается.
     #[test]
     fn strip_html_tags_and_entities() {
-        assert_eq!(strip_html("a &amp; b &lt;x&gt; &quot;q&quot; &#39;s&#39;"), "a & b <x> \"q\" 's'");
+        assert_eq!(
+            strip_html("a &amp; b &lt;x&gt; &quot;q&quot; &#39;s&#39;"),
+            "a & b <x> \"q\" 's'"
+        );
         // hex-сущности (DDG: GRPO&#x27;s)
         assert_eq!(strip_html("GRPO&#x27;s &#x41;&#65;"), "GRPO's AA");
         // незакрытый тег в конце — отбрасывается
@@ -1335,7 +1562,10 @@ mod tests {
         // не-сущность остаётся как есть
         assert_eq!(strip_html("a & b; c"), "a & b; c");
         // вложенные теги и пробелы по краям
-        assert_eq!(strip_html("  <td>  сниппет с <b>выделением</b>  </td>  "), "сниппет с выделением");
+        assert_eq!(
+            strip_html("  <td>  сниппет с <b>выделением</b>  </td>  "),
+            "сниппет с выделением"
+        );
     }
 
     /// Парсер DDG Lite (разметка из живого снимка 03.08): ссылки по
@@ -1403,13 +1633,22 @@ mod tests {
         env.sandbox = true;
         // без атомика — конфиг решает: sandbox on
         assert!(env.sandbox_effective());
-        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_ASK));
+        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            crate::permissions::MODE_ASK,
+        ));
         env.set_mode_override(Some(atomic.clone()));
         use std::sync::atomic::Ordering;
-        for code in [crate::permissions::MODE_ASK, crate::permissions::MODE_SEMI,
-                     crate::permissions::MODE_YOLO, crate::permissions::MODE_DONTASK] {
+        for code in [
+            crate::permissions::MODE_ASK,
+            crate::permissions::MODE_SEMI,
+            crate::permissions::MODE_YOLO,
+            crate::permissions::MODE_DONTASK,
+        ] {
             atomic.store(code, Ordering::Relaxed);
-            assert!(env.sandbox_effective(), "код {code}: sandbox должен остаться");
+            assert!(
+                env.sandbox_effective(),
+                "код {code}: sandbox должен остаться"
+            );
         }
         atomic.store(crate::permissions::MODE_MAX, Ordering::Relaxed);
         assert!(!env.sandbox_effective(), "Max: sandbox обязан обходиться");
@@ -1426,9 +1665,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "hello world\nbye\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({"path":"a.txt","old_string":"world","new_string":"rust"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({"path":"a.txt","old_string":"world","new_string":"rust"}),
+        );
         assert!(r.starts_with("OK"));
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "hello rust\nbye\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "hello rust\nbye\n"
+        );
     }
 
     /// grep (баг 06.08): мегабайтная строка обрезается маркером, а общий
@@ -1442,12 +1687,19 @@ mod tests {
         let mut out = vec![];
         grep_walk(&dir, &dir, "prefix", &mut out, 50).unwrap();
         assert_eq!(out.len(), 1);
-        assert!(out[0].contains("строка урезана"), "маркер обрезки: {:.60}", &out[0][..60]);
+        assert!(
+            out[0].contains("строка урезана"),
+            "маркер обрезки: {:.60}",
+            &out[0][..60]
+        );
         assert!(out[0].len() < 500, "строка ограничена: {}", out[0].len());
         // общий бюджет: много файлов с длинными строками — суммарно ограничено
         for i in 0..40 {
-            std::fs::write(dir.join(format!("f{i}.txt")),
-                format!("key {}", "b".repeat(10_000))).unwrap();
+            std::fs::write(
+                dir.join(format!("f{i}.txt")),
+                format!("key {}", "b".repeat(10_000)),
+            )
+            .unwrap();
         }
         let mut out2 = vec![];
         grep_walk(&dir, &dir, "key", &mut out2, 50).unwrap();
@@ -1462,7 +1714,10 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "x x x\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({"path":"a.txt","old_string":"x","new_string":"y"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({"path":"a.txt","old_string":"x","new_string":"y"}),
+        );
         assert!(r.contains("ERROR"));
     }
 
@@ -1471,8 +1726,11 @@ mod tests {
         let dir = std::env::temp_dir().join("theseus_test_todo");
         std::fs::create_dir_all(&dir).unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("todo_write", &serde_json::json!({"todos":[
-            {"content":"a","status":"in_progress"},{"content":"b","status":"in_progress"}]}));
+        let r = env.call(
+            "todo_write",
+            &serde_json::json!({"todos":[
+            {"content":"a","status":"in_progress"},{"content":"b","status":"in_progress"}]}),
+        );
         assert!(r.contains("ERROR"));
     }
 
@@ -1481,15 +1739,24 @@ mod tests {
         // old_string с «чужой» индентацией — матч на уровне indent-flex (OpenDev 9-pass)
         let dir = std::env::temp_dir().join("theseus_test_fuzzy1");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("a.rs"), "    fn main() {\n        x += 1;\n    }\n").unwrap();
+        std::fs::write(
+            dir.join("a.rs"),
+            "    fn main() {\n        x += 1;\n    }\n",
+        )
+        .unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
             "path": "a.rs",
             "old_string": "fn main() {\n    x += 1;\n}",
-            "new_string": "fn main() {\n    x += 2;\n}"}));
+            "new_string": "fn main() {\n    x += 2;\n}"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("fuzzy"), "{r}");
-        assert!(std::fs::read_to_string(dir.join("a.rs")).unwrap().contains("x += 2"));
+        assert!(std::fs::read_to_string(dir.join("a.rs"))
+            .unwrap()
+            .contains("x += 2"));
     }
 
     #[test]
@@ -1499,10 +1766,15 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "hello   \nworld\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "hello", "new_string": "привет"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "hello", "new_string": "привет"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
-        assert!(std::fs::read_to_string(dir.join("a.txt")).unwrap().starts_with("привет"));
+        assert!(std::fs::read_to_string(dir.join("a.txt"))
+            .unwrap()
+            .starts_with("привет"));
     }
 
     #[test]
@@ -1511,8 +1783,11 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.txt"), "alpha beta gamma\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "zzz yyy", "new_string": "q"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "zzz yyy", "new_string": "q"}),
+        );
         assert!(r.contains("ERROR") && r.contains("Подсказка"), "{r}");
     }
 
@@ -1528,11 +1803,17 @@ mod tests {
     fn apply_patch_add_file_via_tool() {
         let dir = tdir("patch-add");
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("apply_patch", &serde_json::json!({
-            "patch": "*** Begin Patch\n*** Add File: sub/new.txt\n+hello\n+world\n*** End Patch"}));
+        let r = env.call(
+            "apply_patch",
+            &serde_json::json!({
+            "patch": "*** Begin Patch\n*** Add File: sub/new.txt\n+hello\n+world\n*** End Patch"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("new.txt"), "список затронутых файлов: {r}");
-        assert_eq!(std::fs::read_to_string(dir.join("sub/new.txt")).unwrap(), "hello\nworld\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("sub/new.txt")).unwrap(),
+            "hello\nworld\n"
+        );
     }
 
     #[test]
@@ -1543,7 +1824,10 @@ mod tests {
         let r = env.call("apply_patch", &serde_json::json!({
             "patch": "*** Begin Patch\n*** Update File: a.txt\n two\n-three\n+THREE\n*** End Patch"}));
         assert!(r.starts_with("OK"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "one\ntwo\nTHREE\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\nTHREE\n"
+        );
         // diff-превью фактической правки присутствует
         assert!(r.contains("preview (unified diff)"), "{r}");
         assert!(r.contains("-three") && r.contains("+THREE"), "{r}");
@@ -1554,8 +1838,11 @@ mod tests {
         let dir = tdir("patch-del");
         std::fs::write(dir.join("gone.txt"), "bye\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("apply_patch", &serde_json::json!({
-            "patch": "*** Begin Patch\n*** Delete File: gone.txt\n*** End Patch"}));
+        let r = env.call(
+            "apply_patch",
+            &serde_json::json!({
+            "patch": "*** Begin Patch\n*** Delete File: gone.txt\n*** End Patch"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("gone.txt"), "{r}");
         assert!(!dir.join("gone.txt").exists());
@@ -1570,10 +1857,16 @@ mod tests {
         let r = env.call("apply_patch", &serde_json::json!({"patch": "not a patch"}));
         assert!(r.starts_with("ERROR"), "{r}");
         // контекст не найден — файл не тронут
-        let r = env.call("apply_patch", &serde_json::json!({
-            "patch": "*** Begin Patch\n*** Update File: c.txt\n-missing\n+new\n*** End Patch"}));
+        let r = env.call(
+            "apply_patch",
+            &serde_json::json!({
+            "patch": "*** Begin Patch\n*** Update File: c.txt\n-missing\n+new\n*** End Patch"}),
+        );
         assert!(r.starts_with("ERROR"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("c.txt")).unwrap(), "actual\ncontent\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("c.txt")).unwrap(),
+            "actual\ncontent\n"
+        );
     }
 
     #[test]
@@ -1581,11 +1874,17 @@ mod tests {
         let dir = tdir("edit-prev");
         std::fs::write(dir.join("a.txt"), "alpha\nbeta\ngamma\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "beta", "new_string": "BETA"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "beta", "new_string": "BETA"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("preview (unified diff)"), "{r}");
-        assert!(r.contains("@@") && r.contains("-beta") && r.contains("+BETA"), "{r}");
+        assert!(
+            r.contains("@@") && r.contains("-beta") && r.contains("+BETA"),
+            "{r}"
+        );
     }
 
     #[test]
@@ -1594,11 +1893,17 @@ mod tests {
         let dir = tdir("match-esc");
         std::fs::write(dir.join("a.txt"), "line1\nline2\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "line1\\nline2", "new_string": "L1\nL2"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "line1\\nline2", "new_string": "L1\nL2"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("fuzzy: escape_normalized"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "L1\nL2\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "L1\nL2\n"
+        );
     }
 
     #[test]
@@ -1607,11 +1912,17 @@ mod tests {
         let dir = tdir("match-amb");
         std::fs::write(dir.join("a.txt"), "x\ny\nx\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "  x", "new_string": "z"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "  x", "new_string": "z"}),
+        );
         assert!(r.contains("ERROR"), "{r}");
         assert!(r.contains("строки: 1, 3"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(), "x\ny\nx\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "x\ny\nx\n"
+        );
     }
 
     #[test]
@@ -1621,13 +1932,18 @@ mod tests {
         let dir = tdir("edit-exact-lines");
         std::fs::write(dir.join("a.txt"), "one\ntwo\nfoo\nthree\nfoo\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "foo", "new_string": "bar"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "foo", "new_string": "bar"}),
+        );
         assert!(r.contains("ERROR"), "{r}");
         assert!(r.contains("встречается 2 раз (строки: 3, 5)"), "{r}");
         // файл не тронут
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(),
-            "one\ntwo\nfoo\nthree\nfoo\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\ntwo\nfoo\nthree\nfoo\n"
+        );
     }
 
     #[test]
@@ -1638,12 +1954,17 @@ mod tests {
         std::fs::write(dir.join("a.txt"), "one\r\n  two\r\nthree\r\n").unwrap();
         let mut env = ToolEnv::new(&dir);
         // old_string с хвостовым пробелом: exact не матчится, срабатывает line_trim
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "two ", "new_string": "TWO\nx"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "two ", "new_string": "TWO\nx"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("fuzzy"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(),
-            "one\r\nTWO\r\nx\r\nthree\r\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\r\nTWO\r\nx\r\nthree\r\n"
+        );
     }
 
     #[test]
@@ -1653,12 +1974,17 @@ mod tests {
         let dir = tdir("edit-crlf-all");
         std::fs::write(dir.join("a.txt"), "x\r\ny\r\nx\r\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "x ", "new_string": "z\nw", "replace_all": true}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "x ", "new_string": "z\nw", "replace_all": true}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         assert!(r.contains("fuzzy: trim"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(),
-            "z\r\nw\r\ny\r\nz\r\nw\r\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "z\r\nw\r\ny\r\nz\r\nw\r\n"
+        );
     }
 
     #[test]
@@ -1667,11 +1993,16 @@ mod tests {
         let dir = tdir("edit-lf");
         std::fs::write(dir.join("a.txt"), "one\n  two\nthree\n").unwrap();
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("edit_file", &serde_json::json!({
-            "path": "a.txt", "old_string": "two ", "new_string": "TWO\nx"}));
+        let r = env.call(
+            "edit_file",
+            &serde_json::json!({
+            "path": "a.txt", "old_string": "two ", "new_string": "TWO\nx"}),
+        );
         assert!(r.starts_with("OK"), "{r}");
-        assert_eq!(std::fs::read_to_string(dir.join("a.txt")).unwrap(),
-            "one\nTWO\nx\nthree\n");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("a.txt")).unwrap(),
+            "one\nTWO\nx\nthree\n"
+        );
     }
 
     #[test]
@@ -1721,7 +2052,10 @@ mod tests {
         assert!(out.contains("бинарный файл"), "{out}");
         assert!(out.contains("5 байт"), "{out}");
         assert!(out.contains("FF D8"), "сигнатура: {out}");
-        assert!(!out.contains("valid UTF-8"), "старый текст ошибки ушёл: {out}");
+        assert!(
+            !out.contains("valid UTF-8"),
+            "старый текст ошибки ушёл: {out}"
+        );
     }
 
     /// Сигнатура PDF распознаётся по магическим байтам %PDF.
@@ -1737,7 +2071,11 @@ mod tests {
     #[test]
     fn read_file_broken_pdf_names_pdftotext() {
         let dir = tdir("read-badpdf");
-        std::fs::write(dir.join("broken.pdf"), b"%PDF-1.4\n\xe2\xe3\xcf\xd3 garbage").unwrap();
+        std::fs::write(
+            dir.join("broken.pdf"),
+            b"%PDF-1.4\n\xe2\xe3\xcf\xd3 garbage",
+        )
+        .unwrap();
         let mut env = ToolEnv::new(&dir);
         let out = env.call("read_file", &serde_json::json!({"path": "broken.pdf"}));
         assert!(out.starts_with("ERROR"), "{out}");
@@ -1751,16 +2089,21 @@ mod tests {
     #[test]
     fn read_file_real_pdf_extracts_text() {
         let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("test_copy.pdf");
-        let pdftotext_missing = std::process::Command::new("pdftotext").arg("-v")
-            .stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null())
-            .status().is_err();
+        let pdftotext_missing = std::process::Command::new("pdftotext")
+            .arg("-v")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_err();
         if pdftotext_missing || !fixture.is_file() {
             eprintln!("skip: нет pdftotext или test_copy.pdf");
             return;
         }
         let mut env = ToolEnv::new(Path::new("/tmp"));
-        let out = env.call("read_file",
-            &serde_json::json!({"path": fixture.to_string_lossy(), "limit": 20}));
+        let out = env.call(
+            "read_file",
+            &serde_json::json!({"path": fixture.to_string_lossy(), "limit": 20}),
+        );
         assert!(out.contains("[PDF → текст извлечён pdftotext"), "{out}");
         assert!(!out.contains("valid UTF-8"), "{out}");
     }
@@ -1768,14 +2111,18 @@ mod tests {
     /// list_files: несуществующий путь и файл — явные ошибки, а не «(пусто)»
     /// (живой кейс 21.07: модель приняла отсутствующий каталог за пустой).
     #[test]
-    fn list_files_errors_on_missing_path_and_file() {        let dir = tdir("list-missing");
+    fn list_files_errors_on_missing_path_and_file() {
+        let dir = tdir("list-missing");
         let mut env = ToolEnv::new(&dir);
         let out = env.call("list_files", &serde_json::json!({"path": "no/such/dir"}));
         assert!(out.starts_with("ERROR"), "{out}");
         assert!(out.contains("нет такого файла или каталога"), "{out}");
         std::fs::write(dir.join("f.txt"), "x").unwrap();
         let out2 = env.call("list_files", &serde_json::json!({"path": "f.txt"}));
-        assert!(out2.starts_with("ERROR") && out2.contains("не каталог"), "{out2}");
+        assert!(
+            out2.starts_with("ERROR") && out2.contains("не каталог"),
+            "{out2}"
+        );
         // пустой каталог — по-прежнему честное «(пусто)»
         std::fs::create_dir(dir.join("empty")).unwrap();
         let out3 = env.call("list_files", &serde_json::json!({"path": "empty"}));
@@ -1793,12 +2140,18 @@ mod tests {
         assert!(out.starts_with("ERROR"), "{out}");
         assert!(out.contains("path обязателен"), "{out}");
         // каталог вместо файла — понятная ошибка с путём
-        let out2 = env.call("write_file", &serde_json::json!({"path": ".", "content": "x"}));
+        let out2 = env.call(
+            "write_file",
+            &serde_json::json!({"path": ".", "content": "x"}),
+        );
         assert!(out2.starts_with("ERROR"), "{out2}");
         assert!(out2.contains("является каталогом"), "{out2}");
         assert!(!out2.contains("os error"), "{out2}");
         // валидный путь — работает как раньше
-        let out3 = env.call("write_file", &serde_json::json!({"path": "a/b.txt", "content": "x"}));
+        let out3 = env.call(
+            "write_file",
+            &serde_json::json!({"path": "a/b.txt", "content": "x"}),
+        );
         assert!(out3.starts_with("OK: записано"), "{out3}");
     }
 
@@ -1806,16 +2159,25 @@ mod tests {
     fn todo_write_stores_into_todo_list() {
         let dir = tdir("todo-store");
         let mut env = ToolEnv::new(&dir);
-        let r = env.call("todo_write", &serde_json::json!({"todos":[
-            {"content":"a","status":"done"},{"content":"b","status":"in_progress"}]}));
+        let r = env.call(
+            "todo_write",
+            &serde_json::json!({"todos":[
+            {"content":"a","status":"done"},{"content":"b","status":"in_progress"}]}),
+        );
         assert!(r.starts_with("OK"), "{r}");
         // внешний строковый снимок для гейта в agent сохранён
         assert_eq!(env.todos.len(), 2);
         assert_eq!(env.todos[1].status, "in_progress");
         // внутреннее хранилище crate::todo::TodoList заполнено теми же задачами
         assert_eq!(env.todo_list.len(), 2);
-        assert_eq!(env.todo_list.items()[0].status, crate::todo::TodoStatus::Done);
-        assert_eq!(env.todo_list.items()[1].status, crate::todo::TodoStatus::InProgress);
+        assert_eq!(
+            env.todo_list.items()[0].status,
+            crate::todo::TodoStatus::Done
+        );
+        assert_eq!(
+            env.todo_list.items()[1].status,
+            crate::todo::TodoStatus::InProgress
+        );
     }
 
     /// Регрессия (найдено живыми тестами DeepSeek, tests/live_deepseek.rs):
@@ -1849,7 +2211,10 @@ mod tests {
         let (head, rest) = out.split_once(marker).unwrap();
         let (skipped_txt, tail) = rest.split_once(" байт] ...\n").unwrap();
         let skipped: usize = skipped_txt.parse().unwrap();
-        assert!(skipped > 0, "маркер обязан показывать реально выкинутые байты");
+        assert!(
+            skipped > 0,
+            "маркер обязан показывать реально выкинутые байты"
+        );
         // выкинуто ровно столько байт, сколько не вошло между головой и хвостом
         assert_eq!(skipped, s.len() - head.len() - tail.len());
         // срезы на границах символов: голова и хвост — целые «ф» (2 байта)
@@ -1872,7 +2237,13 @@ mod sandbox_e2e_tests {
         let home = std::env::var("HOME").unwrap();
         let target = format!("{home}/theseus_sbx_live_forbidden.txt");
         let _ = std::fs::remove_file(&target);
-        let out = run_bash(&format!("touch {target}"), &dir, Duration::from_secs(10), true).unwrap();
+        let out = run_bash(
+            &format!("touch {target}"),
+            &dir,
+            Duration::from_secs(10),
+            true,
+        )
+        .unwrap();
         let exists = std::path::Path::new(&target).exists();
         let _ = std::fs::remove_file(&target);
         assert!(!exists, "файл не должен был создаться; вывод: {out}");

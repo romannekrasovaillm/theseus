@@ -123,7 +123,12 @@ pub struct LogEntry {
 impl LogEntry {
     /// Запись без тегов.
     pub fn new(ts_secs: u64, kind: LogKind, text: impl Into<String>) -> Self {
-        Self { ts_secs, kind, text: text.into(), tags: Vec::new() }
+        Self {
+            ts_secs,
+            kind,
+            text: text.into(),
+            tags: Vec::new(),
+        }
     }
 
     /// Запись с тегами.
@@ -180,7 +185,10 @@ impl LogBook {
                 fs::create_dir_all(parent)?;
             }
         }
-        let mut file = OpenOptions::new().create(true).append(true).open(&self.path)?;
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)?;
         writeln!(file, "{line}")?;
         Ok(())
     }
@@ -223,7 +231,10 @@ impl LogBook {
 
     /// Записи заданного вида в файловом порядке.
     pub fn filter_kind(&self, kind: LogKind) -> Vec<LogEntry> {
-        self.read_all().into_iter().filter(|e| e.kind == kind).collect()
+        self.read_all()
+            .into_iter()
+            .filter(|e| e.kind == kind)
+            .collect()
     }
 
     /// Регистронезависимый поиск подстроки по тексту записи и по тегам.
@@ -255,7 +266,10 @@ impl LogBook {
     /// Записи с меткой времени `>= ts_secs` (граница включительно),
     /// в файловом порядке.
     pub fn since(&self, ts_secs: u64) -> Vec<LogEntry> {
-        self.read_all().into_iter().filter(|e| e.ts_secs >= ts_secs).collect()
+        self.read_all()
+            .into_iter()
+            .filter(|e| e.ts_secs >= ts_secs)
+            .collect()
     }
 
     /// Рендер журнала в Markdown, сгруппированный по суткам (UTC).
@@ -276,7 +290,10 @@ impl LogBook {
         // записей в файле (мало ли — журнал склеен из нескольких).
         let mut by_day: BTreeMap<u64, Vec<&LogEntry>> = BTreeMap::new();
         for entry in &entries {
-            by_day.entry(entry.ts_secs / SECS_PER_DAY).or_default().push(entry);
+            by_day
+                .entry(entry.ts_secs / SECS_PER_DAY)
+                .or_default()
+                .push(entry);
         }
         for (day, day_entries) in &by_day {
             let _ = writeln!(out, "\n## {}", format_day(*day));
@@ -378,7 +395,10 @@ fn write_and_rename(tmp: &Path, path: &Path, lines: &[String]) -> io::Result<()>
 /// чтобы `rename` не выходил за пределы одной файловой системы).
 fn tmp_path(path: &Path) -> PathBuf {
     let pid = std::process::id();
-    let name = path.file_name().and_then(OsStr::to_str).unwrap_or("logbook");
+    let name = path
+        .file_name()
+        .and_then(OsStr::to_str)
+        .unwrap_or("logbook");
     path.with_file_name(format!("{name}.tmp-{pid}"))
 }
 
@@ -439,7 +459,10 @@ mod tests {
             fs::read_dir(&self.0)
                 .expect("прочитать каталог")
                 .map(|e| {
-                    e.expect("запись каталога").file_name().to_string_lossy().into_owned()
+                    e.expect("запись каталога")
+                        .file_name()
+                        .to_string_lossy()
+                        .into_owned()
                 })
                 .collect()
         }
@@ -480,7 +503,8 @@ mod tests {
     fn append_creates_parent_directories() {
         let dir = TestDir::new();
         let log = LogBook::new(dir.path("nested/deep/log.jsonl"));
-        log.append(&entry(1, LogKind::Learning, "x")).expect("append");
+        log.append(&entry(1, LogKind::Learning, "x"))
+            .expect("append");
         assert_eq!(log.read_all().len(), 1);
     }
 
@@ -500,8 +524,10 @@ mod tests {
     fn broken_lines_are_skipped() {
         let dir = TestDir::new();
         let log = make_log(&dir);
-        log.append(&entry(10, LogKind::Decision, "первая")).expect("append");
-        log.append(&entry(20, LogKind::Learning, "вторая")).expect("append");
+        log.append(&entry(10, LogKind::Decision, "первая"))
+            .expect("append");
+        log.append(&entry(20, LogKind::Learning, "вторая"))
+            .expect("append");
         // Портим файл: мусор, валидный JSON не той формы, обрыв JSON, пустые строки.
         let mut raw = fs::read_to_string(log.path()).expect("прочитать журнал");
         raw.push_str("это не json\n");
@@ -520,11 +546,17 @@ mod tests {
     fn invalid_utf8_line_is_skipped() {
         let dir = TestDir::new();
         let log = make_log(&dir);
-        log.append(&entry(1, LogKind::Observation, "до")).expect("append");
-        log.append(&entry(2, LogKind::Observation, "после")).expect("append");
+        log.append(&entry(1, LogKind::Observation, "до"))
+            .expect("append");
+        log.append(&entry(2, LogKind::Observation, "после"))
+            .expect("append");
         // Вставляем строку с невалидным UTF-8 между записями.
         let mut raw = fs::read(log.path()).expect("прочитать байты");
-        let cut = raw.iter().position(|&b| b == b'\n').expect("перевод строки") + 1;
+        let cut = raw
+            .iter()
+            .position(|&b| b == b'\n')
+            .expect("перевод строки")
+            + 1;
         raw.splice(cut..cut, b"\xFF\xFE garbage\n".iter().copied());
         fs::write(log.path(), raw).expect("перезаписать журнал");
 
@@ -543,9 +575,15 @@ mod tests {
         log.append(&with).expect("append");
         log.append(&without).expect("append");
         // Строка без поля tags (журнал от старой версии) читается с пустыми тегами.
-        let mut f = OpenOptions::new().append(true).open(log.path()).expect("открыть");
-        writeln!(f, "{{\"ts_secs\":7,\"kind\":\"learning\",\"text\":\"старая строка\"}}")
-            .expect("дописать");
+        let mut f = OpenOptions::new()
+            .append(true)
+            .open(log.path())
+            .expect("открыть");
+        writeln!(
+            f,
+            "{{\"ts_secs\":7,\"kind\":\"learning\",\"text\":\"старая строка\"}}"
+        )
+        .expect("дописать");
 
         let all = log.read_all();
         assert_eq!(all[0].tags, vec!["а".to_string(), "б".to_string()]);
@@ -556,7 +594,10 @@ mod tests {
 
     #[test]
     fn kind_serializes_snake_case() {
-        assert_eq!(serde_json::to_string(&LogKind::Observation).expect("json"), "\"observation\"");
+        assert_eq!(
+            serde_json::to_string(&LogKind::Observation).expect("json"),
+            "\"observation\""
+        );
         assert_eq!(LogKind::as_str(LogKind::Learning), "learning");
         assert_eq!(LogKind::Learning.to_string(), "learning");
         assert_eq!(LogKind::Error.label(), "Ошибка");
@@ -578,7 +619,8 @@ mod tests {
             LogKind::Observation,
         ];
         for (i, kind) in kinds.into_iter().enumerate() {
-            log.append(&entry(i as u64, kind, &format!("запись {i}"))).expect("append");
+            log.append(&entry(i as u64, kind, &format!("запись {i}")))
+                .expect("append");
         }
         let decisions = log.filter_kind(LogKind::Decision);
         assert_eq!(decisions.len(), 2);
@@ -593,8 +635,10 @@ mod tests {
     fn search_matches_text_case_insensitively() {
         let dir = TestDir::new();
         let log = make_log(&dir);
-        log.append(&entry(1, LogKind::Decision, "Выбран Rustls вместо OpenSSL")).expect("append");
-        log.append(&entry(2, LogKind::Observation, "ничего про TLS")).expect("append");
+        log.append(&entry(1, LogKind::Decision, "Выбран Rustls вместо OpenSSL"))
+            .expect("append");
+        log.append(&entry(2, LogKind::Observation, "ничего про TLS"))
+            .expect("append");
 
         assert_eq!(log.search("rustls").len(), 1);
         assert_eq!(log.search("RUSTLS").len(), 1);
@@ -614,7 +658,8 @@ mod tests {
             ["Файловая-Система", "posix"],
         ))
         .expect("append");
-        log.append(&entry(2, LogKind::Learning, "без тегов")).expect("append");
+        log.append(&entry(2, LogKind::Learning, "без тегов"))
+            .expect("append");
 
         assert_eq!(log.search("файловая-система").len(), 1);
         assert_eq!(log.search("POSIX").len(), 1);
@@ -625,8 +670,10 @@ mod tests {
     fn search_with_empty_query_returns_all() {
         let dir = TestDir::new();
         let log = make_log(&dir);
-        log.append(&entry(1, LogKind::Decision, "один")).expect("append");
-        log.append(&entry(2, LogKind::Decision, "два")).expect("append");
+        log.append(&entry(1, LogKind::Decision, "один"))
+            .expect("append");
+        log.append(&entry(2, LogKind::Decision, "два"))
+            .expect("append");
         assert_eq!(log.search("").len(), 2);
         assert_eq!(log.search("   ").len(), 2);
     }
@@ -636,7 +683,8 @@ mod tests {
         let dir = TestDir::new();
         let log = make_log(&dir);
         for i in 0..5 {
-            log.append(&entry(i, LogKind::Observation, &format!("запись {i}"))).expect("append");
+            log.append(&entry(i, LogKind::Observation, &format!("запись {i}")))
+                .expect("append");
         }
         let tail = log.recent(2);
         assert_eq!(tail.len(), 2);
@@ -652,7 +700,8 @@ mod tests {
         let dir = TestDir::new();
         let log = make_log(&dir);
         for ts in [100, 200, 300] {
-            log.append(&entry(ts, LogKind::Observation, &format!("t{ts}"))).expect("append");
+            log.append(&entry(ts, LogKind::Observation, &format!("t{ts}")))
+                .expect("append");
         }
         let got = log.since(200);
         assert_eq!(got.len(), 2); // граница включительно
@@ -666,10 +715,17 @@ mod tests {
         let dir = TestDir::new();
         let log = make_log(&dir);
         // День 0 (1970-01-01) и день 1 (1970-01-02); в файле дни «перемешаны».
-        log.append(&LogEntry::with_tags(3_600, LogKind::Decision, "утреннее решение", ["план"]))
+        log.append(&LogEntry::with_tags(
+            3_600,
+            LogKind::Decision,
+            "утреннее решение",
+            ["план"],
+        ))
+        .expect("append");
+        log.append(&entry(86_400 + 1_800, LogKind::Error, "ошибка второго дня"))
             .expect("append");
-        log.append(&entry(86_400 + 1_800, LogKind::Error, "ошибка второго дня")).expect("append");
-        log.append(&entry(7_200, LogKind::Learning, "вывод первого дня")).expect("append");
+        log.append(&entry(7_200, LogKind::Learning, "вывод первого дня"))
+            .expect("append");
 
         let md = log.render_markdown();
         assert!(md.starts_with("# Журнал решений\n"));
@@ -678,8 +734,12 @@ mod tests {
         assert!(day1 < day2, "дни идут в порядке возрастания");
         // В секции первого дня — обе его записи, в файловом порядке.
         let sec1 = &md[day1..day2];
-        let decision = sec1.find("01:00:00 **Решение**: утреннее решение `#план`").expect("решение");
-        let learning = sec1.find("02:00:00 **Вывод**: вывод первого дня").expect("вывод");
+        let decision = sec1
+            .find("01:00:00 **Решение**: утреннее решение `#план`")
+            .expect("решение");
+        let learning = sec1
+            .find("02:00:00 **Вывод**: вывод первого дня")
+            .expect("вывод");
         assert!(decision < learning, "внутри суток — файловый порядок");
         assert!(md[day2..].contains("00:30:00 **Ошибка**: ошибка второго дня"));
     }
@@ -700,12 +760,13 @@ mod tests {
         let log = make_log(&dir);
         // Записи с одинаковой сериализованной длиной для точного расчёта.
         for i in 0..10u64 {
-            log.append(&entry(i, LogKind::Observation, &format!("запись {i:02}"))).expect("append");
+            log.append(&entry(i, LogKind::Observation, &format!("запись {i:02}")))
+                .expect("append");
         }
-        let line_len =
-            serde_json::to_string(&entry(0, LogKind::Observation, "запись 00")).expect("json").len()
-                as u64
-                + 1;
+        let line_len = serde_json::to_string(&entry(0, LogKind::Observation, "запись 00"))
+            .expect("json")
+            .len() as u64
+            + 1;
         let dropped = log.rotate(line_len * 4).expect("rotate");
         assert_eq!(dropped, 6);
         let rest = log.read_all();
@@ -713,14 +774,18 @@ mod tests {
         assert_eq!(rest[0].text, "запись 06");
         assert_eq!(rest[3].text, "запись 09");
         // Файл — ровно четыре хвостовые строки.
-        assert_eq!(fs::metadata(log.path()).expect("метаданные").len(), line_len * 4);
+        assert_eq!(
+            fs::metadata(log.path()).expect("метаданные").len(),
+            line_len * 4
+        );
     }
 
     #[test]
     fn rotate_within_budget_is_noop() {
         let dir = TestDir::new();
         let log = make_log(&dir);
-        log.append(&entry(1, LogKind::Decision, "единственная")).expect("append");
+        log.append(&entry(1, LogKind::Decision, "единственная"))
+            .expect("append");
         let before = fs::read(log.path()).expect("прочитать");
         let dropped = log.rotate(1_000_000).expect("rotate");
         assert_eq!(dropped, 0);
@@ -736,7 +801,8 @@ mod tests {
         let dir = TestDir::new();
         let log = make_log(&dir);
         for i in 0..3 {
-            log.append(&entry(i, LogKind::Error, &format!("ошибка {i}"))).expect("append");
+            log.append(&entry(i, LogKind::Error, &format!("ошибка {i}")))
+                .expect("append");
         }
         // Лимит 0: влезает только гарантированно сохраняемая новейшая запись.
         let dropped = log.rotate(0).expect("rotate");
@@ -751,7 +817,8 @@ mod tests {
         let dir = TestDir::new();
         let log = make_log(&dir);
         for i in 0..20u64 {
-            log.append(&entry(i, LogKind::Learning, &format!("урок {i}"))).expect("append");
+            log.append(&entry(i, LogKind::Learning, &format!("урок {i}")))
+                .expect("append");
         }
         let dropped = log.rotate(300).expect("rotate");
         assert!(dropped > 0, "журнал из 20 записей в 300 байт не влезает");
@@ -759,9 +826,12 @@ mod tests {
         assert_eq!(dir.file_names(), vec!["logbook.jsonl".to_string()]);
         // Журнал остался валидным jsonl: каждая строка разбирается.
         let raw = fs::read_to_string(log.path()).expect("прочитать журнал");
-        assert!(raw.lines().all(|l| serde_json::from_str::<LogEntry>(l).is_ok()));
+        assert!(raw
+            .lines()
+            .all(|l| serde_json::from_str::<LogEntry>(l).is_ok()));
         // И дописывать можно дальше — журнал «живой».
-        log.append(&entry(100, LogKind::Decision, "после ротации")).expect("append");
+        log.append(&entry(100, LogKind::Decision, "после ротации"))
+            .expect("append");
         assert_eq!(log.read_all().last().expect("хвост").text, "после ротации");
     }
 
@@ -770,7 +840,8 @@ mod tests {
         let dir = TestDir::new();
         let log = make_log(&dir);
         let text = "строка 1\nстрока 2\r\nстрока 3";
-        log.append(&entry(1, LogKind::Observation, text)).expect("append");
+        log.append(&entry(1, LogKind::Observation, text))
+            .expect("append");
         let raw = fs::read_to_string(log.path()).expect("прочитать журнал");
         assert_eq!(raw.lines().count(), 1);
         assert_eq!(log.read_all()[0].text, text);

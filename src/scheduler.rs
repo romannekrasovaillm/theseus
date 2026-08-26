@@ -36,8 +36,7 @@ pub enum Priority {
 
 impl Priority {
     /// Все приоритеты в порядке обслуживания (от срочного к фоновому).
-    pub const ALL: [Priority; 3] =
-        [Priority::Immediate, Priority::Normal, Priority::Background];
+    pub const ALL: [Priority; 3] = [Priority::Immediate, Priority::Normal, Priority::Background];
 
     /// Индекс внутренней полосы (lane) очереди.
     const fn lane_index(self) -> usize {
@@ -153,7 +152,9 @@ pub struct ReorderRules {
 
 impl Default for ReorderRules {
     fn default() -> Self {
-        Self { preempt_on_immediate: true }
+        Self {
+            preempt_on_immediate: true,
+        }
     }
 }
 
@@ -185,8 +186,7 @@ impl LaneStats {
     /// Инвариант класса: всё поставленное куда-то делось
     /// (`enqueued = pending + dequeued + expired + merged`).
     pub fn accounted(&self) -> bool {
-        self.enqueued
-            == self.pending as u64 + self.dequeued + self.expired + self.merged
+        self.enqueued == self.pending as u64 + self.dequeued + self.expired + self.merged
     }
 }
 
@@ -286,14 +286,16 @@ impl<C: Clock> PromptQueue<C> {
         for priority in Priority::ALL {
             let idx = priority.lane_index();
             // протухшие головы полосы выбрасываем до извлечения живого элемента
-            while self.lanes[idx].front().is_some_and(|p| p.is_expired_at(now)) {
+            while self.lanes[idx]
+                .front()
+                .is_some_and(|p| p.is_expired_at(now))
+            {
                 self.lanes[idx].pop_front();
                 self.counters[idx].expired += 1;
             }
             if let Some(prompt) = self.lanes[idx].pop_front() {
                 self.counters[idx].dequeued += 1;
-                let preempt =
-                    self.rules.preempt_on_immediate && priority == Priority::Immediate;
+                let preempt = self.rules.preempt_on_immediate && priority == Priority::Immediate;
                 return Some(DequeuedPrompt { prompt, preempt });
             }
         }
@@ -378,8 +380,7 @@ impl<C: Clock> PromptQueue<C> {
         for prompt in items {
             // Шаг 1: отдельная проверка — иначе заём back_mut() в ветке
             // склейки пересёкся бы с push_back() в ветке else (borrowck).
-            let glue =
-                matches!(merged.back(), Some(last) if last.source == prompt.source);
+            let glue = matches!(merged.back(), Some(last) if last.source == prompt.source);
             if !glue {
                 merged.push_back(prompt);
                 continue;
@@ -494,18 +495,35 @@ mod tests {
     fn push_stamps_enqueued_at_from_queue_clock() {
         let mut q = manual_queue();
         q.clock_mut().advance(1234);
-        q.push(QueuedPrompt::new("привет", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "привет",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         assert_eq!(q.peek().map(|p| p.enqueued_at), Some(1234));
     }
 
     #[test]
     fn immediate_goes_first_regardless_of_arrival() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("фон", Priority::Background, PromptSource::Cron));
-        q.push(QueuedPrompt::new("обычный", Priority::Normal, PromptSource::User));
-        q.push(QueuedPrompt::new("срочно", Priority::Immediate, PromptSource::Hook));
-        let order: Vec<String> =
-            std::iter::from_fn(|| q.pop_next()).map(|d| d.prompt.text).collect();
+        q.push(QueuedPrompt::new(
+            "фон",
+            Priority::Background,
+            PromptSource::Cron,
+        ));
+        q.push(QueuedPrompt::new(
+            "обычный",
+            Priority::Normal,
+            PromptSource::User,
+        ));
+        q.push(QueuedPrompt::new(
+            "срочно",
+            Priority::Immediate,
+            PromptSource::Hook,
+        ));
+        let order: Vec<String> = std::iter::from_fn(|| q.pop_next())
+            .map(|d| d.prompt.text)
+            .collect();
         assert_eq!(order, ["срочно", "обычный", "фон"]);
     }
 
@@ -513,7 +531,11 @@ mod tests {
     fn fifo_within_same_priority() {
         let mut q = manual_queue();
         for i in 1..=3 {
-            q.push(QueuedPrompt::new(format!("n{i}"), Priority::Normal, PromptSource::User));
+            q.push(QueuedPrompt::new(
+                format!("n{i}"),
+                Priority::Normal,
+                PromptSource::User,
+            ));
         }
         for i in 1..=3 {
             let d = q.pop_next().unwrap();
@@ -526,9 +548,17 @@ mod tests {
     #[test]
     fn late_immediate_overtakes_earlier_normal() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("ранний", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "ранний",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         q.clock_mut().advance(10);
-        q.push(QueuedPrompt::new("поздний-срочный", Priority::Immediate, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "поздний-срочный",
+            Priority::Immediate,
+            PromptSource::User,
+        ));
         let d = q.pop_next().unwrap();
         assert_eq!(d.prompt.text, "поздний-срочный");
         assert!(d.preempt);
@@ -539,15 +569,29 @@ mod tests {
         let mut q = manual_queue();
         // правило по умолчанию: Immediate вытесняет обработку
         assert!(q.reorder_rules().preempt_on_immediate);
-        q.push(QueuedPrompt::new("фон", Priority::Background, PromptSource::Cron));
-        q.push(QueuedPrompt::new("срочно", Priority::Immediate, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "фон",
+            Priority::Background,
+            PromptSource::Cron,
+        ));
+        q.push(QueuedPrompt::new(
+            "срочно",
+            Priority::Immediate,
+            PromptSource::User,
+        ));
         let d = q.pop_next().unwrap();
         assert_eq!(d.prompt.text, "срочно");
         assert!(d.preempt);
         assert!(!q.pop_next().unwrap().preempt); // Background — без вытеснения
-        // выключаем правило: Immediate всё ещё первый, но уже без флага
-        q.set_reorder_rules(ReorderRules { preempt_on_immediate: false });
-        q.push(QueuedPrompt::new("срочно-2", Priority::Immediate, PromptSource::Hook));
+                                                 // выключаем правило: Immediate всё ещё первый, но уже без флага
+        q.set_reorder_rules(ReorderRules {
+            preempt_on_immediate: false,
+        });
+        q.push(QueuedPrompt::new(
+            "срочно-2",
+            Priority::Immediate,
+            PromptSource::Hook,
+        ));
         let d = q.pop_next().unwrap();
         assert_eq!(d.prompt.text, "срочно-2");
         assert!(!d.preempt);
@@ -585,10 +629,26 @@ mod tests {
     #[test]
     fn merge_adjacent_ignores_immediate_and_background() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("i1", Priority::Immediate, PromptSource::User));
-        q.push(QueuedPrompt::new("i2", Priority::Immediate, PromptSource::User));
-        q.push(QueuedPrompt::new("b1", Priority::Background, PromptSource::Cron));
-        q.push(QueuedPrompt::new("b2", Priority::Background, PromptSource::Cron));
+        q.push(QueuedPrompt::new(
+            "i1",
+            Priority::Immediate,
+            PromptSource::User,
+        ));
+        q.push(QueuedPrompt::new(
+            "i2",
+            Priority::Immediate,
+            PromptSource::User,
+        ));
+        q.push(QueuedPrompt::new(
+            "b1",
+            Priority::Background,
+            PromptSource::Cron,
+        ));
+        q.push(QueuedPrompt::new(
+            "b2",
+            Priority::Background,
+            PromptSource::Cron,
+        ));
         assert_eq!(q.merge_adjacent(), 0);
         assert_eq!(q.len(), 4);
     }
@@ -597,7 +657,11 @@ mod tests {
     fn merge_adjacent_ttl_none_wins_otherwise_min() {
         let mut q = manual_queue();
         q.push(timed("u1", 100));
-        q.push(QueuedPrompt::new("u2", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "u2",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         q.push(timed_as("h1", Priority::Normal, PromptSource::Hook, 300));
         q.push(timed_as("h2", Priority::Normal, PromptSource::Hook, 50));
         assert_eq!(q.merge_adjacent(), 2);
@@ -612,7 +676,11 @@ mod tests {
     #[test]
     fn merge_adjacent_single_item_is_noop() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("один", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "один",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         assert_eq!(q.merge_adjacent(), 0);
         assert_eq!(q.len(), 1);
     }
@@ -648,7 +716,11 @@ mod tests {
     #[test]
     fn prompt_without_ttl_never_expires() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("вечный", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "вечный",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         q.clock_mut().advance(u64::MAX / 2);
         assert!(q.pop_next().is_some());
     }
@@ -656,22 +728,45 @@ mod tests {
     #[test]
     fn drain_returns_everything_in_service_order() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("n1", Priority::Normal, PromptSource::User));
-        q.push(QueuedPrompt::new("b1", Priority::Background, PromptSource::Cron));
-        q.push(QueuedPrompt::new("i1", Priority::Immediate, PromptSource::Hook));
-        q.push(QueuedPrompt::new("n2", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "n1",
+            Priority::Normal,
+            PromptSource::User,
+        ));
+        q.push(QueuedPrompt::new(
+            "b1",
+            Priority::Background,
+            PromptSource::Cron,
+        ));
+        q.push(QueuedPrompt::new(
+            "i1",
+            Priority::Immediate,
+            PromptSource::Hook,
+        ));
+        q.push(QueuedPrompt::new(
+            "n2",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         assert_eq!(texts(q.drain()), ["i1", "n1", "n2", "b1"]);
         assert!(q.is_empty());
         let s = q.stats();
         assert_eq!(s.pending_total(), 0);
-        assert_eq!(s.immediate.dequeued + s.normal.dequeued + s.background.dequeued, 4);
+        assert_eq!(
+            s.immediate.dequeued + s.normal.dequeued + s.background.dequeued,
+            4
+        );
     }
 
     #[test]
     fn drain_discards_expired() {
         let mut q = manual_queue();
         q.push(timed("протух", 10));
-        q.push(QueuedPrompt::new("живой", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "живой",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         q.clock_mut().advance(20);
         assert_eq!(texts(q.drain()), ["живой"]);
         assert_eq!(q.stats_for(Priority::Normal).expired, 1);
@@ -702,17 +797,32 @@ mod tests {
         assert_eq!(q.purge_expired(), 3);
         assert_eq!(q.len(), 1);
         let s = q.stats();
-        assert_eq!(s.immediate.expired + s.normal.expired + s.background.expired, 3);
+        assert_eq!(
+            s.immediate.expired + s.normal.expired + s.background.expired,
+            3
+        );
     }
 
     #[test]
     fn stats_invariant_holds_per_lane() {
         let mut q = manual_queue();
-        q.push(QueuedPrompt::new("m1", Priority::Normal, PromptSource::User));
-        q.push(QueuedPrompt::new("m2", Priority::Normal, PromptSource::User));
+        q.push(QueuedPrompt::new(
+            "m1",
+            Priority::Normal,
+            PromptSource::User,
+        ));
+        q.push(QueuedPrompt::new(
+            "m2",
+            Priority::Normal,
+            PromptSource::User,
+        ));
         // источник Cron — не склеится с User-серией выше
         q.push(timed_as("ttl", Priority::Normal, PromptSource::Cron, 5));
-        q.push(QueuedPrompt::new("i1", Priority::Immediate, PromptSource::Hook));
+        q.push(QueuedPrompt::new(
+            "i1",
+            Priority::Immediate,
+            PromptSource::Hook,
+        ));
         assert_eq!(q.merge_adjacent(), 1);
         q.clock_mut().advance(10);
         // Immediate извлекается первым

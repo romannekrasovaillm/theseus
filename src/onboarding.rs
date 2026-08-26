@@ -65,7 +65,8 @@ pub fn assess(home_dir: &Path, workspace: &Path) -> OnboardingState {
         .filter(|v| !v.trim().is_empty())
         // запасной файл ключа Kimi (конвенция ProviderInfo::key_file, кейс 07.08)
         .or_else(|| {
-            std::fs::read_to_string(home_dir.join(".kimi_api_key")).ok()
+            std::fs::read_to_string(home_dir.join(".kimi_api_key"))
+                .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| !v.is_empty())
         });
@@ -76,17 +77,22 @@ pub fn assess(home_dir: &Path, workspace: &Path) -> OnboardingState {
 /// по каждой проверке и пронумерованные следующие шаги для незакрытых пунктов.
 /// Когда всё готово — вместо шагов показываем стартовые промпты.
 pub fn welcome_text(state: &OnboardingState) -> String {
-    let mut out = String::from(
-        "Добро пожаловать в Theseus — агентный харнесс!\n\nСтатус окружения:\n",
-    );
-    out.push_str(&status_line(state.config_exists, "конфиг theseus (config.toml)"));
+    let mut out =
+        String::from("Добро пожаловать в Theseus — агентный харнесс!\n\nСтатус окружения:\n");
+    out.push_str(&status_line(
+        state.config_exists,
+        "конфиг theseus (config.toml)",
+    ));
     out.push_str(&status_line(
         state.key_set,
         "API-ключ (env провайдера: DEEPSEEK_API_KEY / KIMI_API_KEY / …, или api_key в config.toml)",
     ));
     out.push_str(&status_line(state.workspace_ok, "рабочий каталог проекта"));
     let skills_icon = if state.skills_found > 0 { "✅" } else { "❌" };
-    out.push_str(&format!("{skills_icon} скиллы: обнаружено {}\n", state.skills_found));
+    out.push_str(&format!(
+        "{skills_icon} скиллы: обнаружено {}\n",
+        state.skills_found
+    ));
 
     if state.is_ready() {
         out.push_str("\nВсё готово к работе! С чего начать:\n");
@@ -154,7 +160,10 @@ pub fn first_run_marker(home_dir: &Path) -> std::io::Result<bool> {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    std::fs::write(&marker, format!("theseus first-run marker\nunix_secs: {secs}\n"))?;
+    std::fs::write(
+        &marker,
+        format!("theseus first-run marker\nunix_secs: {secs}\n"),
+    )?;
     Ok(true)
 }
 
@@ -300,7 +309,11 @@ mod tests {
                         std::fs::create_dir_all(&workspace).unwrap();
                     }
                     // Ключ берём из конфига, если конфиг есть; иначе — из env.
-                    let env_key = if !has_config && has_key { Some("sk-env") } else { None };
+                    let env_key = if !has_config && has_key {
+                        Some("sk-env")
+                    } else {
+                        None
+                    };
                     if has_config && has_key {
                         write_user_config(&home, CONFIG_WITH_KEY);
                     } else if has_config {
@@ -326,14 +339,22 @@ mod tests {
         // Workspace-скиллы: каталог с SKILL.md + плоский .md; .txt — шум.
         let ws_skills = ws.join(".theseus/skills");
         std::fs::create_dir_all(ws_skills.join("ml-debug")).unwrap();
-        std::fs::write(ws_skills.join("ml-debug").join("SKILL.md"), "---\nname: ml-debug\n---\n").unwrap();
+        std::fs::write(
+            ws_skills.join("ml-debug").join("SKILL.md"),
+            "---\nname: ml-debug\n---\n",
+        )
+        .unwrap();
         std::fs::write(ws_skills.join("notes.md"), "# заметки\n").unwrap();
         std::fs::write(ws_skills.join("ignore.txt"), "шум\n").unwrap();
         // Home-скиллы: каталог без SKILL.md не считается, с SKILL.md — считается.
         let home_skills = home.join(".theseus/skills");
         std::fs::create_dir_all(home_skills.join("empty-dir")).unwrap();
         std::fs::create_dir_all(home_skills.join("grpo-tips")).unwrap();
-        std::fs::write(home_skills.join("grpo-tips").join("SKILL.md"), "---\nname: grpo-tips\n---\n").unwrap();
+        std::fs::write(
+            home_skills.join("grpo-tips").join("SKILL.md"),
+            "---\nname: grpo-tips\n---\n",
+        )
+        .unwrap();
 
         let state = assess_with_env(&home, &ws, None);
         assert_eq!(state.skills_found, 3);
@@ -415,9 +436,15 @@ mod tests {
         let text = welcome_text(&state);
         assert!(text.contains("Добро пожаловать"));
         assert!(text.contains('❌'), "нет статуса ❌:\n{text}");
-        assert!(text.contains("DEEPSEEK_API_KEY"), "нет подсказки про ключ:\n{text}");
+        assert!(
+            text.contains("DEEPSEEK_API_KEY"),
+            "нет подсказки про ключ:\n{text}"
+        );
         assert!(text.contains("Следующие шаги"));
-        assert!(text.contains("1. "), "шаги должны быть пронумерованы:\n{text}");
+        assert!(
+            text.contains("1. "),
+            "шаги должны быть пронумерованы:\n{text}"
+        );
     }
 
     #[test]
@@ -495,11 +522,17 @@ mod tests {
     #[test]
     fn first_run_true_then_false() {
         let (base, home, _ws) = fixture("firstrun");
-        assert!(first_run_marker(&home).unwrap(), "первый вызов — первый запуск");
+        assert!(
+            first_run_marker(&home).unwrap(),
+            "первый вызов — первый запуск"
+        );
         let marker = home.join(MARKER_RELATIVE_PATH);
         assert!(marker.is_file());
         assert!(!std::fs::read_to_string(&marker).unwrap().is_empty());
-        assert!(!first_run_marker(&home).unwrap(), "второй вызов — уже не первый");
+        assert!(
+            !first_run_marker(&home).unwrap(),
+            "второй вызов — уже не первый"
+        );
         std::fs::remove_dir_all(&base).unwrap();
     }
 
@@ -538,7 +571,9 @@ mod tests {
         }
         let ml_words = ["обучен", "метрик", "датасет", "чекпоинт", "модел"];
         assert!(
-            prompts.iter().any(|p| ml_words.iter().any(|w| p.contains(w))),
+            prompts
+                .iter()
+                .any(|p| ml_words.iter().any(|w| p.contains(w))),
             "промпты должны быть про ML: {prompts:?}"
         );
     }

@@ -64,7 +64,8 @@ fn strip_think_blocks(content: &str) -> String {
     let trimmed = out.trim();
     if trimmed.is_empty() {
         "(Ариадна вернула только thinking-блок без текста ответа; \
-         попробуйте переформулировать задачу короче)".to_string()
+         попробуйте переформулировать задачу короче)"
+            .to_string()
     } else {
         trimmed.to_string()
     }
@@ -157,7 +158,10 @@ pub struct ChatMessage {
 
 impl ChatMessage {
     fn new(role: &str, content: impl Into<String>) -> Self {
-        Self { role: role.to_string(), content: content.into() }
+        Self {
+            role: role.to_string(),
+            content: content.into(),
+        }
     }
 
     /// Системное сообщение (инструкция для модели).
@@ -194,12 +198,20 @@ pub struct ServerGuard {
 impl ServerGuard {
     /// Гард для уже живого сервера: процессом не владеем.
     fn reused(base_url: String) -> Self {
-        Self { child: None, log_path: None, base_url }
+        Self {
+            child: None,
+            log_path: None,
+            base_url,
+        }
     }
 
     /// Гард для порождённого нами процесса.
     fn spawned(child: Child, log_path: PathBuf, base_url: String) -> Self {
-        Self { child: Some(child), log_path: Some(log_path), base_url }
+        Self {
+            child: Some(child),
+            log_path: Some(log_path),
+            base_url,
+        }
     }
 
     /// `true`, если сервер порождён [`ensure_server`] и будет убит при `Drop`.
@@ -241,11 +253,16 @@ pub fn is_available(cfg: &AriadnaConfig) -> bool {
 /// модель думает 2500+ токенов на trivial-вопрос, 10 минут на CPU).
 fn server_args(cfg: &AriadnaConfig) -> Vec<String> {
     vec![
-        "--model".to_string(), cfg.gguf_path.display().to_string(),
-        "--host".to_string(), cfg.host.clone(),
-        "--port".to_string(), cfg.port.to_string(),
-        "-c".to_string(), cfg.ctx.to_string(),
-        "--n-gpu-layers".to_string(), cfg.gpu_layers.to_string(),
+        "--model".to_string(),
+        cfg.gguf_path.display().to_string(),
+        "--host".to_string(),
+        cfg.host.clone(),
+        "--port".to_string(),
+        cfg.port.to_string(),
+        "-c".to_string(),
+        cfg.ctx.to_string(),
+        "--n-gpu-layers".to_string(),
+        cfg.gpu_layers.to_string(),
         "--jinja".to_string(),
     ]
 }
@@ -267,7 +284,10 @@ pub fn ensure_server(cfg: &AriadnaConfig) -> Result<ServerGuard> {
         return Ok(ServerGuard::reused(base_url));
     }
     if !cfg.server_bin.is_file() {
-        anyhow::bail!("бинарь llama-server не найден: {}", cfg.server_bin.display());
+        anyhow::bail!(
+            "бинарь llama-server не найден: {}",
+            cfg.server_bin.display()
+        );
     }
     if !cfg.gguf_path.is_file() {
         anyhow::bail!("GGUF-модель не найдена: {}", cfg.gguf_path.display());
@@ -276,7 +296,9 @@ pub fn ensure_server(cfg: &AriadnaConfig) -> Result<ServerGuard> {
     let log_path = log_path_for(cfg);
     let log_out = std::fs::File::create(&log_path)
         .with_context(|| format!("создание лог-файла {}", log_path.display()))?;
-    let log_err = log_out.try_clone().context("клонирование дескриптора лог-файла")?;
+    let log_err = log_out
+        .try_clone()
+        .context("клонирование дескриптора лог-файла")?;
     let mut child = Command::new(&cfg.server_bin)
         .args(server_args(cfg))
         .stdin(Stdio::null())
@@ -290,7 +312,8 @@ pub fn ensure_server(cfg: &AriadnaConfig) -> Result<ServerGuard> {
         if health_ok(&probe, &base_url) {
             return Ok(ServerGuard::spawned(child, log_path, base_url));
         }
-        if let Some(status) = child.try_wait().context("опрос состояния llama-server")? {
+        if let Some(status) = child.try_wait().context("опрос состояния llama-server")?
+        {
             let tail = read_log_tail(&log_path);
             anyhow::bail!(
                 "llama-server завершился досрочно (статус: {status}). Хвост лога {}:\n{tail}",
@@ -332,9 +355,12 @@ pub fn chat(cfg: &AriadnaConfig, messages: &[ChatMessage]) -> Result<String> {
 }
 
 /// То же, что [`chat`], но с явным потолком токенов ответа (CPU-фолбэк —
-/// усечённый бюджет [`CHAT_MAX_TOKENS_CPU`]).
-pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
-                            max_tokens: u32) -> Result<String> {
+/// усечённый бюджет `CHAT_MAX_TOKENS_CPU`).
+pub fn chat_with_max_tokens(
+    cfg: &AriadnaConfig,
+    messages: &[ChatMessage],
+    max_tokens: u32,
+) -> Result<String> {
     let url = format!("{}/v1/chat/completions", cfg.base_url());
     let body = serde_json::json!({
         "model": MODEL_NAME,
@@ -356,10 +382,14 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
     let status = resp.status();
     if !status.is_success() {
         let text = resp.text().unwrap_or_default();
-        anyhow::bail!("llama-server ответил {status}: {}", truncate(&text, ERR_BODY_MAX_CHARS));
+        anyhow::bail!(
+            "llama-server ответил {status}: {}",
+            truncate(&text, ERR_BODY_MAX_CHARS)
+        );
     }
-    let value: serde_json::Value =
-        resp.json().with_context(|| format!("разбор JSON ответа {url}"))?;
+    let value: serde_json::Value = resp
+        .json()
+        .with_context(|| format!("разбор JSON ответа {url}"))?;
     // Индексация Value не паникует: промах даёт Null, as_str → None.
     // Fallback на reasoning_content (паттерн ~/bin/ask_expert.sh:97-102):
     // Qwen с thinking-режимом иногда отдаёт пустой content и кладёт текст
@@ -387,9 +417,9 @@ pub fn chat_with_max_tokens(cfg: &AriadnaConfig, messages: &[ChatMessage],
 /// для серии задач выгоднее самим вызвать [`ensure_server`], держать
 /// гард и ходить в [`chat`] напрямую.
 ///
-/// Если порождённый сервер не смог поднять GPU (см. [`cpu_fallback`]),
+/// Если порождённый сервер не смог поднять GPU (см. `cpu_fallback`),
 /// предпринимается одна попытка перезапуска с запасным Vulkan-бинарём
-/// ([`FALLBACK_SERVER_BIN`], если он существует): живой кейс 06.08 —
+/// (`FALLBACK_SERVER_BIN`, если он существует): живой кейс 06.08 —
 /// /dev/nvidia-uvm сломан (cuInit=999, чинится только root+ребут),
 /// CUDA-сборка молча уходит на CPU (~5 ток/с), а Vulkan-бэкенд работает
 /// без CUDA-стека. Если и запасной бинарь на CPU (или его нет), к ответу
@@ -414,7 +444,11 @@ pub fn run_task(cfg: &AriadnaConfig, system: &str, task: &str) -> Result<String>
             on_cpu = spawned_on_cpu(&guard);
         }
     }
-    let max_tokens = if on_cpu { CHAT_MAX_TOKENS_CPU } else { CHAT_MAX_TOKENS };
+    let max_tokens = if on_cpu {
+        CHAT_MAX_TOKENS_CPU
+    } else {
+        CHAT_MAX_TOKENS
+    };
     // v10 (GRPO) ломается от ЛЮБОГО system-сообщения: отвечает «<think>» + EOS
     // (живой тест 02.08) — для неё шлём только user. v1 (SFT) system понимает.
     let messages = if model_is_v10(&cfg) {
@@ -478,8 +512,8 @@ fn cpu_fallback(log_content: &str) -> bool {
 /// «found 0 CUDA devices» — это отказ, а не успех.
 fn gpu_backend_active(log_content: &str) -> bool {
     let lower = log_content.to_lowercase();
-    let cuda_ok = lower.contains("ggml_cuda_init: found")
-        && !lower.contains("found 0 cuda devices");
+    let cuda_ok =
+        lower.contains("ggml_cuda_init: found") && !lower.contains("found 0 cuda devices");
     cuda_ok || lower.contains("ggml_vulkan: found")
 }
 
@@ -487,8 +521,7 @@ fn gpu_backend_active(log_content: &str) -> bool {
 /// Уроки живых сессий (скрин 23.07): модель теряет ответ в thinking-блоке,
 /// если промпт — вопрос, а не императив; явная инструкция про язык и
 /// «обязательно ответь текстом» возвращает её к текстовому ответу.
-pub const ARIADNA_SYSTEM_RU: &str =
-    "Ты — Ариадна, локальный быстрый ML-помощник (Qwen3.5-4B). \
+pub const ARIADNA_SYSTEM_RU: &str = "Ты — Ариадна, локальный быстрый ML-помощник (Qwen3.5-4B). \
      Отвечай по-русски, кратко и по делу, сразу текстом ответа, без преамбул \
      и без блоков рассуждений. Задача сформулирована в императиве — выполняй \
      её прямо, без уточняющих вопросов. Если ответ по-русски сформулировать \
@@ -526,8 +559,11 @@ pub fn run_task_ru_fallback(cfg: &AriadnaConfig, task: &str) -> Result<String> {
     if !answer_is_lost(&answer) {
         return Ok(answer);
     }
-    let retry = run_task(cfg, ARIADNA_SYSTEM_EN,
-        &format!("Do the task directly, no clarifying questions: {task}"))?;
+    let retry = run_task(
+        cfg,
+        ARIADNA_SYSTEM_EN,
+        &format!("Do the task directly, no clarifying questions: {task}"),
+    )?;
     Ok(retry)
 }
 
@@ -575,13 +611,17 @@ fn read_log_tail(path: &Path) -> String {
 fn truncate(text: &str, max_chars: usize) -> String {
     let mut chars = text.chars();
     let head: String = chars.by_ref().take(max_chars).collect();
-    if chars.next().is_some() { format!("{head}…") } else { head }
+    if chars.next().is_some() {
+        format!("{head}…")
+    } else {
+        head
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{Value, json};
+    use serde_json::{json, Value};
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -636,7 +676,12 @@ mod tests {
                 let shutdown = Arc::clone(&shutdown);
                 std::thread::spawn(move || serve(listener, captured, shutdown, mode))
             };
-            Self { port, captured, shutdown, join: Some(join) }
+            Self {
+                port,
+                captured,
+                shutdown,
+                join: Some(join),
+            }
         }
 
         /// Конфиг на мок (пути бинаря/модели дефолтные: до их проверки дело не доходит).
@@ -692,7 +737,8 @@ mod tests {
                             captured.lock().expect("lock captured").push(req);
                             let _ = write_response(&mut stream, status, reason, &body);
                         }
-                        Err(_) => { /* полуоткрытое/битое соединение — пропускаем */ }
+                        Err(_) => { /* полуоткрытое/битое соединение — пропускаем */
+                        }
                     }
                 }
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
@@ -745,9 +791,11 @@ mod tests {
                         .to_string(),
                     )
                 }
-                ChatMode::Http500 => {
-                    (500, "Internal Server Error", json!({"error": "boom"}).to_string())
-                }
+                ChatMode::Http500 => (
+                    500,
+                    "Internal Server Error",
+                    json!({"error": "boom"}).to_string(),
+                ),
                 ChatMode::InvalidJson => (200, "OK", "это вовсе не json".to_string()),
                 ChatMode::EmptyChoices => (200, "OK", json!({"choices": []}).to_string()),
             },
@@ -761,7 +809,10 @@ mod tests {
         let mut reader = BufReader::new(stream.try_clone()?);
         let mut request_line = String::new();
         if reader.read_line(&mut request_line)? == 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "пустой запрос"));
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                "пустой запрос",
+            ));
         }
         let mut parts = request_line.split_whitespace();
         let method = parts.next().unwrap_or_default().to_string();
@@ -792,7 +843,12 @@ mod tests {
     }
 
     /// Пишет HTTP-ответ с `Connection: close` (keep-alive не держим).
-    fn write_response(stream: &mut TcpStream, status: u16, reason: &str, body: &str) -> std::io::Result<()> {
+    fn write_response(
+        stream: &mut TcpStream,
+        status: u16,
+        reason: &str,
+        body: &str,
+    ) -> std::io::Result<()> {
         let head = format!(
             "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
             body.len()
@@ -814,8 +870,10 @@ mod tests {
     /// Временный исполняемый shell-скрипт — «поддельный llama-server»
     /// (лишние аргументы командной строки скрипт просто игнорирует).
     fn make_script(name: &str, body: &str) -> PathBuf {
-        let path = std::env::temp_dir()
-            .join(format!("theseus-ariadna-test-{}-{name}.sh", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "theseus-ariadna-test-{}-{name}.sh",
+            std::process::id()
+        ));
         std::fs::write(&path, body).expect("запись скрипта");
         #[cfg(unix)]
         {
@@ -828,8 +886,10 @@ mod tests {
 
     /// Временный файл с заданным содержимым (притворяется GGUF/бинарём).
     fn make_temp_file(name: &str, content: &[u8]) -> PathBuf {
-        let path = std::env::temp_dir()
-            .join(format!("theseus-ariadna-test-{}-{name}", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "theseus-ariadna-test-{}-{name}",
+            std::process::id()
+        ));
         std::fs::write(&path, content).expect("запись файла");
         path
     }
@@ -843,7 +903,9 @@ mod tests {
         assert_eq!(cfg.gpu_layers, 99);
         assert_eq!(cfg.startup_timeout, Duration::from_secs(30));
         assert!(cfg.server_bin.ends_with("llama-server"));
-        assert!(cfg.gguf_path.ends_with("qwen35-4b-ariadna-grpo-v10.Q4_K_M.gguf"));
+        assert!(cfg
+            .gguf_path
+            .ends_with("qwen35-4b-ariadna-grpo-v10.Q4_K_M.gguf"));
     }
 
     #[test]
@@ -861,13 +923,23 @@ mod tests {
     /// Vulkan-сборка с живым GPU (инцидент 06.08) — НЕ фолбэк.
     #[test]
     fn cpu_fallback_detects_log_marker() {
-        assert!(cpu_fallback("warning: no usable GPU found, --gpu-layers option will be ignored"));
-        assert!(cpu_fallback("ggml_cuda_init: found 0 CUDA devices:\n  no usable GPU found"));
-        assert!(cpu_fallback("warning: not compiled with GPU offload support, --n-gpu-layers option will be ignored"));
+        assert!(cpu_fallback(
+            "warning: no usable GPU found, --gpu-layers option will be ignored"
+        ));
+        assert!(cpu_fallback(
+            "ggml_cuda_init: found 0 CUDA devices:\n  no usable GPU found"
+        ));
+        assert!(cpu_fallback(
+            "warning: not compiled with GPU offload support, --n-gpu-layers option will be ignored"
+        ));
         assert!(!cpu_fallback("ggml_cuda_init: OK, using CUDA device 0"));
-        assert!(!cpu_fallback("ggml_cuda_init: found 1 CUDA devices (Total VRAM: 15972 MiB):"));
+        assert!(!cpu_fallback(
+            "ggml_cuda_init: found 1 CUDA devices (Total VRAM: 15972 MiB):"
+        ));
         // Vulkan-бэкенд поднял GPU без CUDA — это не CPU-фолбэк.
-        assert!(!cpu_fallback("ggml_vulkan: Found 1 Vulkan devices:\nload_tensors: offloaded 33/33 layers to GPU"));
+        assert!(!cpu_fallback(
+            "ggml_vulkan: Found 1 Vulkan devices:\nload_tensors: offloaded 33/33 layers to GPU"
+        ));
         assert!(!cpu_fallback(""));
     }
 
@@ -878,8 +950,10 @@ mod tests {
     fn server_args_contain_jinja_and_model() {
         let cfg = AriadnaConfig::default();
         let args = server_args(&cfg);
-        assert!(args.iter().any(|a| a == "--jinja"),
-            "без --jinja шаблон Qwen не применяется: {args:?}");
+        assert!(
+            args.iter().any(|a| a == "--jinja"),
+            "без --jinja шаблон Qwen не применяется: {args:?}"
+        );
         let model_pos = args.iter().position(|a| a == "--model").expect("--model");
         assert!(args[model_pos + 1].contains("ariadna"));
         let port_pos = args.iter().position(|a| a == "--port").expect("--port");
@@ -889,11 +963,26 @@ mod tests {
 
     #[test]
     fn chat_message_constructors_and_serialization() {
-        assert_eq!(ChatMessage::system("s"), ChatMessage { role: "system".into(), content: "s".into() });
-        assert_eq!(ChatMessage::user("u"), ChatMessage { role: "user".into(), content: "u".into() });
+        assert_eq!(
+            ChatMessage::system("s"),
+            ChatMessage {
+                role: "system".into(),
+                content: "s".into()
+            }
+        );
+        assert_eq!(
+            ChatMessage::user("u"),
+            ChatMessage {
+                role: "user".into(),
+                content: "u".into()
+            }
+        );
         assert_eq!(
             ChatMessage::assistant("a"),
-            ChatMessage { role: "assistant".into(), content: "a".into() }
+            ChatMessage {
+                role: "assistant".into(),
+                content: "a".into()
+            }
         );
         let value = serde_json::to_value(ChatMessage::user("привет")).expect("сериализация");
         assert_eq!(value, json!({"role": "user", "content": "привет"}));
@@ -928,8 +1017,14 @@ mod tests {
         let mock = MockLlama::start(ChatMode::Ok);
         let cfg = mock.config();
         let guard = ensure_server(&cfg).expect("живой сервер переиспользуется");
-        assert!(!guard.owns_process(), "чужой процесс не должен принадлежать гарду");
-        assert!(guard.log_path().is_none(), "у чужого сервера нет нашего лога");
+        assert!(
+            !guard.owns_process(),
+            "чужой процесс не должен принадлежать гарду"
+        );
+        assert!(
+            guard.log_path().is_none(),
+            "у чужого сервера нет нашего лога"
+        );
         assert_eq!(guard.base_url(), format!("http://127.0.0.1:{}", mock.port));
     }
 
@@ -947,7 +1042,10 @@ mod tests {
         );
         // И главное: «чужой» сервер после Drop продолжает отвечать.
         let probe = http_client(Duration::from_secs(2)).expect("http-клиент");
-        assert!(health_ok(&probe, &cfg.base_url()), "чужой сервер не должен быть убит");
+        assert!(
+            health_ok(&probe, &cfg.base_url()),
+            "чужой сервер не должен быть убит"
+        );
     }
 
     #[test]
@@ -1009,11 +1107,20 @@ mod tests {
         let started = Instant::now();
         let err = ensure_server(&cfg).expect_err("мёртвый порт — ошибка по таймауту");
         let elapsed = started.elapsed();
-        assert!(elapsed >= Duration::from_secs(2), "вернулись раньше таймаута: {elapsed:?}");
-        assert!(elapsed < Duration::from_secs(15), "зависли сверх таймаута: {elapsed:?}");
+        assert!(
+            elapsed >= Duration::from_secs(2),
+            "вернулись раньше таймаута: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "зависли сверх таймаута: {elapsed:?}"
+        );
         let msg = format!("{err:#}");
         assert!(msg.contains("не поднялся"), "msg: {msg}");
-        assert!(msg.contains("fake-server-starting"), "хвост лога потерян: {msg}");
+        assert!(
+            msg.contains("fake-server-starting"),
+            "хвост лога потерян: {msg}"
+        );
         // Лог-файл остаётся на диске для посмертной диагностики.
         let log = log_path_for(&cfg);
         assert!(log.is_file(), "лог-файл должен существовать");
@@ -1026,7 +1133,10 @@ mod tests {
     fn ensure_server_reports_early_exit_with_log_tail() {
         // «Сервер», который падает сразу (как llama-server с битым GGUF):
         // ошибка должна прийти раньше таймаута.
-        let bin = make_script("earlyexit", "#!/bin/sh\necho 'fatal: cannot load model'\nexit 3\n");
+        let bin = make_script(
+            "earlyexit",
+            "#!/bin/sh\necho 'fatal: cannot load model'\nexit 3\n",
+        );
         let gguf = make_temp_file("model-exit.gguf", b"fake");
         let cfg = AriadnaConfig {
             server_bin: bin.clone(),
@@ -1045,7 +1155,10 @@ mod tests {
         );
         let msg = format!("{err:#}");
         assert!(msg.contains("досрочно"), "msg: {msg}");
-        assert!(msg.contains("fatal: cannot load model"), "хвост лога потерян: {msg}");
+        assert!(
+            msg.contains("fatal: cannot load model"),
+            "хвост лога потерян: {msg}"
+        );
         let _ = std::fs::remove_file(&bin);
         let _ = std::fs::remove_file(&gguf);
         let _ = std::fs::remove_file(log_path_for(&cfg));
@@ -1062,8 +1175,11 @@ mod tests {
     fn chat_sends_openai_compatible_request() {
         let mock = MockLlama::start(ChatMode::Ok);
         let cfg = mock.config();
-        let out = chat(&cfg, &[ChatMessage::system("SYS"), ChatMessage::user("TSK")])
-            .expect("chat");
+        let out = chat(
+            &cfg,
+            &[ChatMessage::system("SYS"), ChatMessage::user("TSK")],
+        )
+        .expect("chat");
         assert_eq!(out, MOCK_REPLY);
         let requests = mock.chat_requests();
         assert_eq!(requests.len(), 1, "ровно один chat-запрос");
@@ -1089,7 +1205,11 @@ mod tests {
     fn strip_think_blocks_unclosed_tail() {
         // бюджет токенов исчерпан прямо внутри thinking — хвост без </think>
         let s = "<think>рассуждения без конца";
-        assert!(strip_think_blocks(s).contains("только thinking-блок"), "{}", strip_think_blocks(s));
+        assert!(
+            strip_think_blocks(s).contains("только thinking-блок"),
+            "{}",
+            strip_think_blocks(s)
+        );
     }
 
     #[test]
@@ -1107,7 +1227,10 @@ mod tests {
         let err = chat(&mock.config(), &[ChatMessage::user("x")]).expect_err("500 — ошибка");
         let msg = format!("{err:#}");
         assert!(msg.contains("500"), "msg: {msg}");
-        assert!(msg.contains("boom"), "тело ошибки должно попасть в текст: {msg}");
+        assert!(
+            msg.contains("boom"),
+            "тело ошибки должно попасть в текст: {msg}"
+        );
     }
 
     #[test]
@@ -1121,9 +1244,13 @@ mod tests {
     #[test]
     fn chat_errors_when_content_missing() {
         let mock = MockLlama::start(ChatMode::EmptyChoices);
-        let err = chat(&mock.config(), &[ChatMessage::user("x")]).expect_err("пустые choices — ошибка");
+        let err =
+            chat(&mock.config(), &[ChatMessage::user("x")]).expect_err("пустые choices — ошибка");
         let msg = format!("{err:#}");
-        assert!(msg.contains("пустые content и reasoning_content"), "msg: {msg}");
+        assert!(
+            msg.contains("пустые content и reasoning_content"),
+            "msg: {msg}"
+        );
     }
 
     /// v10 (GRPO) не получает system-сообщение: любой system ломает модель
@@ -1132,29 +1259,48 @@ mod tests {
     fn run_task_v10_sends_user_only() {
         let mock = MockLlama::start(ChatMode::Ok);
         let mut cfg = mock.config();
-        cfg.gguf_path = PathBuf::from("/home/roman/models/ariadna-grpo/qwen35-4b-ariadna-grpo-v10.Q4_K_M.gguf");
-        let out = run_task(&cfg, "Ты — Ариадна.", "Найди выход из лабиринта").expect("run_task v10");
+        cfg.gguf_path =
+            PathBuf::from("/home/roman/models/ariadna-grpo/qwen35-4b-ariadna-grpo-v10.Q4_K_M.gguf");
+        let out =
+            run_task(&cfg, "Ты — Ариадна.", "Найди выход из лабиринта").expect("run_task v10");
         assert_eq!(out, MOCK_REPLY);
         let requests = mock.chat_requests();
         assert_eq!(requests.len(), 1);
         let body: Value = serde_json::from_str(&requests[0].body).expect("тело — JSON");
         let messages = body["messages"].as_array().expect("messages — массив");
-        assert_eq!(messages.len(), 1, "v10: только user, без system: {}", requests[0].body);
+        assert_eq!(
+            messages.len(),
+            1,
+            "v10: только user, без system: {}",
+            requests[0].body
+        );
         assert_eq!(messages[0]["role"], json!("user"));
         assert_eq!(messages[0]["content"], json!("Найди выход из лабиринта"));
         // kwargs enable_thinking=false в тело не попадают (ломают v10/v1)
-        assert!(body.get("chat_template_kwargs").is_none(),
-            "chat_template_kwargs не должен отправляться: {}", requests[0].body);
+        assert!(
+            body.get("chat_template_kwargs").is_none(),
+            "chat_template_kwargs не должен отправляться: {}",
+            requests[0].body
+        );
     }
 
     /// Промпты Ариадны (скрин 23.07): русский первичен + явный фолбэк
     /// на английский; оба требуют ответ сразу текстом, без <think>.
     #[test]
     fn system_prompts_cover_language_and_fallback() {
-        assert!(ARIADNA_SYSTEM_RU.contains("по-русски"), "русский первичен: {ARIADNA_SYSTEM_RU}");
-        assert!(ARIADNA_SYSTEM_RU.contains("английский"), "фолбэк на EN объявлен: {ARIADNA_SYSTEM_RU}");
+        assert!(
+            ARIADNA_SYSTEM_RU.contains("по-русски"),
+            "русский первичен: {ARIADNA_SYSTEM_RU}"
+        );
+        assert!(
+            ARIADNA_SYSTEM_RU.contains("английский"),
+            "фолбэк на EN объявлен: {ARIADNA_SYSTEM_RU}"
+        );
         assert!(ARIADNA_SYSTEM_RU.contains("обязательно ответь текстом"));
-        assert!(ARIADNA_SYSTEM_EN.contains("in English"), "EN-фолбэк: {ARIADNA_SYSTEM_EN}");
+        assert!(
+            ARIADNA_SYSTEM_EN.contains("in English"),
+            "EN-фолбэк: {ARIADNA_SYSTEM_EN}"
+        );
         assert!(ARIADNA_SYSTEM_EN.contains("no reasoning blocks"));
     }
 
@@ -1174,7 +1320,9 @@ mod tests {
     fn answer_is_lost_detection() {
         assert!(answer_is_lost(""));
         assert!(answer_is_lost("   \n "));
-        assert!(answer_is_lost("(Ариадна вернула только thinking-блок без текста ответа)"));
+        assert!(answer_is_lost(
+            "(Ариадна вернула только thinking-блок без текста ответа)"
+        ));
         assert!(!answer_is_lost("нормальный ответ"));
         assert!(!answer_is_lost("plain english answer is fine too"));
     }
@@ -1191,10 +1339,19 @@ mod tests {
         let first: Value = serde_json::from_str(&requests[0].body).expect("JSON 1");
         let second: Value = serde_json::from_str(&requests[1].body).expect("JSON 2");
         assert_eq!(first["messages"][0]["content"], json!(ARIADNA_SYSTEM_RU));
-        assert!(first["messages"][1]["content"].as_str().unwrap_or("").contains("Задача"),
-            "императивная рамка в первом прогоне: {}", requests[0].body);
+        assert!(
+            first["messages"][1]["content"]
+                .as_str()
+                .unwrap_or("")
+                .contains("Задача"),
+            "императивная рамка в первом прогоне: {}",
+            requests[0].body
+        );
         assert_eq!(second["messages"][0]["content"], json!(ARIADNA_SYSTEM_EN));
-        assert!(second["messages"][1]["content"].as_str().unwrap_or("").contains("Do the task directly"));
+        assert!(second["messages"][1]["content"]
+            .as_str()
+            .unwrap_or("")
+            .contains("Do the task directly"));
     }
 
     /// Без потери ответа фолбэк-ретрая нет: один прогон, русский промпт.
@@ -1207,13 +1364,16 @@ mod tests {
     }
 
     #[test]
-    fn run_task_sends_system_then_user_and_ensures_server() {        let mock = MockLlama::start(ChatMode::Ok);
+    fn run_task_sends_system_then_user_and_ensures_server() {
+        let mock = MockLlama::start(ChatMode::Ok);
         let cfg = mock.config();
         let out = run_task(&cfg, "Ты — Ариадна.", "Найди выход из лабиринта").expect("run_task");
         assert_eq!(out, MOCK_REPLY);
         // run_task обязан сначала убедиться, что сервер жив (GET /health)…
         assert!(
-            mock.captured().iter().any(|r| r.method == "GET" && r.path == "/health"),
+            mock.captured()
+                .iter()
+                .any(|r| r.method == "GET" && r.path == "/health"),
             "run_task должен пройти через ensure_server"
         );
         // …и только потом слать chat с system+user.
@@ -1239,8 +1399,11 @@ mod tests {
             return;
         }
         let guard = ensure_server(&cfg).expect("поднять или переиспользовать сервер");
-        let out = chat(&cfg, &[ChatMessage::user("Ответь одним словом: сколько будет 2+2?")])
-            .expect("chat к живому серверу");
+        let out = chat(
+            &cfg,
+            &[ChatMessage::user("Ответь одним словом: сколько будет 2+2?")],
+        )
+        .expect("chat к живому серверу");
         assert!(!out.trim().is_empty(), "модель должна что-то ответить");
         drop(guard);
     }

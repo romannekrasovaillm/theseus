@@ -116,7 +116,10 @@ impl fmt::Display for ParseError {
                 write!(f, "«{segment}»: недопустимый символ (нужны [0-9A-Za-z-])")
             }
             Self::PreLeadingZero { segment } => {
-                write!(f, "«{segment}»: ведущий нуль в числовом сегменте предрелиза")
+                write!(
+                    f,
+                    "«{segment}»: ведущий нуль в числовом сегменте предрелиза"
+                )
             }
         }
     }
@@ -688,13 +691,7 @@ mod tests {
     /// укороченная запись, пробелы) нормализуются.
     #[test]
     fn display_roundtrip() {
-        let canonical = [
-            "0.0.0",
-            "1.2.3",
-            "10.20.30",
-            "1.0.0-rc.1",
-            "1.0.0-x-y-z.--",
-        ];
+        let canonical = ["0.0.0", "1.2.3", "10.20.30", "1.0.0-rc.1", "1.0.0-x-y-z.--"];
         for s in canonical {
             let ver = v(s);
             assert_eq!(ver.to_string(), s);
@@ -870,7 +867,9 @@ mod tests {
     #[test]
     fn compatible_invalid_requirement_is_false() {
         let ver = v("1.2.3");
-        let bad = ["", "   ", "^", ">=", "~", ">=abc", "^1.2.3.4", "=>1.0", "1.2.3+b"];
+        let bad = [
+            "", "   ", "^", ">=", "~", ">=abc", "^1.2.3.4", "=>1.0", "1.2.3+b",
+        ];
         for req in bad {
             assert!(!ver.is_compatible_with(req), "требование: «{req}»");
         }

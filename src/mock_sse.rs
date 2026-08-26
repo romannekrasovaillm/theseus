@@ -30,7 +30,7 @@
 //! handle.join();
 //! ```
 
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -73,7 +73,11 @@ pub struct Scenario {
 impl Scenario {
     /// Пустой сценарий: `finish_reason` по умолчанию — `"stop"`.
     pub fn new() -> Self {
-        Self { expected_tool: None, deltas: Vec::new(), finish: "stop".to_string() }
+        Self {
+            expected_tool: None,
+            deltas: Vec::new(),
+            finish: "stop".to_string(),
+        }
     }
 
     /// Ожидание: входящий запрос должен ссылаться на инструмент `tool_name`
@@ -94,21 +98,30 @@ impl Scenario {
     /// Ответить вызовом инструмента `name` с JSON-аргументами `arguments_json`
     /// (строкой, как на проводе). Несколько вызовов подряд получают разные
     /// `index` и id `call_0`, `call_1`, ...
-    pub fn reply_tool_call(mut self, name: impl Into<String>, arguments_json: impl Into<String>) -> Self {
-        self.deltas.push(Delta::ToolCall { name: name.into(), arguments: arguments_json.into() });
+    pub fn reply_tool_call(
+        mut self,
+        name: impl Into<String>,
+        arguments_json: impl Into<String>,
+    ) -> Self {
+        self.deltas.push(Delta::ToolCall {
+            name: name.into(),
+            arguments: arguments_json.into(),
+        });
         self
     }
 
     /// Ответить потоком текстовых кадров (по одному SSE-кадру на элемент).
     pub fn reply_stream(mut self, chunks: &[&str]) -> Self {
-        self.deltas.extend(chunks.iter().map(|c| Delta::Text((*c).to_string())));
+        self.deltas
+            .extend(chunks.iter().map(|c| Delta::Text((*c).to_string())));
         self
     }
 
     /// Ответить кадрами цепочки рассуждений (`delta.reasoning_content`,
     /// по кадру на элемент) — паттерн thinking-моделей DeepSeek/GLM/Kimi.
     pub fn reply_reasoning(mut self, chunks: &[&str]) -> Self {
-        self.deltas.extend(chunks.iter().map(|c| Delta::Reasoning((*c).to_string())));
+        self.deltas
+            .extend(chunks.iter().map(|c| Delta::Reasoning((*c).to_string())));
         self
     }
 
@@ -135,7 +148,9 @@ pub struct MockLlm {
 impl MockLlm {
     /// Пустая очередь: любой запрос к `/chat/completions` получит 500.
     pub fn new() -> Self {
-        Self { scenarios: Vec::new() }
+        Self {
+            scenarios: Vec::new(),
+        }
     }
 
     /// Очередь из готового списка сценариев (порядок = порядок запросов).
@@ -208,7 +223,10 @@ impl MockHandle {
     /// Паникует, если фактическое число запросов не равно `expected`.
     pub fn assert_request_count(&self, expected: usize) {
         let actual = lock_recover(&self.shared.requests).len();
-        assert_eq!(actual, expected, "mock_sse: неожиданное число запросов к мок-серверу");
+        assert_eq!(
+            actual, expected,
+            "mock_sse: неожиданное число запросов к мок-серверу"
+        );
     }
 
     /// Остановить сервер и дождаться завершения его потока.
@@ -259,7 +277,9 @@ impl Shared {
 /// Lock с восстановлением после poison: паника в соседнем потоке не должна
 /// валить мок-сервер (`.unwrap()` вне `#[cfg(test)]` запрещён линтами).
 fn lock_recover<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Цикл accept: одно соединение = один запрос; выход по флагу shutdown
@@ -339,7 +359,11 @@ fn read_request(stream: &mut TcpStream) -> io::Result<Option<Request>> {
         let text = String::from_utf8_lossy(&body);
         Some(serde_json::from_str(&text).unwrap_or_else(|_| Value::String(text.into_owned())))
     };
-    Ok(Some(Request { method, path, body_json }))
+    Ok(Some(Request {
+        method,
+        path,
+        body_json,
+    }))
 }
 
 /// Маршрутизация: `POST /chat/completions` (и `/v1/chat/completions`) —
@@ -357,11 +381,18 @@ fn route(request: &Request, shared: &Shared) -> String {
             .as_ref()
             .map_or_else(String::new, ToString::to_string),
     });
-    let (path, _) = request.path.split_once('?').unwrap_or((request.path.as_str(), ""));
+    let (path, _) = request
+        .path
+        .split_once('?')
+        .unwrap_or((request.path.as_str(), ""));
     let is_completions = request.method.eq_ignore_ascii_case("POST")
         && (path == "/chat/completions" || path == "/v1/chat/completions");
     if !is_completions {
-        return error_response(404, "not_found", &format!("mock_sse: неизвестный путь «{path}»"));
+        return error_response(
+            404,
+            "not_found",
+            &format!("mock_sse: неизвестный путь «{path}»"),
+        );
     }
 
     let scenario = lock_recover(&shared.scenarios).pop_front();
@@ -371,7 +402,11 @@ fn route(request: &Request, shared: &Shared) -> String {
             let spare = Scenario::new().reply_text("mock_sse: запасной ответ (очередь исчерпана)");
             return ok_sse(&scenario_to_sse(&spare, "mock-model", 0));
         }
-        return error_response(500, "mock_exhausted", "mock_sse: очередь сценариев исчерпана");
+        return error_response(
+            500,
+            "mock_exhausted",
+            "mock_sse: очередь сценариев исчерпана",
+        );
     };
 
     if let Some(expected) = &scenario.expected_tool {
@@ -408,9 +443,11 @@ fn request_references_tool(body: Option<&Value>, tool: &str) -> bool {
         .as_array()
         .is_some_and(|tools| tools.iter().any(|t| tool_name_matches(t, tool)));
     let in_messages = body["messages"].as_array().is_some_and(|messages| {
-        messages
-            .iter()
-            .any(|m| m["tool_calls"].as_array().is_some_and(|calls| calls.iter().any(|t| tool_name_matches(t, tool))))
+        messages.iter().any(|m| {
+            m["tool_calls"]
+                .as_array()
+                .is_some_and(|calls| calls.iter().any(|t| tool_name_matches(t, tool)))
+        })
     });
     in_tools || in_messages
 }
@@ -623,7 +660,11 @@ mod tests {
             .timeout(Duration::from_secs(10))
             .build()
             .expect("клиент собирается");
-        client.post(url).json(body).send().expect("POST выполняется")
+        client
+            .post(url)
+            .json(body)
+            .send()
+            .expect("POST выполняется")
     }
 
     fn chat_url(handle: &MockHandle) -> String {
@@ -655,7 +696,8 @@ mod tests {
 
     /// Клиент theseus против мока — связка, ради которой мок и писался.
     fn theseus_client(base_url: &str) -> ApiClient {
-        ApiClient::new(base_url, "test-key", "mock-model", 30, json!({}), 1024).expect("клиент создаётся")
+        ApiClient::new(base_url, "test-key", "mock-model", 30, json!({}), 1024)
+            .expect("клиент создаётся")
     }
 
     #[test]
@@ -665,7 +707,10 @@ mod tests {
             .unwrap();
         let resp = post(&chat_url(&handle), &chat_body("test-model"));
         assert_eq!(resp.status(), 200);
-        assert_eq!(resp.headers()["content-type"].to_str().unwrap(), "text/event-stream");
+        assert_eq!(
+            resp.headers()["content-type"].to_str().unwrap(),
+            "text/event-stream"
+        );
         let (frames, done) = parse_sse(&resp.text().unwrap());
         assert!(done, "поток завершается [DONE]");
         assert_eq!(frames.len(), 2, "контентный + терминальный кадры");
@@ -673,7 +718,10 @@ mod tests {
         assert_eq!(frames[0]["choices"][0]["delta"]["content"], "Привет, мир!");
         assert!(frames[0]["choices"][0]["finish_reason"].is_null());
         assert_eq!(frames[1]["choices"][0]["finish_reason"], "stop");
-        assert_eq!(frames[1]["usage"]["prompt_tokens"], 1, "одно сообщение в запросе");
+        assert_eq!(
+            frames[1]["usage"]["prompt_tokens"], 1,
+            "одно сообщение в запросе"
+        );
         assert_eq!(frames[1]["usage"]["completion_tokens"], 1, "одна дельта");
         handle.assert_request_count(1);
         handle.join();
@@ -681,11 +729,9 @@ mod tests {
 
     #[test]
     fn tool_call_reply_carries_function_and_finish_reason() {
-        let handle = MockLlm::with_scenarios(vec![
-            Scenario::new()
-                .reply_tool_call("bash", "{\"command\": \"ls -la\"}")
-                .finish_reason("tool_calls"),
-        ])
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .reply_tool_call("bash", "{\"command\": \"ls -la\"}")
+            .finish_reason("tool_calls")])
         .serve_on_ephemeral()
         .unwrap();
         let resp = post(&chat_url(&handle), &chat_body("m"));
@@ -705,9 +751,10 @@ mod tests {
 
     #[test]
     fn streamed_chunks_arrive_in_order_and_concatenate() {
-        let handle = MockLlm::with_scenarios(vec![Scenario::new().reply_stream(&["Раз", " ", "два", "!"])])
-            .serve_on_ephemeral()
-            .unwrap();
+        let handle =
+            MockLlm::with_scenarios(vec![Scenario::new().reply_stream(&["Раз", " ", "два", "!"])])
+                .serve_on_ephemeral()
+                .unwrap();
         let resp = post(&chat_url(&handle), &chat_body("m"));
         let (frames, done) = parse_sse(&resp.text().unwrap());
         assert!(done);
@@ -718,8 +765,13 @@ mod tests {
             .collect();
         assert_eq!(text, "Раз два!");
         assert_eq!(frames[0]["choices"][0]["delta"]["role"], "assistant");
-        assert!(frames[1]["choices"][0]["delta"]["role"].is_null(), "роль только в первом кадре");
-        assert!(frames[..4].iter().all(|f| f["choices"][0]["finish_reason"].is_null()));
+        assert!(
+            frames[1]["choices"][0]["delta"]["role"].is_null(),
+            "роль только в первом кадре"
+        );
+        assert!(frames[..4]
+            .iter()
+            .all(|f| f["choices"][0]["finish_reason"].is_null()));
         assert_eq!(frames[4]["usage"]["completion_tokens"], 4);
         handle.join();
     }
@@ -769,11 +821,17 @@ mod tests {
     #[test]
     fn unknown_path_returns_404() {
         let handle = MockLlm::new().serve_on_ephemeral().unwrap();
-        let resp = post(&format!("{}/v1/models", handle.base_url), &json!({"probe": 1}));
+        let resp = post(
+            &format!("{}/v1/models", handle.base_url),
+            &json!({"probe": 1}),
+        );
         assert_eq!(resp.status(), 404);
         let error: Value = serde_json::from_str(&resp.text().unwrap()).unwrap();
         assert_eq!(error["error"]["type"], "not_found");
-        assert!(error["error"]["message"].as_str().unwrap().contains("/v1/models"));
+        assert!(error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("/v1/models"));
         // даже неизвестные пути пишутся в журнал (см. doc MockHandle::requests)
         handle.assert_request_count(1);
         handle.join();
@@ -792,11 +850,14 @@ mod tests {
 
     #[test]
     fn expect_tool_call_passes_when_tool_advertised() {
-        let handle = MockLlm::with_scenarios(vec![Scenario::new().expect_tool_call("bash").reply_text("вижу bash")])
-            .serve_on_ephemeral()
-            .unwrap();
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .expect_tool_call("bash")
+            .reply_text("вижу bash")])
+        .serve_on_ephemeral()
+        .unwrap();
         let mut body = chat_body("m");
-        body["tools"] = json!([{"type": "function", "function": {"name": "bash", "parameters": {}}}]);
+        body["tools"] =
+            json!([{"type": "function", "function": {"name": "bash", "parameters": {}}}]);
         let resp = post(&chat_url(&handle), &body);
         assert_eq!(resp.status(), 200);
         handle.join();
@@ -804,9 +865,11 @@ mod tests {
 
     #[test]
     fn expect_tool_call_passes_when_tool_in_history() {
-        let handle = MockLlm::with_scenarios(vec![Scenario::new().expect_tool_call("bash").reply_text("продолжаем")])
-            .serve_on_ephemeral()
-            .unwrap();
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .expect_tool_call("bash")
+            .reply_text("продолжаем")])
+        .serve_on_ephemeral()
+        .unwrap();
         let body = json!({
             "model": "m",
             "messages": [
@@ -824,9 +887,11 @@ mod tests {
 
     #[test]
     fn expect_tool_call_fails_when_tool_missing() {
-        let handle = MockLlm::with_scenarios(vec![Scenario::new().expect_tool_call("bash").reply_text("не дождётся")])
-            .serve_on_ephemeral()
-            .unwrap();
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .expect_tool_call("bash")
+            .reply_text("не дождётся")])
+        .serve_on_ephemeral()
+        .unwrap();
         let resp = post(&chat_url(&handle), &chat_body("m"));
         assert_eq!(resp.status(), 400);
         let error: Value = serde_json::from_str(&resp.text().unwrap()).unwrap();
@@ -837,9 +902,11 @@ mod tests {
 
     #[test]
     fn finish_reason_length_propagates_to_terminal_chunk() {
-        let handle = MockLlm::with_scenarios(vec![Scenario::new().reply_text("обрезано").finish_reason("length")])
-            .serve_on_ephemeral()
-            .unwrap();
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .reply_text("обрезано")
+            .finish_reason("length")])
+        .serve_on_ephemeral()
+        .unwrap();
         let resp = post(&chat_url(&handle), &chat_body("m"));
         let (frames, done) = parse_sse(&resp.text().unwrap());
         assert!(done);
@@ -864,13 +931,19 @@ mod tests {
 
     #[test]
     fn end_to_end_streaming_text_with_theseus_client() {
-        let handle = MockLlm::with_scenarios(vec![Scenario::new().reply_stream(&["Ответ", " ", "мока"])])
-            .serve_on_ephemeral()
-            .unwrap();
+        let handle =
+            MockLlm::with_scenarios(vec![Scenario::new().reply_stream(&["Ответ", " ", "мока"])])
+                .serve_on_ephemeral()
+                .unwrap();
         let mut client = theseus_client(&handle.base_url);
         let mut streamed = String::new();
         let response = client
-            .chat_stream(&[Message::user("вопрос")], &json!(null), &mut |piece| streamed.push_str(piece), &|| false)
+            .chat_stream(
+                &[Message::user("вопрос")],
+                &json!(null),
+                &mut |piece| streamed.push_str(piece),
+                &|| false,
+            )
             .expect("chat_stream отрабатывает");
         assert_eq!(streamed, "Ответ мока");
         assert_eq!(response.content.as_deref(), Some("Ответ мока"));
@@ -885,23 +958,29 @@ mod tests {
 
     #[test]
     fn end_to_end_tool_call_with_theseus_client() {
-        let handle = MockLlm::with_scenarios(vec![
-            Scenario::new()
-                .expect_tool_call("bash")
-                .reply_tool_call("bash", "{\"command\": \"ls\"}")
-                .finish_reason("tool_calls"),
-        ])
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .expect_tool_call("bash")
+            .reply_tool_call("bash", "{\"command\": \"ls\"}")
+            .finish_reason("tool_calls")])
         .serve_on_ephemeral()
         .unwrap();
         let mut client = theseus_client(&handle.base_url);
         let tools = json!([{"type": "function", "function": {"name": "bash", "parameters": {"type": "object"}}}]);
         let response = client
-            .chat_stream(&[Message::user("покажи файлы")], &tools, &mut |_| {}, &|| false)
+            .chat_stream(
+                &[Message::user("покажи файлы")],
+                &tools,
+                &mut |_| {},
+                &|| false,
+            )
             .expect("chat_stream отрабатывает");
         assert_eq!(response.tool_calls.len(), 1);
         assert_eq!(response.tool_calls[0].id, "call_0");
         assert_eq!(response.tool_calls[0].function.name, "bash");
-        assert_eq!(response.tool_calls[0].function.arguments, "{\"command\": \"ls\"}");
+        assert_eq!(
+            response.tool_calls[0].function.arguments,
+            "{\"command\": \"ls\"}"
+        );
         assert_eq!(response.finish_reason.as_deref(), Some("tool_calls"));
         assert!(response.content.is_none(), "контента нет — только вызов");
         // клиент действительно объявил инструмент моку
@@ -911,19 +990,26 @@ mod tests {
 
     #[test]
     fn multiple_tool_calls_get_distinct_indices_and_ids() {
-        let handle = MockLlm::with_scenarios(vec![
-            Scenario::new()
-                .reply_tool_call("read_file", "{\"path\": \"a.rs\"}")
-                .reply_tool_call("write_file", "{\"path\": \"b.rs\"}")
-                .finish_reason("tool_calls"),
-        ])
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .reply_tool_call("read_file", "{\"path\": \"a.rs\"}")
+            .reply_tool_call("write_file", "{\"path\": \"b.rs\"}")
+            .finish_reason("tool_calls")])
         .serve_on_ephemeral()
         .unwrap();
         let mut client = theseus_client(&handle.base_url);
         let response = client
-            .chat_stream(&[Message::user("два вызова")], &json!(null), &mut |_| {}, &|| false)
+            .chat_stream(
+                &[Message::user("два вызова")],
+                &json!(null),
+                &mut |_| {},
+                &|| false,
+            )
             .expect("chat_stream отрабатывает");
-        let names: Vec<&str> = response.tool_calls.iter().map(|t| t.function.name.as_str()).collect();
+        let names: Vec<&str> = response
+            .tool_calls
+            .iter()
+            .map(|t| t.function.name.as_str())
+            .collect();
         assert_eq!(names, ["read_file", "write_file"]);
         assert_eq!(response.tool_calls[0].id, "call_0");
         assert_eq!(response.tool_calls[1].id, "call_1");
@@ -936,25 +1022,28 @@ mod tests {
     /// неизменным) и GLM preserved thinking; DeepSeek игнорирует безопасно.
     #[test]
     fn reasoning_streams_and_replays_to_history() {
-        let handle = MockLlm::with_scenarios(vec![
-            Scenario::new()
-                .reply_reasoning(&["Думаю", " шаг за шагом."])
-                .reply_text("Ответ: 42")
-                .finish_reason("stop"),
-        ])
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .reply_reasoning(&["Думаю", " шаг за шагом."])
+            .reply_text("Ответ: 42")
+            .finish_reason("stop")])
         .serve_on_ephemeral()
         .unwrap();
         let mut client = theseus_client(&handle.base_url);
         let response = client
-            .chat_stream(&[Message::user("вопрос")], &json!(null), &mut |_| {}, &|| false)
+            .chat_stream(
+                &[Message::user("вопрос")],
+                &json!(null),
+                &mut |_| {},
+                &|| false,
+            )
             .expect("chat_stream отрабатывает");
         assert_eq!(response.reasoning.as_deref(), Some("Думаю шаг за шагом."));
         assert_eq!(response.reasoning_len, "Думаю шаг за шагом.".len());
         assert_eq!(response.content.as_deref(), Some("Ответ: 42"));
 
         // проброс в историю: assistant-реплика с reasoning_content
-        let msg = Message::assistant(response.content.clone(), None)
-            .with_reasoning(response.reasoning);
+        let msg =
+            Message::assistant(response.content.clone(), None).with_reasoning(response.reasoning);
         let wire = serde_json::to_value(&msg).unwrap();
         assert_eq!(wire["reasoning_content"], "Думаю шаг за шагом.");
         assert_eq!(wire["content"], "Ответ: 42");

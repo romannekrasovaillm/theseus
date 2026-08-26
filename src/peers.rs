@@ -132,8 +132,10 @@ pub fn parse_peer_line(mode: PeerStream, line: &str) -> (Vec<PeerEvent>, Option<
                     (out, None)
                 }
                 Some("result") => {
-                    let fin = v["result"].as_str()
-                        .map(String::from).filter(|s| !s.is_empty());
+                    let fin = v["result"]
+                        .as_str()
+                        .map(String::from)
+                        .filter(|s| !s.is_empty());
                     (Vec::new(), fin)
                 }
                 _ => (Vec::new(), None),
@@ -153,8 +155,10 @@ pub fn parse_peer_line(mode: PeerStream, line: &str) -> (Vec<PeerEvent>, Option<
                     for c in v["tool_calls"].as_array().into_iter().flatten() {
                         out.push(PeerEvent::ToolUse {
                             name: c["function"]["name"].as_str().unwrap_or("?").to_string(),
-                            args: c["function"]["arguments"].as_str()
-                                .unwrap_or("").to_string(),
+                            args: c["function"]["arguments"]
+                                .as_str()
+                                .unwrap_or("")
+                                .to_string(),
                         });
                     }
                     (out, None)
@@ -193,48 +197,84 @@ pub enum PeerStatus {
 /// свыше 30 КБ (запрос агента со схемами инструментов больше) — прямые
 /// вызовы deepseek работают (проверено живьём 19.07).
 pub fn builtin_peers() -> Vec<PeerSpec> {
-    let spec = |name: &str, binary: &str, args: &[&str], default_timeout_secs: u64,
-                stream: PeerStream| PeerSpec {
-        name: name.to_string(),
-        binary: binary.to_string(),
-        args: args.iter().map(ToString::to_string).collect(),
-        default_timeout_secs,
-        stream,
-    };
+    let spec =
+        |name: &str, binary: &str, args: &[&str], default_timeout_secs: u64, stream: PeerStream| {
+            PeerSpec {
+                name: name.to_string(),
+                binary: binary.to_string(),
+                args: args.iter().map(ToString::to_string).collect(),
+                default_timeout_secs,
+                stream,
+            }
+        };
     vec![
         // claude: --dangerously-skip-permissions — иначе в headless-захвате CLI
         // ждёт интерактивного подтверждения разрешений (write/bash) и молча
         // висит до таймаута 300с (живой кейс 21.07: два вызова убиты таймаутом
         // с пустым stderr). Свой гейт разрешений есть на уровне peer_ask.
         // Стрим: stream-json (фаза 1) — дельты текста и вызовы инструментов живьём.
-        spec("claude", "claude", &["--dangerously-skip-permissions", "-p", TASK_PLACEHOLDER],
-            300, PeerStream::Claude),
+        spec(
+            "claude",
+            "claude",
+            &["--dangerously-skip-permissions", "-p", TASK_PLACEHOLDER],
+            300,
+            PeerStream::Claude,
+        ),
         // kimi: таймаут 600с — ресёрч-задачи честно идут дольше 300с (живой
         // кейс 23.07: «упал (timeout 300с)»; зонд на аналогичной задаче —
         // процесс работал >400с: фан-аут на 3 параллельных исследования).
         // Мелкие задачи отвечает за ~10-20с, ложных висов нет.
         // Стрим: stream-json (фаза 2) — role-схема, не-JSON строки глотаем.
-        spec("kimi", "kimi", &["-p", TASK_PLACEHOLDER], 600, PeerStream::Kimi),
+        spec(
+            "kimi",
+            "kimi",
+            &["-p", TASK_PLACEHOLDER],
+            600,
+            PeerStream::Kimi,
+        ),
         // codewhale: --auto обязателен — включает agentic-режим с tool access;
         // без него `exec` отвечает без доступа к ФС/инструментам (живой кейс
         // 06.08: «не имею доступа к вашей файловой системе», см. exec --help).
         // Стримить нечего: ответ пачкой в конце (скилл peer-sse-streaming 05.08).
-        spec("codewhale", "codewhale", &["exec", "--auto", TASK_PLACEHOLDER],
-            300, PeerStream::Off),
+        spec(
+            "codewhale",
+            "codewhale",
+            &["exec", "--auto", TASK_PLACEHOLDER],
+            300,
+            PeerStream::Off,
+        ),
         // hermes: таймаут 600с — ревью-задачи идут у него ~5 минут (несколько
         // последовательных проходов модели): при 300с убивались на финише
         // (живой кейс 22.07 — «Гермес завис»; замер зондом: ответ пришёл ~5.5 мин).
         // -z печатает только финал — стримить нечего.
-        spec("hermes", "hermes", &["-z", TASK_PLACEHOLDER], 600, PeerStream::Off),
-        spec("openclaw", "openclaw",
-            &["agent", "--local", "--session-id", SESSION_PLACEHOLDER,
-              "--model", "deepseek/deepseek-v4-flash", "--message", TASK_PLACEHOLDER],
-            180, PeerStream::Off),
+        spec(
+            "hermes",
+            "hermes",
+            &["-z", TASK_PLACEHOLDER],
+            600,
+            PeerStream::Off,
+        ),
+        spec(
+            "openclaw",
+            "openclaw",
+            &[
+                "agent",
+                "--local",
+                "--session-id",
+                SESSION_PLACEHOLDER,
+                "--model",
+                "deepseek/deepseek-v4-flash",
+                "--message",
+                TASK_PLACEHOLDER,
+            ],
+            180,
+            PeerStream::Off,
+        ),
     ]
 }
 
 /// Проба одного агента: поиск бинаря по компонентам `PATH` (с проверкой
-/// executable-бита на unix) + запрос версии с таймаутом [`VERSION_TIMEOUT`].
+/// executable-бита на unix) + запрос версии с таймаутом `VERSION_TIMEOUT`.
 pub fn probe_peer(spec: &PeerSpec) -> PeerStatus {
     let dirs: Vec<PathBuf> = std::env::var_os("PATH")
         .map(|p| std::env::split_paths(&p).collect())
@@ -254,7 +294,7 @@ pub fn probe_with_path(spec: &PeerSpec, search_dirs: &[PathBuf]) -> PeerStatus {
 }
 
 /// Параллельная проба нескольких агентов: scoped-потоки, не более
-/// [`PROBE_THREADS`] одновременно; порядок результата = порядок входа.
+/// `PROBE_THREADS` одновременно; порядок результата = порядок входа.
 pub fn probe_peers(specs: &[PeerSpec]) -> Vec<(PeerSpec, PeerStatus)> {
     if specs.is_empty() {
         return Vec::new();
@@ -267,12 +307,17 @@ pub fn probe_peers(specs: &[PeerSpec]) -> Vec<(PeerSpec, PeerStatus)> {
         let mut handles = Vec::new();
         for part in specs.chunks(chunk) {
             handles.push(scope.spawn(move || {
-                part.iter().map(|sp| (sp.clone(), probe_peer(sp))).collect::<Vec<_>>()
+                part.iter()
+                    .map(|sp| (sp.clone(), probe_peer(sp)))
+                    .collect::<Vec<_>>()
             }));
         }
         // probe_peer паниковать не должен; если поток всё же упал —
         // чанк теряется, но остальные агенты доезжают.
-        handles.into_iter().flat_map(|h| h.join().unwrap_or_default()).collect()
+        handles
+            .into_iter()
+            .flat_map(|h| h.join().unwrap_or_default())
+            .collect()
     })
 }
 
@@ -280,8 +325,8 @@ pub fn probe_peers(specs: &[PeerSpec]) -> Vec<(PeerSpec, PeerStatus)> {
 /// запуск в каталоге `cwd`, захват stdout/stderr с дедлайном `timeout`.
 ///
 /// Успех = exit code 0 и непустой stdout; ответ возвращается trimmed и
-/// обрезанным до [`OUTPUT_MAX_CHARS`] символов (с маркером обрезки).
-/// Любой иной исход — ошибка с хвостом stderr (≤ [`STDERR_TAIL_CHARS`]
+/// обрезанным до `OUTPUT_MAX_CHARS` символов (с маркером обрезки).
+/// Любой иной исход — ошибка с хвостом stderr (≤ `STDERR_TAIL_CHARS`
 /// символов): таймаут (процесс убит и убран), ненулевой exit code,
 /// пустой stdout, сбой spawn (бинарь не найден и т.п.).
 pub fn peer_ask(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration) -> Result<String> {
@@ -293,8 +338,12 @@ pub fn peer_ask(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration) -> R
 /// Хвостовая обработка захвата peer-вызова: проверка статуса/пустоты и
 /// обрезка ответа. `final_override` — финальный ответ из stream-json
 /// (claude `result`, последний assistant content у kimi); иначе — сырой stdout.
-fn finish_capture(spec: &PeerSpec, cap: Captured, final_override: Option<String>,
-                  timeout: Duration) -> Result<String> {
+fn finish_capture(
+    spec: &PeerSpec,
+    cap: Captured,
+    final_override: Option<String>,
+    timeout: Duration,
+) -> Result<String> {
     let Some(status) = cap.status else {
         bail!(
             "агент «{}» ({}) не ответил за {}с — процесс убит; {}. \
@@ -303,19 +352,28 @@ fn finish_capture(spec: &PeerSpec, cap: Captured, final_override: Option<String>
              (живой кейс 21.07: повторный вызов сжёг ещё 300с). \
              Законное исключение: повтор с ЯВНО большим timeout_secs — \
              ресёрч-задачи kimi/hermes честно идут 5-10 минут (кейс 23.07)",
-            spec.name, spec.binary, timeout.as_secs(), stderr_note(&cap.stderr)
+            spec.name,
+            spec.binary,
+            timeout.as_secs(),
+            stderr_note(&cap.stderr)
         );
     };
     if !status.success() {
         bail!(
             "агент «{}» завершился неуспешно ({status}); {}",
-            spec.name, stderr_note(&cap.stderr)
+            spec.name,
+            stderr_note(&cap.stderr)
         );
     }
-    let answer = final_override.filter(|s| !s.trim().is_empty())
+    let answer = final_override
+        .filter(|s| !s.trim().is_empty())
         .unwrap_or_else(|| cap.stdout.trim().to_string());
     if answer.is_empty() {
-        bail!("агент «{}» вернул пустой ответ; {}", spec.name, stderr_note(&cap.stderr));
+        bail!(
+            "агент «{}» вернул пустой ответ; {}",
+            spec.name,
+            stderr_note(&cap.stderr)
+        );
     }
     Ok(truncate_output(&answer))
 }
@@ -352,19 +410,32 @@ fn build_cmd(spec: &PeerSpec, task: &str, cwd: &Path, extra_args: &[&str]) -> Co
 /// (старая версия агента без stream-json).
 fn is_unknown_flag_error(msg: &str) -> bool {
     let m = msg.to_lowercase();
-    ["unknown option", "unexpected argument", "unrecognized option",
-     "unknown argument", "invalid option", "unexpected flag", "unknown flag",
-     "unrecognized argument"]
-        .iter().any(|p| m.contains(p))
+    [
+        "unknown option",
+        "unexpected argument",
+        "unrecognized option",
+        "unknown argument",
+        "invalid option",
+        "unexpected flag",
+        "unknown flag",
+        "unrecognized argument",
+    ]
+    .iter()
+    .any(|p| m.contains(p))
 }
 
 /// Стриминг-вариант peer_ask (peer-sse-streaming, нативно — без Python-брокера):
 /// для пиров со stream-json (claude/kimi) строки stdout разбираются налету в
-/// [`PeerEvent::Text`/`ToolUse`], для raw-пиров (Off) каждая строка уходит как
+/// `PeerEvent::Text`/`ToolUse`, для raw-пиров (Off) каждая строка уходит как
 /// [`PeerEvent::Note`] (хвост для живой панели /bg). CLI без stream-json
 /// (старая версия): откат на прежний синхронный [`peer_ask`].
-pub fn peer_ask_streaming(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Duration,
-                          on_event: &mut dyn FnMut(PeerEvent)) -> Result<String> {
+pub fn peer_ask_streaming(
+    spec: &PeerSpec,
+    task: &str,
+    cwd: &Path,
+    timeout: Duration,
+    on_event: &mut dyn FnMut(PeerEvent),
+) -> Result<String> {
     let mut cmd = build_cmd(spec, task, cwd, stream_extra_args(spec.stream));
     let result = match run_capture_streaming(&mut cmd, timeout, spec.stream, on_event) {
         Ok((cap, final_override)) => finish_capture(spec, cap, final_override, timeout),
@@ -372,8 +443,9 @@ pub fn peer_ask_streaming(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Dura
     };
     match result {
         // CLI не понял stream-флаги (старая версия): откат на синхронный вызов
-        Err(e) if spec.stream != PeerStream::Off && is_unknown_flag_error(&format!("{e:#}")) =>
-            peer_ask(spec, task, cwd, timeout),
+        Err(e) if spec.stream != PeerStream::Off && is_unknown_flag_error(&format!("{e:#}")) => {
+            peer_ask(spec, task, cwd, timeout)
+        }
         other => other,
     }
 }
@@ -382,13 +454,21 @@ pub fn peer_ask_streaming(spec: &PeerSpec, task: &str, cwd: &Path, timeout: Dura
 /// (lossy), сырой текст копится для fallback/ошибок, разобранные события
 /// улетают в `on_event`, финальный ответ извлекается по схеме режима.
 /// Дедлайн и kill — как у [`run_capture`].
-fn run_capture_streaming(cmd: &mut Command, timeout: Duration, mode: PeerStream,
-                         on_event: &mut dyn FnMut(PeerEvent))
-    -> Result<(Captured, Option<String>)> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("не удалось запустить «{}»", cmd.get_program().to_string_lossy()))?;
+fn run_capture_streaming(
+    cmd: &mut Command,
+    timeout: Duration,
+    mode: PeerStream,
+    on_event: &mut dyn FnMut(PeerEvent),
+) -> Result<(Captured, Option<String>)> {
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "не удалось запустить «{}»",
+            cmd.get_program().to_string_lossy()
+        )
+    })?;
     let out_pipe = child.stdout.take().context("stdout не запайплен")?;
     let err_pipe = child.stderr.take().context("stderr не запайплен")?;
     let err_pump = spawn_pump(err_pipe);
@@ -404,7 +484,10 @@ fn run_capture_streaming(cmd: &mut Command, timeout: Duration, mode: PeerStream,
             match reader.read_until(b'\n', &mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(_) => {
-                    if line_tx.send(String::from_utf8_lossy(&buf).into_owned()).is_err() {
+                    if line_tx
+                        .send(String::from_utf8_lossy(&buf).into_owned())
+                        .is_err()
+                    {
                         return Vec::new(); // потребитель умер — хвост не нужен
                     }
                 }
@@ -420,7 +503,9 @@ fn run_capture_streaming(cmd: &mut Command, timeout: Duration, mode: PeerStream,
     let mut result_text: Option<String> = None;
     // разбор очередной строки: события наружу, финал/last_text — в состояние;
     // для raw-пиров (Off) непустая строка уходит заметкой (хвост панели /bg)
-    let handle_line = |line: &str, raw: &mut String, last_text: &mut String,
+    let handle_line = |line: &str,
+                       raw: &mut String,
+                       last_text: &mut String,
                        result_text: &mut Option<String>,
                        on_event: &mut dyn FnMut(PeerEvent)| {
         raw.push_str(line);
@@ -460,17 +545,29 @@ fn run_capture_streaming(cmd: &mut Command, timeout: Duration, mode: PeerStream,
         handle_line(&line, &mut raw, &mut last_text, &mut result_text, on_event);
     }
     if !tail.is_empty() {
-        handle_line(&String::from_utf8_lossy(&tail),
-                    &mut raw, &mut last_text, &mut result_text, on_event);
+        handle_line(
+            &String::from_utf8_lossy(&tail),
+            &mut raw,
+            &mut last_text,
+            &mut result_text,
+            on_event,
+        );
     }
     let stderr = err_pump.join().unwrap_or_default();
     // финальный ответ: claude — result; kimi/запас — последний assistant text
-    let final_override = result_text.or(if last_text.is_empty() { None } else { Some(last_text) });
-    Ok((Captured {
-        status,
-        stdout: raw,
-        stderr: String::from_utf8_lossy(&stderr).into_owned(),
-    }, final_override))
+    let final_override = result_text.or(if last_text.is_empty() {
+        None
+    } else {
+        Some(last_text)
+    });
+    Ok((
+        Captured {
+            status,
+            stdout: raw,
+            stderr: String::from_utf8_lossy(&stderr).into_owned(),
+        },
+        final_override,
+    ))
 }
 
 /// Таблица проб для вывода пользователю: ✅/❌, имя, бинарь, версия
@@ -479,16 +576,32 @@ pub fn format_peers(probed: &[(PeerSpec, PeerStatus)]) -> String {
     if probed.is_empty() {
         return "(агенты не заданы)".to_string();
     }
-    let name_w = probed.iter().map(|(s, _)| s.name.chars().count()).max().unwrap_or(0).max(5);
-    let bin_w = probed.iter().map(|(s, _)| s.binary.chars().count()).max().unwrap_or(0).max(6);
+    let name_w = probed
+        .iter()
+        .map(|(s, _)| s.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(5);
+    let bin_w = probed
+        .iter()
+        .map(|(s, _)| s.binary.chars().count())
+        .max()
+        .unwrap_or(0)
+        .max(6);
     // 3 ведущих пробела в шапке ≈ ширине «✅ » (эмодзи занимает 2 ячейки).
-    let mut lines = vec![format!("   {:<name_w$}  {:<bin_w$}  статус", "агент", "бинарь")];
+    let mut lines = vec![format!(
+        "   {:<name_w$}  {:<bin_w$}  статус",
+        "агент", "бинарь"
+    )];
     for (spec, status) in probed {
         let (mark, info) = match status {
             PeerStatus::Installed { version, .. } => ("✅", version.as_str()),
             PeerStatus::Missing => ("❌", "не найден"),
         };
-        lines.push(format!("{mark} {:<name_w$}  {:<bin_w$}  {info}", spec.name, spec.binary));
+        lines.push(format!(
+            "{mark} {:<name_w$}  {:<bin_w$}  {info}",
+            spec.name, spec.binary
+        ));
     }
     lines.join("\n")
 }
@@ -500,9 +613,13 @@ pub fn format_peers(probed: &[(PeerSpec, PeerStatus)]) -> String {
 fn render_args(args: &[String], task: &str) -> Vec<String> {
     let has_placeholder = args.iter().any(|a| a.contains(TASK_PLACEHOLDER));
     let session = unique_session_id();
-    let mut rendered: Vec<String> =
-        args.iter().map(|a| a.replace(TASK_PLACEHOLDER, task)
-            .replace(SESSION_PLACEHOLDER, &session)).collect();
+    let mut rendered: Vec<String> = args
+        .iter()
+        .map(|a| {
+            a.replace(TASK_PLACEHOLDER, task)
+                .replace(SESSION_PLACEHOLDER, &session)
+        })
+        .collect();
     if !has_placeholder {
         rendered.push(task.to_string());
     }
@@ -517,9 +634,14 @@ fn unique_session_id() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
     let millis = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis()).unwrap_or(0);
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
     // seq — от коллизий вызовов в одну миллисекунду
-    format!("theseus-{}-{millis}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::Relaxed))
+    format!(
+        "theseus-{}-{millis}-{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    )
 }
 
 /// Разбор «v22.23.1» / «22.23.1» в тройку версии (чистая функция — для тестов).
@@ -548,7 +670,8 @@ fn node_supported(ver: (u32, u32, u32)) -> bool {
 /// Новейший ПОДДЕРЖИВАЕМЫЙ openclaw'ом node в каталоге nvm
 /// (`<nvm_root>/<vX.Y.Z>/bin/node`). Чистая функция по ФС — для тестов.
 fn newest_nvm_node(nvm_root: &Path) -> Option<PathBuf> {
-    let mut candidates: Vec<((u32, u32, u32), PathBuf)> = std::fs::read_dir(nvm_root).ok()?
+    let mut candidates: Vec<((u32, u32, u32), PathBuf)> = std::fs::read_dir(nvm_root)
+        .ok()?
         .flatten()
         .filter_map(|e| {
             let ver = parse_node_version(&e.file_name().to_string_lossy())?;
@@ -581,7 +704,9 @@ fn find_binary(binary: &str, dirs: &[PathBuf]) -> Option<PathBuf> {
     if direct.components().count() > 1 {
         return is_executable(direct).then(|| direct.to_path_buf());
     }
-    dirs.iter().map(|d| d.join(binary)).find(|p| is_executable(p))
+    dirs.iter()
+        .map(|d| d.join(binary))
+        .find(|p| is_executable(p))
 }
 
 /// Файл существует и исполняем (на unix — выставлен хотя бы один x-бит).
@@ -610,7 +735,11 @@ fn query_version(path: &Path) -> Option<String> {
     let mut cmd = Command::new(path);
     cmd.arg("--version");
     let cap = run_capture(&mut cmd, VERSION_TIMEOUT).ok()?;
-    let text = if cap.stdout.trim().is_empty() { &cap.stderr } else { &cap.stdout };
+    let text = if cap.stdout.trim().is_empty() {
+        &cap.stderr
+    } else {
+        &cap.stdout
+    };
     let first = text.lines().next()?.trim();
     if first.is_empty() {
         return None;
@@ -629,10 +758,15 @@ struct Captured {
 /// Spawn + потоки-насосы обоих каналов (дедлок-фри) + дедлайн с kill+reap.
 /// stdin ребёнка — /dev/null: агент не должен блокироваться на вводе.
 fn run_capture(cmd: &mut Command, timeout: Duration) -> Result<Captured> {
-    cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = cmd
-        .spawn()
-        .with_context(|| format!("не удалось запустить «{}»", cmd.get_program().to_string_lossy()))?;
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let mut child = cmd.spawn().with_context(|| {
+        format!(
+            "не удалось запустить «{}»",
+            cmd.get_program().to_string_lossy()
+        )
+    })?;
     let out_pipe = child.stdout.take().context("stdout не запайплен")?;
     let err_pipe = child.stderr.take().context("stderr не запайплен")?;
     let out_pump = spawn_pump(out_pipe);
@@ -699,7 +833,11 @@ fn tail_chars(s: &str, max: usize) -> String {
 /// Фрагмент «stderr: …» для сообщения об ошибке (или «stderr пуст»).
 fn stderr_note(stderr: &str) -> String {
     let tail = tail_chars(stderr, STDERR_TAIL_CHARS);
-    if tail.is_empty() { "stderr пуст".to_string() } else { format!("stderr: {tail}") }
+    if tail.is_empty() {
+        "stderr пуст".to_string()
+    } else {
+        format!("stderr: {tail}")
+    }
 }
 
 #[cfg(test)]
@@ -717,8 +855,12 @@ mod tests {
     /// не дерутся за одни пути. Env (`PATH` и прочее) не трогаем нигде.
     fn temp_dir(tag: &str) -> PathBuf {
         let n = SEQ.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir()
-            .join(format!("theseus_peers_{}_{}_{}", std::process::id(), tag, n));
+        let dir = std::env::temp_dir().join(format!(
+            "theseus_peers_{}_{}_{}",
+            std::process::id(),
+            tag,
+            n
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -741,7 +883,9 @@ mod tests {
     /// открытые на запись fd из других потоков-тестов (запись своего мока), и
     /// exec такого файла в окне fork→exec даёт ETXTBSY («Text file busy»).
     fn with_mock<R>(dir: &Path, name: &str, body: &str, f: impl FnOnce(&Path) -> R) -> R {
-        let _guard = MOCK_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _guard = MOCK_LOCK
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let mock = mock_binary(dir, name, body);
         f(&mock)
     }
@@ -759,42 +903,82 @@ mod tests {
 
     /// Спека со стрим-режимом (для тестов стриминга).
     fn spec_streaming(path: &Path, args: &[&str], stream: PeerStream) -> PeerSpec {
-        PeerSpec { stream, ..spec_for(path, args) }
+        PeerSpec {
+            stream,
+            ..spec_for(path, args)
+        }
     }
 
     /// Разбор stream-json claude: text и tool_use из assistant, финал из result;
     /// служебные/неизвестные типы и не-JSON молча пропускаются.
     #[test]
     fn parse_claude_line_text_tooluse_result() {
-        let (evs, fin) = parse_peer_line(PeerStream::Claude,
-            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Часть ответа"},{"type":"tool_use","name":"Read","input":{"path":"a.rs"}}]}}"#);
+        let (evs, fin) = parse_peer_line(
+            PeerStream::Claude,
+            r#"{"type":"assistant","message":{"content":[{"type":"text","text":"Часть ответа"},{"type":"tool_use","name":"Read","input":{"path":"a.rs"}}]}}"#,
+        );
         assert_eq!(fin, None);
-        assert_eq!(evs, vec![
-            PeerEvent::Text("Часть ответа".into()),
-            PeerEvent::ToolUse { name: "Read".into(), args: r#"{"path":"a.rs"}"#.into() },
-        ]);
-        let (evs2, fin2) = parse_peer_line(PeerStream::Claude,
-            r#"{"type":"result","result":"финальный текст","is_error":false}"#);
+        assert_eq!(
+            evs,
+            vec![
+                PeerEvent::Text("Часть ответа".into()),
+                PeerEvent::ToolUse {
+                    name: "Read".into(),
+                    args: r#"{"path":"a.rs"}"#.into()
+                },
+            ]
+        );
+        let (evs2, fin2) = parse_peer_line(
+            PeerStream::Claude,
+            r#"{"type":"result","result":"финальный текст","is_error":false}"#,
+        );
         assert!(evs2.is_empty());
         assert_eq!(fin2.as_deref(), Some("финальный текст"));
-        assert!(parse_peer_line(PeerStream::Claude, r#"{"type":"system","subtype":"init"}"#).0.is_empty());
-        assert!(parse_peer_line(PeerStream::Claude, r#"{"type":"rate_limit_event"}"#).0.is_empty());
-        assert!(parse_peer_line(PeerStream::Claude, "совсем не json").0.is_empty());
+        assert!(
+            parse_peer_line(PeerStream::Claude, r#"{"type":"system","subtype":"init"}"#)
+                .0
+                .is_empty()
+        );
+        assert!(
+            parse_peer_line(PeerStream::Claude, r#"{"type":"rate_limit_event"}"#)
+                .0
+                .is_empty()
+        );
+        assert!(parse_peer_line(PeerStream::Claude, "совсем не json")
+            .0
+            .is_empty());
     }
 
     /// Разбор stream-json kimi (role-схема): content и tool_calls из assistant;
     /// tool/meta и Bash-мусор (не-JSON строки) глотаются.
     #[test]
     fn parse_kimi_line_role_schema_and_noise() {
-        let (evs, fin) = parse_peer_line(PeerStream::Kimi,
-            r#"{"role":"assistant","content":"ответ kimi","tool_calls":[{"function":{"name":"Bash","arguments":"{\"cmd\":\"ls\"}"}}]}"#);
+        let (evs, fin) = parse_peer_line(
+            PeerStream::Kimi,
+            r#"{"role":"assistant","content":"ответ kimi","tool_calls":[{"function":{"name":"Bash","arguments":"{\"cmd\":\"ls\"}"}}]}"#,
+        );
         assert_eq!(fin, None);
-        assert_eq!(evs, vec![
-            PeerEvent::Text("ответ kimi".into()),
-            PeerEvent::ToolUse { name: "Bash".into(), args: r#"{"cmd":"ls"}"#.into() },
-        ]);
-        assert!(parse_peer_line(PeerStream::Kimi, r#"{"role":"tool","content":"out"}"#).0.is_empty());
-        assert!(parse_peer_line(PeerStream::Kimi, r#"{"role":"meta","type":"session.resume_hint"}"#).0.is_empty());
+        assert_eq!(
+            evs,
+            vec![
+                PeerEvent::Text("ответ kimi".into()),
+                PeerEvent::ToolUse {
+                    name: "Bash".into(),
+                    args: r#"{"cmd":"ls"}"#.into()
+                },
+            ]
+        );
+        assert!(
+            parse_peer_line(PeerStream::Kimi, r#"{"role":"tool","content":"out"}"#)
+                .0
+                .is_empty()
+        );
+        assert!(parse_peer_line(
+            PeerStream::Kimi,
+            r#"{"role":"meta","type":"session.resume_hint"}"#
+        )
+        .0
+        .is_empty());
         assert!(parse_peer_line(PeerStream::Kimi, "total 48").0.is_empty());
     }
 
@@ -814,11 +998,17 @@ mod tests {
                     &mut |ev| events.push(ev)).unwrap()
             });
         assert_eq!(out, "финальный ответ пира");
-        assert_eq!(events, vec![
-            PeerEvent::Text("первая часть".into()),
-            PeerEvent::ToolUse { name: "Read".into(), args: r#"{"path":"x"}"#.into() },
-            PeerEvent::Text("вторая часть".into()),
-        ]);
+        assert_eq!(
+            events,
+            vec![
+                PeerEvent::Text("первая часть".into()),
+                PeerEvent::ToolUse {
+                    name: "Read".into(),
+                    args: r#"{"path":"x"}"#.into()
+                },
+                PeerEvent::Text("вторая часть".into()),
+            ]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -826,13 +1016,17 @@ mod tests {
     #[test]
     fn peer_ask_streaming_final_falls_back_to_last_text() {
         let dir = temp_dir("stream_last");
-        let out = with_mock(&dir, "mock-agent",
+        let out = with_mock(
+            &dir,
+            "mock-agent",
             "echo '{\"role\":\"assistant\",\"content\":\"первая\"}'\n\
-             echo '{\"role\":\"assistant\",\"content\":\"последняя\"}'", |mock| {
+             echo '{\"role\":\"assistant\",\"content\":\"последняя\"}'",
+            |mock| {
                 let spec = spec_streaming(mock, &["-p", TASK_PLACEHOLDER], PeerStream::Kimi);
-                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10),
-                    &mut |_| {}).unwrap()
-            });
+                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10), &mut |_| {})
+                    .unwrap()
+            },
+        );
         assert_eq!(out, "последняя");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -842,15 +1036,19 @@ mod tests {
     #[test]
     fn peer_ask_streaming_unknown_flag_falls_back_to_sync() {
         let dir = temp_dir("stream_fallback");
-        let out = with_mock(&dir, "mock-agent",
+        let out = with_mock(
+            &dir,
+            "mock-agent",
             "if printf '%s\\n' \"$@\" | grep -q output-format; then\n\
                echo 'error: unknown option --output-format' >&2; exit 2\n\
              fi\n\
-             echo 'синхронный ответ'", |mock| {
+             echo 'синхронный ответ'",
+            |mock| {
                 let spec = spec_streaming(mock, &["-p", TASK_PLACEHOLDER], PeerStream::Claude);
-                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10),
-                    &mut |_| {}).unwrap()
-            });
+                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10), &mut |_| {})
+                    .unwrap()
+            },
+        );
         assert_eq!(out, "синхронный ответ");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -859,15 +1057,22 @@ mod tests {
     #[test]
     fn peer_ask_streaming_nonzero_exit_reports_stderr() {
         let dir = temp_dir("stream_fail");
-        let err = with_mock(&dir, "mock-agent",
-            "echo 'фатальная ошибка: токены кончились' >&2; exit 3", |mock| {
+        let err = with_mock(
+            &dir,
+            "mock-agent",
+            "echo 'фатальная ошибка: токены кончились' >&2; exit 3",
+            |mock| {
                 let spec = spec_streaming(mock, &["-p", TASK_PLACEHOLDER], PeerStream::Claude);
-                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10),
-                    &mut |_| {}).unwrap_err()
-            });
+                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10), &mut |_| {})
+                    .unwrap_err()
+            },
+        );
         let msg = format!("{err:#}");
         assert!(msg.contains("exit status: 3"), "код выхода в ошибке: {msg}");
-        assert!(msg.contains("токены кончились"), "хвост stderr в ошибке: {msg}");
+        assert!(
+            msg.contains("токены кончились"),
+            "хвост stderr в ошибке: {msg}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -877,21 +1082,35 @@ mod tests {
     fn peer_ask_streaming_off_mode_forwards_lines_as_notes() {
         let dir = temp_dir("stream_off");
         let mut events: Vec<PeerEvent> = Vec::new();
-        let out = with_mock(&dir, "mock-agent",
+        let out = with_mock(
+            &dir,
+            "mock-agent",
             "echo 'читаю первый файл'\n\
              echo ''\n\
              echo 'читаю второй файл'\n\
-             echo 'готов ответ'", |mock| {
+             echo 'готов ответ'",
+            |mock| {
                 let spec = spec_streaming(mock, &["-p", TASK_PLACEHOLDER], PeerStream::Off);
-                peer_ask_streaming(&spec, "задача", &dir, Duration::from_secs(10),
-                    &mut |ev| events.push(ev)).unwrap()
-            });
+                peer_ask_streaming(
+                    &spec,
+                    "задача",
+                    &dir,
+                    Duration::from_secs(10),
+                    &mut |ev| events.push(ev),
+                )
+                .unwrap()
+            },
+        );
         assert_eq!(out, "читаю первый файл\n\nчитаю второй файл\nготов ответ");
-        assert_eq!(events, vec![
-            PeerEvent::Note("читаю первый файл".into()),
-            PeerEvent::Note("читаю второй файл".into()),
-            PeerEvent::Note("готов ответ".into()),
-        ], "непустые строки — заметки, пустая пропущена");
+        assert_eq!(
+            events,
+            vec![
+                PeerEvent::Note("читаю первый файл".into()),
+                PeerEvent::Note("читаю второй файл".into()),
+                PeerEvent::Note("готов ответ".into()),
+            ],
+            "непустые строки — заметки, пустая пропущена"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -917,8 +1136,11 @@ mod tests {
             std::fs::write(nvm.join(v).join("bin/node"), b"x").unwrap();
         }
         let best = newest_nvm_node(&nvm).expect("есть поддерживаемая");
-        assert_eq!(best, nvm.join("v22.23.1/bin"),
-            "v23.10.0 НЕ поддерживается — берём v22.23.1");
+        assert_eq!(
+            best,
+            nvm.join("v22.23.1/bin"),
+            "v23.10.0 НЕ поддерживается — берём v22.23.1"
+        );
         // нет каталога — None, без паники
         assert!(newest_nvm_node(&home.join("no-such")).is_none());
         let _ = std::fs::remove_dir_all(&home);
@@ -930,20 +1152,30 @@ mod tests {
         assert!(node_supported((22, 22, 3)));
         assert!(node_supported((22, 23, 1)));
         assert!(!node_supported((22, 22, 1)), "22.22.1 старая");
-        assert!(!node_supported((23, 10, 0)), "v23 целиком не поддерживается");
+        assert!(
+            !node_supported((23, 10, 0)),
+            "v23 целиком не поддерживается"
+        );
         assert!(node_supported((24, 15, 0)));
         assert!(!node_supported((24, 14, 9)));
         assert!(node_supported((25, 9, 0)));
         assert!(!node_supported((25, 8, 9)));
-        assert!(!node_supported((26, 0, 0)), "про будущие мажоры не знаем — строго");
+        assert!(
+            !node_supported((26, 0, 0)),
+            "про будущие мажоры не знаем — строго"
+        );
     }
 
     /// Уникальная сессия openclaw на каждый вызов (живой кейс 24.07):
     /// плейсхолдер подставлен, два вызова — разные id, префикс theseus-.
     #[test]
     fn render_args_unique_session_per_call() {
-        let args = vec!["--session-id".to_string(), SESSION_PLACEHOLDER.to_string(),
-                        "--message".to_string(), TASK_PLACEHOLDER.to_string()];
+        let args = vec![
+            "--session-id".to_string(),
+            SESSION_PLACEHOLDER.to_string(),
+            "--message".to_string(),
+            TASK_PLACEHOLDER.to_string(),
+        ];
         let a = render_args(&args, "задача");
         let b = render_args(&args, "задача");
         let sa = &a[1];
@@ -954,7 +1186,8 @@ mod tests {
     }
 
     #[test]
-    fn render_args_substitutes_task_literally() {        let args = vec!["-p".to_string(), TASK_PLACEHOLDER.to_string()];
+    fn render_args_substitutes_task_literally() {
+        let args = vec!["-p".to_string(), TASK_PLACEHOLDER.to_string()];
         let task = "$(rm -rf ~); echo hi | cat";
         let rendered = render_args(&args, task);
         assert_eq!(rendered, vec!["-p".to_string(), task.to_string()]);
@@ -964,7 +1197,10 @@ mod tests {
     fn render_args_substitutes_inside_composite_arg() {
         let args = vec!["--message={task}".to_string(), TASK_PLACEHOLDER.to_string()];
         let rendered = render_args(&args, "привет");
-        assert_eq!(rendered, vec!["--message=привет".to_string(), "привет".to_string()]);
+        assert_eq!(
+            rendered,
+            vec!["--message=привет".to_string(), "привет".to_string()]
+        );
     }
 
     #[test]
@@ -992,7 +1228,9 @@ mod tests {
         for p in builtin_peers() {
             assert!(
                 p.args.iter().any(|a| a.contains(TASK_PLACEHOLDER)),
-                "у «{}» нет плейсхолдера {TASK_PLACEHOLDER}: {:?}", p.name, p.args
+                "у «{}» нет плейсхолдера {TASK_PLACEHOLDER}: {:?}",
+                p.name,
+                p.args
             );
         }
     }
@@ -1013,20 +1251,32 @@ mod tests {
         assert_eq!(out, "ok");
         let dumped = fs::read_to_string(&argv_file).unwrap();
         let lines: Vec<&str> = dumped.lines().collect();
-        assert_eq!(lines.len(), 2, "argv должен содержать ровно 2 элемента: {dumped:?}");
+        assert_eq!(
+            lines.len(),
+            2,
+            "argv должен содержать ровно 2 элемента: {dumped:?}"
+        );
         assert_eq!(lines[0], "-p");
         assert_eq!(lines[1], task, "задача доехала литералом, одним аргументом");
-        assert!(!canary.exists(), "shell-инъекции не было: канарейка не создана");
+        assert!(
+            !canary.exists(),
+            "shell-инъекции не было: канарейка не создана"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn peer_ask_returns_trimmed_stdout_on_success() {
         let dir = temp_dir("ok");
-        let out = with_mock(&dir, "mock-agent", "echo '  ответ агента  '", |mock| {
-            let spec = spec_for(mock, &["-p", TASK_PLACEHOLDER]);
-            peer_ask(&spec, "любая задача", &dir, Duration::from_secs(10)).unwrap()
-        });
+        let out = with_mock(
+            &dir,
+            "mock-agent",
+            "echo '  ответ агента  '",
+            |mock| {
+                let spec = spec_for(mock, &["-p", TASK_PLACEHOLDER]);
+                peer_ask(&spec, "любая задача", &dir, Duration::from_secs(10)).unwrap()
+            },
+        );
         assert_eq!(out, "ответ агента");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1042,21 +1292,31 @@ mod tests {
         });
         let msg = format!("{err:#}");
         assert!(msg.contains("не ответил"), "ожидали таймаут-ошибку: {msg}");
-        assert!(elapsed < Duration::from_secs(8), "kill должен быть быстрым: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(8),
+            "kill должен быть быстрым: {elapsed:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
     fn peer_ask_nonzero_exit_reports_stderr() {
         let dir = temp_dir("fail");
-        let err = with_mock(&dir, "mock-agent",
-            "echo 'фатальная ошибка: токены кончились' >&2; exit 3", |mock| {
+        let err = with_mock(
+            &dir,
+            "mock-agent",
+            "echo 'фатальная ошибка: токены кончились' >&2; exit 3",
+            |mock| {
                 let spec = spec_for(mock, &["-p", TASK_PLACEHOLDER]);
                 peer_ask(&spec, "задача", &dir, Duration::from_secs(10)).unwrap_err()
-            });
+            },
+        );
         let msg = format!("{err:#}");
         assert!(msg.contains("exit status: 3"), "код выхода в ошибке: {msg}");
-        assert!(msg.contains("токены кончились"), "хвост stderr в ошибке: {msg}");
+        assert!(
+            msg.contains("токены кончились"),
+            "хвост stderr в ошибке: {msg}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1064,14 +1324,21 @@ mod tests {
     fn peer_ask_stderr_tail_is_bounded() {
         let dir = temp_dir("tail");
         // «q» не встречается в служебном тексте ошибки — считаем только хвост stderr.
-        let err = with_mock(&dir, "mock-agent",
-            "head -c 5000 /dev/zero | tr '\\0' 'q' >&2; exit 1", |mock| {
+        let err = with_mock(
+            &dir,
+            "mock-agent",
+            "head -c 5000 /dev/zero | tr '\\0' 'q' >&2; exit 1",
+            |mock| {
                 let spec = spec_for(mock, &["-p", TASK_PLACEHOLDER]);
                 peer_ask(&spec, "задача", &dir, Duration::from_secs(10)).unwrap_err()
-            });
+            },
+        );
         let msg = format!("{err:#}");
         let qs = msg.chars().filter(|c| *c == 'q').count();
-        assert!(qs <= STDERR_TAIL_CHARS, "хвост stderr ограничен {STDERR_TAIL_CHARS}: {qs}");
+        assert!(
+            qs <= STDERR_TAIL_CHARS,
+            "хвост stderr ограничен {STDERR_TAIL_CHARS}: {qs}"
+        );
         assert!(msg.contains('…'), "усечение помечено маркером: {msg}");
         let _ = fs::remove_dir_all(&dir);
     }
@@ -1090,14 +1357,25 @@ mod tests {
     #[test]
     fn peer_ask_truncates_huge_output() {
         let dir = temp_dir("huge");
-        let out = with_mock(&dir, "mock-agent",
-            "head -c 30000 /dev/zero | tr '\\0' 'A'", |mock| {
+        let out = with_mock(
+            &dir,
+            "mock-agent",
+            "head -c 30000 /dev/zero | tr '\\0' 'A'",
+            |mock| {
                 let spec = spec_for(mock, &["-p", TASK_PLACEHOLDER]);
                 peer_ask(&spec, "задача", &dir, Duration::from_secs(10)).unwrap()
-            });
+            },
+        );
         let big_letters = out.chars().filter(|c| *c == 'A').count();
-        assert_eq!(big_letters, OUTPUT_MAX_CHARS, "оставлены первые {OUTPUT_MAX_CHARS}");
-        assert!(out.contains("обрезан"), "есть маркер обрезки: {}", &out[out.len() - 120..]);
+        assert_eq!(
+            big_letters, OUTPUT_MAX_CHARS,
+            "оставлены первые {OUTPUT_MAX_CHARS}"
+        );
+        assert!(
+            out.contains("обрезан"),
+            "есть маркер обрезки: {}",
+            &out[out.len() - 120..]
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1119,7 +1397,13 @@ mod tests {
             probe_with_path(&spec, &[empty.clone(), bin_dir.clone()])
         });
         let want = bin_dir.join("mock-agent");
-        assert_eq!(status, PeerStatus::Installed { path: want, version: "1.2.3".to_string() });
+        assert_eq!(
+            status,
+            PeerStatus::Installed {
+                path: want,
+                version: "1.2.3".to_string()
+            }
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1133,7 +1417,10 @@ mod tests {
             default_timeout_secs: 60,
             stream: PeerStream::Off,
         };
-        assert_eq!(probe_with_path(&spec, std::slice::from_ref(&dir)), PeerStatus::Missing);
+        assert_eq!(
+            probe_with_path(&spec, std::slice::from_ref(&dir)),
+            PeerStatus::Missing
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1154,7 +1441,10 @@ mod tests {
             default_timeout_secs: 60,
             stream: PeerStream::Off,
         };
-        assert_eq!(probe_with_path(&spec, std::slice::from_ref(&dir)), PeerStatus::Missing);
+        assert_eq!(
+            probe_with_path(&spec, std::slice::from_ref(&dir)),
+            PeerStatus::Missing
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1168,9 +1458,12 @@ mod tests {
             default_timeout_secs: 60,
             stream: PeerStream::Off,
         };
-        let status = with_mock(&dir, "mock-agent",
+        let status = with_mock(
+            &dir,
+            "mock-agent",
             "echo 'v9.8.7-rc1'\necho 'эта строка не должна попасть'",
-            |_mock| probe_with_path(&spec, std::slice::from_ref(&dir)));
+            |_mock| probe_with_path(&spec, std::slice::from_ref(&dir)),
+        );
         match status {
             PeerStatus::Installed { version, .. } => assert_eq!(version, "v9.8.7-rc1"),
             other => panic!("ожидали Installed: {other:?}"),
@@ -1188,12 +1481,16 @@ mod tests {
             default_timeout_secs: 60,
             stream: PeerStream::Off,
         };
-        let status = with_mock(&dir, "mock-agent",
+        let status = with_mock(
+            &dir,
+            "mock-agent",
             "head -c 300 /dev/zero | tr '\\0' 'v'; echo",
-            |_mock| probe_with_path(&spec, std::slice::from_ref(&dir)));
+            |_mock| probe_with_path(&spec, std::slice::from_ref(&dir)),
+        );
         match status {
-            PeerStatus::Installed { version, .. } =>
-                assert_eq!(version.chars().count(), VERSION_MAX_CHARS),
+            PeerStatus::Installed { version, .. } => {
+                assert_eq!(version.chars().count(), VERSION_MAX_CHARS)
+            }
             other => panic!("ожидали Installed: {other:?}"),
         }
         let _ = fs::remove_dir_all(&dir);
@@ -1215,11 +1512,15 @@ mod tests {
             (t0.elapsed(), status)
         });
         match status {
-            PeerStatus::Installed { version, .. } =>
-                assert_eq!(version, "неизвестно", "таймаут версии → «неизвестно»"),
+            PeerStatus::Installed { version, .. } => {
+                assert_eq!(version, "неизвестно", "таймаут версии → «неизвестно»")
+            }
             other => panic!("бинарь есть — должен быть Installed: {other:?}"),
         }
-        assert!(elapsed < Duration::from_secs(12), "5с таймаут версии: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(12),
+            "5с таймаут версии: {elapsed:?}"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 
@@ -1247,18 +1548,27 @@ mod tests {
     fn format_peers_renders_marks_and_columns() {
         let specs = builtin_peers();
         let probed: Vec<(PeerSpec, PeerStatus)> = vec![
-            (specs[0].clone(), PeerStatus::Installed {
-                path: PathBuf::from("/home/user/.local/bin/claude"),
-                version: "2.1.34 (Claude Code)".to_string(),
-            }),
+            (
+                specs[0].clone(),
+                PeerStatus::Installed {
+                    path: PathBuf::from("/home/user/.local/bin/claude"),
+                    version: "2.1.34 (Claude Code)".to_string(),
+                },
+            ),
             (specs[1].clone(), PeerStatus::Missing),
         ];
         let table = format_peers(&probed);
         assert!(table.contains('✅'), "есть ✅: {table}");
         assert!(table.contains('❌'), "есть ❌: {table}");
         assert!(table.contains("claude") && table.contains("kimi"));
-        assert!(table.contains("2.1.34 (Claude Code)"), "версия показана: {table}");
-        assert!(table.contains("не найден"), "отсутствующий помечен: {table}");
+        assert!(
+            table.contains("2.1.34 (Claude Code)"),
+            "версия показана: {table}"
+        );
+        assert!(
+            table.contains("не найден"),
+            "отсутствующий помечен: {table}"
+        );
         assert_eq!(table.lines().count(), 3, "шапка + две строки: {table}");
     }
 

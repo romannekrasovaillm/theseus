@@ -142,12 +142,19 @@ impl fmt::Display for MatchError {
         match self {
             MatchError::NotFound { closest } => match closest {
                 Some(line) => {
-                    write!(f, "блок для замены не найден; ближайшее похожее место — строка {line}")
+                    write!(
+                        f,
+                        "блок для замены не найден; ближайшее похожее место — строка {line}"
+                    )
                 }
                 None => f.write_str("блок для замены не найден"),
             },
             MatchError::Ambiguous { lines } => {
-                let list = lines.iter().map(usize::to_string).collect::<Vec<_>>().join(", ");
+                let list = lines
+                    .iter()
+                    .map(usize::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 write!(
                     f,
                     "блок для замены неоднозначен: {} совпадений (строки: {list}); \
@@ -255,7 +262,9 @@ fn match_block_anchor(haystack: &str, needle: &str) -> Vec<(usize, usize)> {
     picks.dedup();
     let anchors: Vec<(usize, &str)> = picks.iter().map(|&i| nonempty[i]).collect();
     window_candidates(haystack, &needle_lines, |window, _| {
-        anchors.iter().all(|(offset, text)| window[*offset].trim() == *text)
+        anchors
+            .iter()
+            .all(|(offset, text)| window[*offset].trim() == *text)
     })
 }
 
@@ -696,9 +705,18 @@ mod tests {
 
     #[test]
     fn empty_needle_is_rejected_as_not_found() {
-        assert_eq!(find_match("abc", ""), Err(MatchError::NotFound { closest: None }));
-        assert_eq!(find_match("", ""), Err(MatchError::NotFound { closest: None }));
-        assert_eq!(find_match("", "x"), Err(MatchError::NotFound { closest: None }));
+        assert_eq!(
+            find_match("abc", ""),
+            Err(MatchError::NotFound { closest: None })
+        );
+        assert_eq!(
+            find_match("", ""),
+            Err(MatchError::NotFound { closest: None })
+        );
+        assert_eq!(
+            find_match("", "x"),
+            Err(MatchError::NotFound { closest: None })
+        );
     }
 
     #[test]

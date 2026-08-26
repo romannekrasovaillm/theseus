@@ -44,20 +44,46 @@ use std::time::{Duration, Instant};
 /// проверяется в [`AgentSpec::validate`]. Список держится синхронным
 /// с `src/tools.rs`; рассинхрон всплывёт в тесте `builtin_specs_are_valid`.
 pub const KNOWN_TOOLS: &[&str] = &[
-    "read_file", "write_file", "edit_file", "list_files", "grep", "bash",
-    "task_output", "task_stop", "skill", "memory_write", "memory_search",
-    "web_fetch", "web_search", "exit_plan_mode", "todo_write", "task", "finish",
+    "read_file",
+    "write_file",
+    "edit_file",
+    "list_files",
+    "grep",
+    "bash",
+    "task_output",
+    "task_stop",
+    "skill",
+    "memory_write",
+    "memory_search",
+    "web_fetch",
+    "web_search",
+    "exit_plan_mode",
+    "todo_write",
+    "task",
+    "finish",
     // read-only инструменты знаний (библиотека, дайджесты, концепты, HF) —
     // доступны исследовательским субагентам (explore, баг 23.07: «упёрся в бюджет»)
-    "library_search", "library_read", "digest_search", "digest_read",
-    "hf_collections", "concept_search", "concept_explain", "concept_reindex",
+    "library_search",
+    "library_read",
+    "digest_search",
+    "digest_read",
+    "hf_collections",
+    "concept_search",
+    "concept_explain",
+    "concept_reindex",
 ];
 
 /// Инструменты, способные менять состояние: файлы, память, todo-список,
 /// фоновые задачи, порождение агентов, произвольные команды.
 /// Readonly-спека не может включать ни одного из них.
 pub const WRITE_TOOLS: &[&str] = &[
-    "write_file", "edit_file", "bash", "memory_write", "todo_write", "task_stop", "task",
+    "write_file",
+    "edit_file",
+    "bash",
+    "memory_write",
+    "todo_write",
+    "task_stop",
+    "task",
 ];
 
 /// Сколько подсказок имён максимум прилагается к ошибке неизвестного агента.
@@ -157,21 +183,40 @@ pub enum AgentError {
 impl fmt::Display for AgentError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AgentError::UnknownAgent { name, suggestions, available } => {
+            AgentError::UnknownAgent {
+                name,
+                suggestions,
+                available,
+            } => {
                 if suggestions.is_empty() {
-                    write!(f, "неизвестный тип агента «{name}»; доступные типы: {}", available.join(", "))
+                    write!(
+                        f,
+                        "неизвестный тип агента «{name}»; доступные типы: {}",
+                        available.join(", ")
+                    )
                 } else {
-                    write!(f, "неизвестный тип агента «{name}»; возможно, вы имели в виду: {}?", suggestions.join(", "))
+                    write!(
+                        f,
+                        "неизвестный тип агента «{name}»; возможно, вы имели в виду: {}?",
+                        suggestions.join(", ")
+                    )
                 }
             }
             AgentError::InvalidSpec { name, problems } => {
-                write!(f, "невалидная спецификация агента «{name}»: {}", problems.join("; "))
+                write!(
+                    f,
+                    "невалидная спецификация агента «{name}»: {}",
+                    problems.join("; ")
+                )
             }
             AgentError::DuplicateName { name } => {
                 write!(f, "тип агента «{name}» уже зарегистрирован")
             }
             AgentError::BudgetExceeded { kind, limit, used } => {
-                write!(f, "бюджет агента исчерпан ({kind}): лимит {limit}, использовано {used}")
+                write!(
+                    f,
+                    "бюджет агента исчерпан ({kind}): лимит {limit}, использовано {used}"
+                )
             }
         }
     }
@@ -343,7 +388,11 @@ impl AgentRegistry {
     pub fn with_builtins() -> Self {
         let mut registry = Self::new();
         for spec in builtin_specs() {
-            debug_assert!(spec.validate().is_ok(), "builtin-спека «{}» невалидна", spec.name);
+            debug_assert!(
+                spec.validate().is_ok(),
+                "builtin-спека «{}» невалидна",
+                spec.name
+            );
             registry.specs.insert(spec.name.clone(), spec);
         }
         registry
@@ -371,7 +420,11 @@ impl AgentRegistry {
         }
         let available: Vec<String> = self.specs.keys().cloned().collect();
         let suggestions = suggest_names(&key, &available, MAX_SUGGESTIONS);
-        Err(AgentError::UnknownAgent { name: name.to_string(), suggestions, available })
+        Err(AgentError::UnknownAgent {
+            name: name.to_string(),
+            suggestions,
+            available,
+        })
     }
 
     /// Необязательный вариант поиска — без диагностики опечаток.
@@ -633,14 +686,20 @@ mod tests {
     use super::*;
 
     fn spec_by_name(name: &str) -> AgentSpec {
-        builtin_specs().into_iter().find(|s| s.name == name).unwrap()
+        builtin_specs()
+            .into_iter()
+            .find(|s| s.name == name)
+            .unwrap()
     }
 
     #[test]
     fn builtins_have_expected_names() {
         let registry = AgentRegistry::with_builtins();
         assert_eq!(registry.len(), 4);
-        assert_eq!(registry.names(), ["code_review", "explore", "plan", "test_runner"]);
+        assert_eq!(
+            registry.names(),
+            ["code_review", "explore", "plan", "test_runner"]
+        );
     }
 
     #[test]
@@ -713,15 +772,26 @@ mod tests {
     #[test]
     fn explore_has_knowledge_tools_and_stays_readonly() {
         let spec = spec_by_name("explore");
-        for tool in ["library_search", "library_read", "digest_search", "digest_read",
-                     "hf_collections", "concept_search", "concept_explain",
-                     "memory_search", "web_fetch", "web_search"] {
+        for tool in [
+            "library_search",
+            "library_read",
+            "digest_search",
+            "digest_read",
+            "hf_collections",
+            "concept_search",
+            "concept_explain",
+            "memory_search",
+            "web_fetch",
+            "web_search",
+        ] {
             assert!(spec.allows_tool(tool), "explore лишён «{tool}»");
         }
         assert!(spec.readonly);
         for tool in &spec.allowed_tools {
-            assert!(!WRITE_TOOLS.contains(&tool.as_str()),
-                "explore (readonly) получил пишущий «{tool}»");
+            assert!(
+                !WRITE_TOOLS.contains(&tool.as_str()),
+                "explore (readonly) получил пишущий «{tool}»"
+            );
         }
         assert!(spec.system_prompt.contains("library_search"));
     }
@@ -731,16 +801,22 @@ mod tests {
         let unique: std::collections::BTreeSet<&&str> = KNOWN_TOOLS.iter().collect();
         assert_eq!(unique.len(), KNOWN_TOOLS.len(), "дубликаты в KNOWN_TOOLS");
         for tool in WRITE_TOOLS {
-            assert!(KNOWN_TOOLS.contains(tool), "«{tool}» из WRITE_TOOLS неизвестен");
+            assert!(
+                KNOWN_TOOLS.contains(tool),
+                "«{tool}» из WRITE_TOOLS неизвестен"
+            );
         }
     }
 
     #[test]
     fn validate_collects_all_problems_at_once() {
         let bad = AgentSpec::new(
-            "Bad Name!", "  ", "",
+            "Bad Name!",
+            "  ",
+            "",
             &["read_file", "unknown_tool", "write_file", "read_file"],
-            0, true,
+            0,
+            true,
         );
         let err = bad.validate().unwrap_err();
         match err {
@@ -756,17 +832,37 @@ mod tests {
         }
         // Пустой тулсет — тоже ошибка валидации.
         let quiet = AgentSpec::new("quiet", "цель", "промпт", &[], 3, true);
-        assert!(matches!(quiet.validate(), Err(AgentError::InvalidSpec { .. })));
+        assert!(matches!(
+            quiet.validate(),
+            Err(AgentError::InvalidSpec { .. })
+        ));
     }
 
     #[test]
     fn registry_rejects_duplicate_and_invalid() {
         let mut registry = AgentRegistry::new();
-        registry.register(AgentSpec::new("helper", "цель", "промпт", &["grep"], 3, true)).unwrap();
+        registry
+            .register(AgentSpec::new(
+                "helper",
+                "цель",
+                "промпт",
+                &["grep"],
+                3,
+                true,
+            ))
+            .unwrap();
         let dup = registry.register(AgentSpec::new("helper", "иная", "иной", &["grep"], 3, true));
-        assert_eq!(dup.unwrap_err(), AgentError::DuplicateName { name: "helper".to_string() });
+        assert_eq!(
+            dup.unwrap_err(),
+            AgentError::DuplicateName {
+                name: "helper".to_string()
+            }
+        );
         let invalid = registry.register(AgentSpec::new("", "цель", "промпт", &["grep"], 3, true));
-        assert!(matches!(invalid.unwrap_err(), AgentError::InvalidSpec { .. }));
+        assert!(matches!(
+            invalid.unwrap_err(),
+            AgentError::InvalidSpec { .. }
+        ));
         assert_eq!(registry.len(), 1);
     }
 
@@ -795,7 +891,11 @@ mod tests {
     fn unknown_agent_suggests_by_levenshtein() {
         let registry = AgentRegistry::with_builtins();
         // Подстрока («review») тоже считается близкой.
-        for (typo, want) in [("code_revie", "code_review"), ("test_runer", "test_runner"), ("review", "code_review")] {
+        for (typo, want) in [
+            ("code_revie", "code_review"),
+            ("test_runer", "test_runner"),
+            ("review", "code_review"),
+        ] {
             let err = registry.get(typo).unwrap_err();
             match err {
                 AgentError::UnknownAgent { suggestions, .. } => {
@@ -815,7 +915,11 @@ mod tests {
         let err = registry.get("zzzzzz").unwrap_err();
         let text = err.to_string();
         match err {
-            AgentError::UnknownAgent { suggestions, available, .. } => {
+            AgentError::UnknownAgent {
+                suggestions,
+                available,
+                ..
+            } => {
                 assert!(suggestions.is_empty());
                 assert_eq!(available.len(), 4);
                 assert!(text.contains("доступные типы"));
@@ -830,8 +934,10 @@ mod tests {
 
     #[test]
     fn suggestions_are_capped_at_max() {
-        let candidates: Vec<String> =
-            ["code_review", "explore", "plan", "test_runner"].iter().map(ToString::to_string).collect();
+        let candidates: Vec<String> = ["code_review", "explore", "plan", "test_runner"]
+            .iter()
+            .map(ToString::to_string)
+            .collect();
         let found = suggest_names("e", &candidates, MAX_SUGGESTIONS);
         assert_eq!(found.len(), MAX_SUGGESTIONS);
         assert!(found.iter().any(|s| s == "explore"));
@@ -869,7 +975,14 @@ mod tests {
         let mut guard = BudgetGuard::new(AgentBudget::new(1, 1000, 3600));
         guard.consume(10).unwrap();
         let err = guard.consume(10).unwrap_err();
-        assert_eq!(err, AgentError::BudgetExceeded { kind: BudgetKind::Turns, limit: 1, used: 2 });
+        assert_eq!(
+            err,
+            AgentError::BudgetExceeded {
+                kind: BudgetKind::Turns,
+                limit: 1,
+                used: 2
+            }
+        );
         // Учёт отражает факт, даже когда лимит пробит.
         assert_eq!(guard.used_turns(), 2);
         assert!(guard.check().is_err());
@@ -880,7 +993,14 @@ mod tests {
         let mut guard = BudgetGuard::new(AgentBudget::new(10, 100, 3600));
         guard.consume(60).unwrap();
         let err = guard.consume(50).unwrap_err();
-        assert_eq!(err, AgentError::BudgetExceeded { kind: BudgetKind::Tokens, limit: 100, used: 110 });
+        assert_eq!(
+            err,
+            AgentError::BudgetExceeded {
+                kind: BudgetKind::Tokens,
+                limit: 100,
+                used: 110
+            }
+        );
         assert!(err.to_string().contains("tokens"));
     }
 
@@ -900,7 +1020,9 @@ mod tests {
             other => panic!("ожидался BudgetExceeded, получен {other:?}"),
         }
         // Свежий страж в пределах тех же лимитов — чист.
-        BudgetGuard::new(AgentBudget::new(100, 1000, 5)).check().unwrap();
+        BudgetGuard::new(AgentBudget::new(100, 1000, 5))
+            .check()
+            .unwrap();
     }
 
     #[test]

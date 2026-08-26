@@ -12,15 +12,20 @@ use std::sync::atomic::Ordering;
 
 /// Вызов внешнего peer-агента по имени (crate::peers): спек из builtin-реестра,
 /// исполнение в workspace агента с таймаутом из конфига спеки или args.
-fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>) -> String {    let Some(spec) = crate::peers::builtin_peers().into_iter()
+fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>) -> String {
+    let Some(spec) = crate::peers::builtin_peers()
+        .into_iter()
         .find(|p| p.name.eq_ignore_ascii_case(name))
     else {
-        let known = crate::peers::builtin_peers().iter()
-            .map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+        let known = crate::peers::builtin_peers()
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
         return format!("ERROR: неизвестный peer-агент «{name}». Доступно: {known}");
     };
-    let timeout = std::time::Duration::from_secs(
-        timeout_secs.unwrap_or(spec.default_timeout_secs).min(600));
+    let timeout =
+        std::time::Duration::from_secs(timeout_secs.unwrap_or(spec.default_timeout_secs).min(600));
     // стрим-режим (claude/kimi): события stream-json мостом в TUI;
     // прочие пиры — прежний синхронный захват
     if spec.stream == crate::peers::PeerStream::Off {
@@ -30,7 +35,8 @@ fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>
         }
     } else {
         let mut bridge = peer_event_bridge(&agent.events, &spec.name, None);
-        match crate::peers::peer_ask_streaming(&spec, task, &agent.workspace, timeout, &mut bridge) {
+        match crate::peers::peer_ask_streaming(&spec, task, &agent.workspace, timeout, &mut bridge)
+        {
             Ok(out) => out,
             Err(e) => format!("ERROR: peer «{}» недоступен или упал: {e:#}", spec.name),
         }
@@ -41,9 +47,14 @@ fn run_peer_ask(agent: &Agent, name: &str, task: &str, timeout_secs: Option<u64>
 /// вызовы инструментов → PeerToolUse, служебное глотаем. `tail_slot`
 /// (разделяемый снимок bg-задач + id) — обновляет хвост вывода для живой
 /// панели /bg (резерв 06.08). Без событийного канала (headless) — заглушка.
-fn peer_event_bridge(events: &Option<std::sync::mpsc::Sender<AgentEvent>>, peer: &str,
-                     tail_slot: Option<(std::sync::Arc<std::sync::Mutex<Vec<crate::background::BgTaskInfo>>>, u64)>)
-    -> Box<dyn FnMut(crate::peers::PeerEvent) + Send> {
+fn peer_event_bridge(
+    events: &Option<std::sync::mpsc::Sender<AgentEvent>>,
+    peer: &str,
+    tail_slot: Option<(
+        std::sync::Arc<std::sync::Mutex<Vec<crate::background::BgTaskInfo>>>,
+        u64,
+    )>,
+) -> Box<dyn FnMut(crate::peers::PeerEvent) + Send> {
     let tx = events.clone();
     let peer = peer.to_string();
     Box::new(move |ev| {
@@ -64,10 +75,17 @@ fn peer_event_bridge(events: &Option<std::sync::mpsc::Sender<AgentEvent>>, peer:
         let Some(tx) = &tx else { return };
         match ev {
             crate::peers::PeerEvent::Text(t) => {
-                let _ = tx.send(AgentEvent::PeerDelta { peer: peer.clone(), text: t });
+                let _ = tx.send(AgentEvent::PeerDelta {
+                    peer: peer.clone(),
+                    text: t,
+                });
             }
             crate::peers::PeerEvent::ToolUse { name, args } => {
-                let _ = tx.send(AgentEvent::PeerToolUse { peer: peer.clone(), name, args });
+                let _ = tx.send(AgentEvent::PeerToolUse {
+                    peer: peer.clone(),
+                    name,
+                    args,
+                });
             }
             crate::peers::PeerEvent::Note(_) => {}
         }
@@ -77,19 +95,28 @@ fn peer_event_bridge(events: &Option<std::sync::mpsc::Sender<AgentEvent>>, peer:
 /// Имя — реальный инструмент агента (по реестру tool_specs)?
 /// Автоподхват скилла не должен тенить настоящие тулы.
 fn skill_tool_name_is_real_tool(name: &str) -> bool {
-    tools::tool_specs().as_array()
-        .map(|a| a.iter().any(|t| t["function"]["name"].as_str() == Some(name)))
+    tools::tool_specs()
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .any(|t| t["function"]["name"].as_str() == Some(name))
+        })
         .unwrap_or(false)
 }
 
 /// Сопоставить имя вызова со скиллом: нормализация '_'→'-' и lowercase
 /// (agent_sessions → agent-sessions). Чистая функция — для тестов.
-fn resolve_skill_as_tool<'a>(name: &str, skills: &'a [skills::SkillSpec]) -> Option<&'a skills::SkillSpec> {
+fn resolve_skill_as_tool<'a>(
+    name: &str,
+    skills: &'a [skills::SkillSpec],
+) -> Option<&'a skills::SkillSpec> {
     let normalized = name.to_lowercase().replace('_', "-");
     if normalized.is_empty() {
         return None;
     }
-    skills.iter().find(|s| s.name.eq_ignore_ascii_case(&normalized))
+    skills
+        .iter()
+        .find(|s| s.name.eq_ignore_ascii_case(&normalized))
 }
 
 /// Потолок задач в одном рое: защита от штампа параллельных API-вызовов.
@@ -135,21 +162,29 @@ pub(crate) fn repair_truncated_json(text: &str) -> Option<(serde_json::Value, bo
     for open in stack.iter().rev() {
         out.push(if *open == '{' { '}' } else { ']' });
     }
-    serde_json::from_str(&out).ok().map(|v| (v, closed_open_string))
+    serde_json::from_str(&out)
+        .ok()
+        .map(|v| (v, closed_open_string))
 }
 
 /// Разбор аргументов инструмента swarm (чистая функция — для тестов):
 /// массив tasks (1..=8), у каждой prompt (обязателен) и agent (default explore).
-pub(crate) fn parse_swarm_tasks(args: &serde_json::Value, registry: &crate::agents::AgentRegistry)
-    -> Result<Vec<(crate::agents::AgentSpec, String)>, String> {
-    let arr = args["tasks"].as_array().ok_or("swarm: нужен массив tasks")?;
+pub(crate) fn parse_swarm_tasks(
+    args: &serde_json::Value,
+    registry: &crate::agents::AgentRegistry,
+) -> Result<Vec<(crate::agents::AgentSpec, String)>, String> {
+    let arr = args["tasks"]
+        .as_array()
+        .ok_or("swarm: нужен массив tasks")?;
     if arr.is_empty() {
         return Err("swarm: пустой массив tasks — рою нечего делать".into());
     }
     if arr.len() > SWARM_MAX_TASKS {
         return Err(format!(
             "swarm: не больше {SWARM_MAX_TASKS} задач за раз (получено {}) — \
-             разбейте на несколько роёв", arr.len()));
+             разбейте на несколько роёв",
+            arr.len()
+        ));
     }
     let mut out = vec![];
     for (i, item) in arr.iter().enumerate() {
@@ -167,8 +202,11 @@ pub(crate) fn parse_swarm_tasks(args: &serde_json::Value, registry: &crate::agen
 /// Ожидание фоновых задач и сбор результатов одним ответом (чистая функция —
 /// для тестов): опрос is_done два раза в секунду до завершения всех ids или
 /// таймаута; незавершившиеся честно помечаются, их можно добрать task_output.
-pub(crate) fn collect_bg_results(bg: &mut crate::background::BgRegistry, ids: &[u64],
-                      timeout: std::time::Duration) -> String {
+pub(crate) fn collect_bg_results(
+    bg: &mut crate::background::BgRegistry,
+    ids: &[u64],
+    timeout: std::time::Duration,
+) -> String {
     let deadline = std::time::Instant::now() + timeout;
     loop {
         let all_done = ids.iter().all(|id| bg.is_done(*id) != Some(false));
@@ -194,7 +232,8 @@ pub(crate) fn collect_bg_results(bg: &mut crate::background::BgRegistry, ids: &[
     if pending > 0 {
         out.push_str(&format!(
             "[swarm_wait] {pending} задач не завершились за таймаут — \
-             заберите их позже через task_output по id\n"));
+             заберите их позже через task_output по id\n"
+        ));
     }
     out
 }
@@ -231,7 +270,9 @@ impl Agent {
         if self.controls.plan.load(Ordering::Relaxed) {
             match name {
                 "write_file" | "edit_file" => {
-                    return Decision::Deny("plan mode: правки запрещены до exit_plan_mode/одобрения".into());
+                    return Decision::Deny(
+                        "plan mode: правки запрещены до exit_plan_mode/одобрения".into(),
+                    );
                 }
                 "bash" if !self.perms.is_readonly_bash(target) => {
                     return Decision::Deny("plan mode: разрешены только read-only команды".into());
@@ -288,28 +329,39 @@ impl Agent {
             Err(_) => match repair_truncated_json(&call.function.arguments) {
                 Some((v, closed_string)) => {
                     self.emit(AgentEvent::HookNote(format!(
-                        "⚠ аргументы «{name}» были обрезаны моделью — достроены до валидного JSON")));
-                    repair_note = Some(if closed_string
-                        && matches!(name.as_str(), "write_file" | "edit_file" | "apply_patch")
-                    {
-                        "\n⚠ АРГУМЕНТЫ ОБРЕЗАНЫ ПО ЛИМИТУ ТОКЕНОВ: «content» почти наверняка \
+                        "⚠ аргументы «{name}» были обрезаны моделью — достроены до валидного JSON"
+                    )));
+                    repair_note = Some(
+                        if closed_string
+                            && matches!(name.as_str(), "write_file" | "edit_file" | "apply_patch")
+                        {
+                            "\n⚠ АРГУМЕНТЫ ОБРЕЗАНЫ ПО ЛИМИТУ ТОКЕНОВ: «content» почти наверняка \
                          УСЕЧЁН. Проверьте конец файла (bash: tail -3 <путь>); если усечён — \
                          перезапишите ЧАСТЯМИ: write_file первую часть, затем apply_patch/edit_file \
                          с дополнением. Большие файлы пишите частями заранее.".to_string()
-                    } else {
-                        "\n[note: аргументы были обрезаны моделью и достроены харнессом]".to_string()
-                    });
+                        } else {
+                            "\n[note: аргументы были обрезаны моделью и достроены харнессом]"
+                                .to_string()
+                        },
+                    );
                     v
                 }
                 None => {
                     let short: String = call.function.arguments.chars().take(120).collect();
-                    self.emit(AgentEvent::ToolCall { name: name.clone(),
-                        args: call.function.arguments.clone(), decision: "Deny (bad json)".into() });
+                    self.emit(AgentEvent::ToolCall {
+                        name: name.clone(),
+                        args: call.function.arguments.clone(),
+                        decision: "Deny (bad json)".into(),
+                    });
                     let out = format!(
                         "ERROR: невалидный JSON в аргументах инструмента «{name}»: «{short}». \
-                         Вызов НЕ выполнен — повторите с корректным JSON.");
-                    self.emit(AgentEvent::ToolResult { name: name.clone(),
-                        preview: out.chars().take(200).collect(), ok: false });
+                         Вызов НЕ выполнен — повторите с корректным JSON."
+                    );
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.clone(),
+                        preview: out.chars().take(200).collect(),
+                        ok: false,
+                    });
                     return out;
                 }
             },
@@ -321,7 +373,9 @@ impl Agent {
             return "DENIED (doom-loop guard): идентичный вызов уже пропускался после предупреждения — измените подход".into();
         }
         self.fp_window.push_back(fp);
-        if self.fp_window.len() > 20 { self.fp_window.pop_front(); }
+        if self.fp_window.len() > 20 {
+            self.fp_window.pop_front();
+        }
         let count = self.fp_window.iter().filter(|x| **x == fp).count();
         // исключения: todo_write/finish — штатно повторяются; task_output —
         // поллинг фоновой задачи (peers живут минуты) — легитимное ожидание,
@@ -330,7 +384,8 @@ impl Agent {
         if count >= 3 && !matches!(name.as_str(), "todo_write" | "finish" | "task_output") {
             self.doom_warned.insert(fp);
             self.emit(AgentEvent::HookNote(format!(
-                "⚠ doom-loop: «{name}» ×{count} с одинаковыми аргументами (окно 20)")));
+                "⚠ doom-loop: «{name}» ×{count} с одинаковыми аргументами (окно 20)"
+            )));
             return format!("[SYSTEM WARNING: doom loop suspected — «{name}» с теми же аргументами уже встречался {count} раз в окне 20. Вызов пропущен. Измените стратегию.]");
         }
 
@@ -344,22 +399,36 @@ impl Agent {
         }
 
         // PreToolUse-хук (единый движок hooks_ext, V3 #2.2)
-        let hook_out = self.fire_ext(crate::hooks_ext::HookEvent::PreToolUse,
-            serde_json::json!({"tool": name, "args": args}));
+        let hook_out = self.fire_ext(
+            crate::hooks_ext::HookEvent::PreToolUse,
+            serde_json::json!({"tool": name, "args": args}),
+        );
         let reason = crate::hooks_ext::block_reason(&hook_out);
         if !reason.is_empty() {
-            self.emit(AgentEvent::HookNote(format!("⛔ хук заблокировал: {reason}")));
-            self.emit(AgentEvent::ToolResult { name, preview: reason.clone(), ok: false });
+            self.emit(AgentEvent::HookNote(format!(
+                "⛔ хук заблокировал: {reason}"
+            )));
+            self.emit(AgentEvent::ToolResult {
+                name,
+                preview: reason.clone(),
+                ok: false,
+            });
             self.last_deny_fp = Some(fp);
             return format!("BLOCKED by hook: {reason}");
         }
 
         let out = self.execute_inner(call, &name, args.clone());
         // PostToolUse: stdout хуков добавляется к результату (семантика ext)
-        let post = self.fire_ext(crate::hooks_ext::HookEvent::PostToolUse,
-            serde_json::json!({"tool": name, "args": args, "ok": !out.starts_with("ERROR")}));
+        let post = self.fire_ext(
+            crate::hooks_ext::HookEvent::PostToolUse,
+            serde_json::json!({"tool": name, "args": args, "ok": !out.starts_with("ERROR")}),
+        );
         let extra = crate::hooks_ext::collect_stdout(&post);
-        let out = if extra.is_empty() { out } else { format!("{out}\n[hook stdout] {extra}") };
+        let out = if extra.is_empty() {
+            out
+        } else {
+            format!("{out}\n[hook stdout] {extra}")
+        };
         // заметка о починенных аргументах — в РЕЗУЛЬТАТ для модели (кейс 24.07:
         // модель не узнала об усечении своего content и строила на битом файле)
         let out = match repair_note {
@@ -379,11 +448,25 @@ impl Agent {
     /// по типу), итог с пометкой обрыва по бюджету и учётом ходов/токенов.
     fn run_subagent(&self, spec: &crate::agents::AgentSpec, prompt: &str) -> String {
         let budget = crate::agents::default_budget(spec);
-        match subagent::run_agent(&self.sub, &self.workspace, spec, prompt, budget, self.env.sandbox_effective(), None) {
+        match subagent::run_agent(
+            &self.sub,
+            &self.workspace,
+            spec,
+            prompt,
+            budget,
+            self.env.sandbox_effective(),
+            None,
+        ) {
             Ok(res) => {
-                let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
-                crate::tools::cap_pub(format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
-                    res.summary, spec.name, res.turns, res.tokens, note))
+                let note = if res.truncated {
+                    ", ОБОРВАН ПО БЮДЖЕТУ"
+                } else {
+                    ""
+                };
+                crate::tools::cap_pub(format!(
+                    "{}\n[subagent {}: {} ходов, {} токенов{}]",
+                    res.summary, spec.name, res.turns, res.tokens, note
+                ))
             }
             Err(e) => format!("ERROR: субагент «{}»: {e}", spec.name),
         }
@@ -391,14 +474,21 @@ impl Agent {
 
     /// Запуск субагента синхронно или в ФОНЕ (v0.6.6, is_background): в фоне —
     /// поток в BgRegistry, Тесей продолжает работу; результат — task_output.
-    fn spawn_or_run_subagent(&mut self, spec: &crate::agents::AgentSpec,
-                             prompt: &str, is_background: bool) -> String {
+    fn spawn_or_run_subagent(
+        &mut self,
+        spec: &crate::agents::AgentSpec,
+        prompt: &str,
+        is_background: bool,
+    ) -> String {
         if !is_background {
             return self.run_subagent(spec, prompt);
         }
         let id = self.spawn_bg_subagent(spec, prompt);
-        format!("[bg {id}] субагент «{}» запущен в фоне — продолжайте работу; \
-                 результат заберите через swarm_wait (весь рой разом) или task_output (по одному)", spec.name)
+        format!(
+            "[bg {id}] субагент «{}» запущен в фоне — продолжайте работу; \
+                 результат заберите через swarm_wait (весь рой разом) или task_output (по одному)",
+            spec.name
+        )
     }
 
     /// Общий запуск фонового субагента (task is_background и рой swarm):
@@ -422,15 +512,31 @@ impl Agent {
         // прочитает на границе хода (живой кейс 24.07 — explore висел 25 минут)
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancel2 = cancel.clone();
-        let label = format!("subagent {} — {}", spec.name,
-            prompt.chars().take(60).collect::<String>());
+        let label = format!(
+            "subagent {} — {}",
+            spec.name,
+            prompt.chars().take(60).collect::<String>()
+        );
         self.bg.spawn_fn(label, cancel, move |_id| {
-            match crate::subagent::run_agent(&sub_cfg, &ws, &spec2, &prompt2, budget, sandbox,
-                                             Some(&cancel2)) {
+            match crate::subagent::run_agent(
+                &sub_cfg,
+                &ws,
+                &spec2,
+                &prompt2,
+                budget,
+                sandbox,
+                Some(&cancel2),
+            ) {
                 Ok(res) => {
-                    let note = if res.truncated { ", ОБОРВАН ПО БЮДЖЕТУ" } else { "" };
-                    format!("{}\n[subagent {}: {} ходов, {} токенов{}]",
-                        res.summary, spec2.name, res.turns, res.tokens, note)
+                    let note = if res.truncated {
+                        ", ОБОРВАН ПО БЮДЖЕТУ"
+                    } else {
+                        ""
+                    };
+                    format!(
+                        "{}\n[subagent {}: {} ходов, {} токенов{}]",
+                        res.summary, spec2.name, res.turns, res.tokens, note
+                    )
                 }
                 Err(e) => format!("ERROR: субагент «{}»: {e}", spec2.name),
             }
@@ -445,73 +551,121 @@ impl Agent {
         for (spec, prompt) in specs {
             let id = self.spawn_bg_subagent(spec, prompt);
             ids.push(id.to_string());
-            lines.push(format!("bg {id}: {} — {}", spec.name,
-                prompt.chars().take(50).collect::<String>()));
+            lines.push(format!(
+                "bg {id}: {} — {}",
+                spec.name,
+                prompt.chars().take(50).collect::<String>()
+            ));
         }
-        format!("[swarm] запущено {} задач в фоне:\n{}\nПродолжайте работу; \
+        format!(
+            "[swarm] запущено {} задач в фоне:\n{}\nПродолжайте работу; \
                  соберите все результаты одним вызовом swarm_wait {{\"ids\": [{}]}} \
                  (или точечно task_output по id).",
-            specs.len(), lines.join("\n"), ids.join(", "))
+            specs.len(),
+            lines.join("\n"),
+            ids.join(", ")
+        )
     }
 
     /// Запуск peer-агента синхронно или в ФОНЕ (v0.6.6, is_background).
-    fn spawn_or_run_peer(&mut self, agent: &str, task: &str,
-                         timeout_secs: Option<u64>, is_background: bool) -> String {
+    fn spawn_or_run_peer(
+        &mut self,
+        agent: &str,
+        task: &str,
+        timeout_secs: Option<u64>,
+        is_background: bool,
+    ) -> String {
         if !is_background {
             return run_peer_ask(self, agent, task, timeout_secs);
         }
-        let Some(pspec) = crate::peers::builtin_peers().into_iter()
-            .find(|p| p.name.eq_ignore_ascii_case(agent)) else {
-            let known = crate::peers::builtin_peers().iter()
-                .map(|p| p.name.clone()).collect::<Vec<_>>().join(", ");
+        let Some(pspec) = crate::peers::builtin_peers()
+            .into_iter()
+            .find(|p| p.name.eq_ignore_ascii_case(agent))
+        else {
+            let known = crate::peers::builtin_peers()
+                .iter()
+                .map(|p| p.name.clone())
+                .collect::<Vec<_>>()
+                .join(", ");
             return format!("ERROR: неизвестный peer-агент «{agent}». Доступно: {known}");
         };
         let timeout = std::time::Duration::from_secs(
-            timeout_secs.unwrap_or(pspec.default_timeout_secs).min(600));
+            timeout_secs.unwrap_or(pspec.default_timeout_secs).min(600),
+        );
         let ws = self.workspace.clone();
         let task2 = task.to_string();
-        let label = format!("peer {} — {}", pspec.name,
-            task.chars().take(60).collect::<String>());
+        let label = format!(
+            "peer {} — {}",
+            pspec.name,
+            task.chars().take(60).collect::<String>()
+        );
         let name2 = pspec.name.clone();
         let events2 = self.events.clone();
         let name3 = pspec.name.clone();
         let snapshot2 = self.controls.bg_snapshot.clone();
         let snapshot3 = self.controls.bg_snapshot.clone();
-        let id = self.bg.spawn_fn(label,
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move |bg_id| {
+        let id = self.bg.spawn_fn(
+            label,
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            move |bg_id| {
                 if pspec.stream == crate::peers::PeerStream::Off {
                     // raw-пиры: сырые строки stdout — в хвост живой панели /bg
-                    let mut bridge = peer_event_bridge(&events2, &name3,
-                        Some((snapshot2.clone(), bg_id)));
-                    match crate::peers::peer_ask_streaming(&pspec, &task2, &ws, timeout, &mut bridge) {
+                    let mut bridge =
+                        peer_event_bridge(&events2, &name3, Some((snapshot2.clone(), bg_id)));
+                    match crate::peers::peer_ask_streaming(
+                        &pspec,
+                        &task2,
+                        &ws,
+                        timeout,
+                        &mut bridge,
+                    ) {
                         Ok(out) => out,
                         Err(e) => format!("ERROR: peer «{name2}» недоступен или упал: {e:#}"),
                     }
                 } else {
                     // стрим в фоне: дельты летят в TUI + хвост в панели /bg
-                    let mut bridge = peer_event_bridge(&events2, &name3,
-                        Some((snapshot3.clone(), bg_id)));
-                    match crate::peers::peer_ask_streaming(&pspec, &task2, &ws, timeout, &mut bridge) {
+                    let mut bridge =
+                        peer_event_bridge(&events2, &name3, Some((snapshot3.clone(), bg_id)));
+                    match crate::peers::peer_ask_streaming(
+                        &pspec,
+                        &task2,
+                        &ws,
+                        timeout,
+                        &mut bridge,
+                    ) {
                         Ok(out) => out,
                         Err(e) => format!("ERROR: peer «{name3}» недоступен или упал: {e:#}"),
                     }
                 }
-        });
-        format!("[bg {id}] peer «{agent}» запущен в фоне — продолжайте работу; \
-                 результат заберите через swarm_wait (весь рой разом) или task_output (по одному)")
+            },
+        );
+        format!(
+            "[bg {id}] peer «{agent}» запущен в фоне — продолжайте работу; \
+                 результат заберите через swarm_wait (весь рой разом) или task_output (по одному)"
+        )
     }
 
     fn execute_inner(&mut self, call: &ToolCall, name: &str, args: serde_json::Value) -> String {
         // v0.2: MCP-роутинг
         if let Some(rest) = name.strip_prefix("mcp__") {
             let (server, tool) = rest.split_once("__").unwrap_or((rest, ""));
-            self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow (MCP)".into() });
+            self.emit(AgentEvent::ToolCall {
+                name: name.into(),
+                args: call.function.arguments.clone(),
+                decision: "Allow (MCP)".into(),
+            });
             let out = match &mut self.mcp {
-                Some(reg) => reg.call(server, tool, args).unwrap_or_else(|e| format!("ERROR: {e}")),
+                Some(reg) => reg
+                    .call(server, tool, args)
+                    .unwrap_or_else(|e| format!("ERROR: {e}")),
                 None => "ERROR: MCP не подключён".into(),
             };
             let ok = !out.starts_with("ERROR");
-            self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+            self.emit(AgentEvent::ToolResult {
+                name: name.into(),
+                preview: out.chars().take(200).collect(),
+                ok,
+            });
             return out;
         }
 
@@ -526,7 +680,11 @@ impl Agent {
                 let mode = self.perms.mode();
                 // решение как внутреннее представление: Allow исполняем сразу,
                 // Ask — через попап, Deny — с причиной
-                enum PeerGate { Allow, Ask(String), Deny(String) }
+                enum PeerGate {
+                    Allow,
+                    Ask(String),
+                    Deny(String),
+                }
                 let gate = match mode {
                     Mode::DontAsk => PeerGate::Deny(
                         "peer_ask заблокирован в режиме DontAsk — запрос к внешнему агенту требует подтверждения".into()),
@@ -539,22 +697,36 @@ impl Agent {
                     PeerGate::Ask(_) => "Ask",
                     PeerGate::Deny(_) => "Deny",
                 };
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(),
-                    decision: decision_label.into() });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: decision_label.into(),
+                });
                 let out = match gate {
                     PeerGate::Deny(reason) => format!("DENIED: {reason}"),
                     PeerGate::Ask(question) => {
                         let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
                         if allow {
-                            self.spawn_or_run_peer(&agent, &task, args["timeout_secs"].as_u64(), is_bg)
+                            self.spawn_or_run_peer(
+                                &agent,
+                                &task,
+                                args["timeout_secs"].as_u64(),
+                                is_bg,
+                            )
                         } else {
                             format!("DENIED: пользователь отклонил peer_ask к «{agent}»")
                         }
                     }
-                    PeerGate::Allow => self.spawn_or_run_peer(&agent, &task, args["timeout_secs"].as_u64(), is_bg),
+                    PeerGate::Allow => {
+                        self.spawn_or_run_peer(&agent, &task, args["timeout_secs"].as_u64(), is_bg)
+                    }
                 };
                 let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok,
+                });
                 return out;
             }
             "task" => {
@@ -567,15 +739,27 @@ impl Agent {
                 let spec = match registry.get(&agent_name) {
                     Ok(s) => s.clone(),
                     Err(e) => {
-                        self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Deny".into() });
+                        self.emit(AgentEvent::ToolCall {
+                            name: name.into(),
+                            args: call.function.arguments.clone(),
+                            decision: "Deny".into(),
+                        });
                         let out = format!("ERROR: {e}");
-                        self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok: false });
+                        self.emit(AgentEvent::ToolResult {
+                            name: name.into(),
+                            preview: out.chars().take(200).collect(),
+                            ok: false,
+                        });
                         return out;
                     }
                 };
                 // не-readonly спека (test_runner с bash) — гейт по режиму, как у peer_ask:
                 // DontAsk → Deny (некому подтвердить), Ask/SemiAuto → попап, Yolo → Allow
-                enum SubGate { Allow, Ask(String), Deny(String) }
+                enum SubGate {
+                    Allow,
+                    Ask(String),
+                    Deny(String),
+                }
                 let gate = if spec.readonly {
                     SubGate::Allow
                 } else {
@@ -592,7 +776,11 @@ impl Agent {
                     SubGate::Ask(_) => format!("Ask (subagent {})", spec.name),
                     SubGate::Deny(_) => format!("Deny (subagent {})", spec.name),
                 };
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: decision_label });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: decision_label,
+                });
                 let out = match gate {
                     SubGate::Deny(reason) => format!("DENIED: {reason}"),
                     SubGate::Ask(question) => {
@@ -606,7 +794,11 @@ impl Agent {
                     SubGate::Allow => self.spawn_or_run_subagent(&spec, &prompt, is_bg),
                 };
                 let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok,
+                });
                 return out;
             }
             "swarm" => {
@@ -618,13 +810,25 @@ impl Agent {
                 let specs = match parsed {
                     Ok(s) => s,
                     Err(e) => {
-                        self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Deny".into() });
-                        self.emit(AgentEvent::ToolResult { name: name.into(), preview: e.clone(), ok: false });
+                        self.emit(AgentEvent::ToolCall {
+                            name: name.into(),
+                            args: call.function.arguments.clone(),
+                            decision: "Deny".into(),
+                        });
+                        self.emit(AgentEvent::ToolResult {
+                            name: name.into(),
+                            preview: e.clone(),
+                            ok: false,
+                        });
                         return format!("ERROR: {e}");
                     }
                 };
                 let any_write = specs.iter().any(|(s, _)| !s.readonly);
-                enum SwarmGate { Allow, Ask(String), Deny(String) }
+                enum SwarmGate {
+                    Allow,
+                    Ask(String),
+                    Deny(String),
+                }
                 let gate = if !any_write {
                     SwarmGate::Allow
                 } else {
@@ -641,7 +845,11 @@ impl Agent {
                     SwarmGate::Ask(_) => "Ask (swarm)".to_string(),
                     SwarmGate::Deny(_) => "Deny (swarm)".to_string(),
                 };
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: decision_label });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: decision_label,
+                });
                 let out = match gate {
                     SwarmGate::Deny(reason) => format!("DENIED: {reason}"),
                     SwarmGate::Ask(question) => {
@@ -655,35 +863,57 @@ impl Agent {
                     SwarmGate::Allow => self.launch_swarm(&specs),
                 };
                 let ok = !out.starts_with("DENIED") && !out.starts_with("ERROR");
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok,
+                });
                 return out;
             }
             "swarm_wait" => {
                 // сбор результатов роя одним ответом: ждём завершения всех ids
                 // (или таймаут) и возвращаем вывод каждой задачи
-                let ids: Vec<u64> = args["ids"].as_array()
+                let ids: Vec<u64> = args["ids"]
+                    .as_array()
                     .map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect())
                     .unwrap_or_default();
                 let timeout = std::time::Duration::from_secs(
-                    args["timeout"].as_u64().unwrap_or(600).min(900));
+                    args["timeout"].as_u64().unwrap_or(600).min(900),
+                );
                 let out = if ids.is_empty() {
                     "ERROR: swarm_wait: нужен массив ids (из ответа swarm)".to_string()
                 } else {
                     collect_bg_results(&mut self.bg, &ids, timeout)
                 };
                 let ok = !out.starts_with("ERROR");
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok,
+                });
                 return out;
             }
-            "skill_search" => {                // прогрессивное раскрытие: поиск по имени/описанию без загрузки тел
+            "skill_search" => {
+                // прогрессивное раскрытие: поиск по имени/описанию без загрузки тел
                 let q = args["query"].as_str().unwrap_or("");
                 let limit = args["limit"].as_u64().unwrap_or(8) as usize;
                 let hits = skills::search(&self.skills, q, limit);
                 let out = if hits.is_empty() {
-                    format!("скиллов по запросу «{q}» не найдено (всего: {})", self.skills.len())
+                    format!(
+                        "скиллов по запросу «{q}» не найдено (всего: {})",
+                        self.skills.len()
+                    )
                 } else {
-                    let mut s = format!("скиллов по «{q}»: {} (всего в библиотеке {})\n", hits.len(), self.skills.len());
+                    let mut s = format!(
+                        "скиллов по «{q}»: {} (всего в библиотеке {})\n",
+                        hits.len(),
+                        self.skills.len()
+                    );
                     for sk in hits {
                         let d: String = sk.description.chars().take(100).collect();
                         s.push_str(&format!("- {}: {}\n", sk.name, d));
@@ -691,24 +921,50 @@ impl Agent {
                     s.push_str("Загрузить полный текст: инструмент skill {name}.");
                     s
                 };
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok: true });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok: true,
+                });
                 return out;
             }
             "skill" => {
                 let sk = args["name"].as_str().unwrap_or("");
                 let out = match self.skills.iter().find(|s| s.name == sk) {
                     Some(spec) => match skills::load_body(spec) {
-                        Ok(body) => format!("=== skill {} (из {})\n\n{}", spec.name, spec.path.display(),
-                                            crate::tools::cap_pub(body)),
+                        Ok(body) => format!(
+                            "=== skill {} (из {})\n\n{}",
+                            spec.name,
+                            spec.path.display(),
+                            crate::tools::cap_pub(body)
+                        ),
                         Err(e) => format!("ERROR: {e}"),
                     },
-                    None => format!("ERROR: скилл «{sk}» не найден. Доступно: {}",
-                        self.skills.iter().map(|s| s.name.as_str()).collect::<Vec<_>>().join(", ")),
+                    None => format!(
+                        "ERROR: скилл «{sk}» не найден. Доступно: {}",
+                        self.skills
+                            .iter()
+                            .map(|s| s.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
                 };
                 let ok = !out.starts_with("ERROR");
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok,
+                });
                 return out;
             }
             "memory_write" => {
@@ -717,8 +973,16 @@ impl Agent {
                     Some(m) => m.write_fact(fact),
                     None => "ERROR: память недоступна".into(),
                 };
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(150).collect(), ok: !out.starts_with("ERROR") });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(150).collect(),
+                    ok: !out.starts_with("ERROR"),
+                });
                 return out;
             }
             "memory_search" => {
@@ -727,22 +991,46 @@ impl Agent {
                     Some(m) => m.search(q, 5),
                     None => "ERROR: память недоступна".into(),
                 };
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(150).collect(), ok: !out.starts_with("ERROR") });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(150).collect(),
+                    ok: !out.starts_with("ERROR"),
+                });
                 return out;
             }
             "task_output" => {
                 let id = args["id"].as_u64().unwrap_or(0);
                 let out = self.bg.output(id);
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok: !out.starts_with("ERROR") });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok: !out.starts_with("ERROR"),
+                });
                 return out;
             }
             "task_stop" => {
                 let id = args["id"].as_u64().unwrap_or(0);
                 let out = self.bg.stop(id);
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow".into() });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.clone(), ok: true });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow".into(),
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.clone(),
+                    ok: true,
+                });
                 return out;
             }
             "exit_plan_mode" => {
@@ -754,7 +1042,12 @@ impl Agent {
             "set_goal" => {
                 let text = args["text"].as_str().unwrap_or("").to_string();
                 let max_turns = args["max_turns"].as_u64().unwrap_or(10) as usize;
-                self.goal = Some(GoalState { text: text.clone(), max_turns, turns_used: 0, audit_sent: false });
+                self.goal = Some(GoalState {
+                    text: text.clone(),
+                    max_turns,
+                    turns_used: 0,
+                    audit_sent: false,
+                });
                 self.emit(AgentEvent::GoalSet(text.clone()));
                 return format!("GOAL_SET: {text} (аудит до {max_turns} ходов)");
             }
@@ -766,8 +1059,16 @@ impl Agent {
         // «unknown tool» — иначе модель флаила ходы на ровном месте
         // (живой кейс 23.07: skill-harvester → вызов agent_sessions).
         if let Some(out) = self.skill_invoked_as_tool(name) {
-            self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: "Allow (skill-as-tool)".into() });
-            self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok: true });
+            self.emit(AgentEvent::ToolCall {
+                name: name.into(),
+                args: call.function.arguments.clone(),
+                decision: "Allow (skill-as-tool)".into(),
+            });
+            self.emit(AgentEvent::ToolResult {
+                name: name.into(),
+                preview: out.chars().take(200).collect(),
+                ok: true,
+            });
             return out;
         }
 
@@ -775,7 +1076,11 @@ impl Agent {
         let dstr = format!("{decision:?}");
         match decision {
             Decision::Allow => {
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: dstr });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: dstr,
+                });
                 // v0.3: bash is_background
                 if name == "bash" && args["is_background"].as_bool().unwrap_or(false) {
                     let cmd = args["command"].as_str().unwrap_or("");
@@ -784,52 +1089,90 @@ impl Agent {
                         Err(e) => format!("ERROR: {e}"),
                     };
                     let ok = !out.starts_with("ERROR");
-                    self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.clone(), ok });
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.into(),
+                        preview: out.clone(),
+                        ok,
+                    });
                     return out;
                 }
                 if name == "web_fetch" {
                     let out = tools::web_fetch(args["url"].as_str().unwrap_or(""), 30)
                         .unwrap_or_else(|e| format!("ERROR: {e}"));
                     let ok = !out.starts_with("ERROR");
-                    self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.into(),
+                        preview: out.chars().take(200).collect(),
+                        ok,
+                    });
                     return out;
                 }
                 if name == "web_search" {
                     let out = tools::web_search(args["query"].as_str().unwrap_or(""), 30)
                         .unwrap_or_else(|e| format!("ERROR: {e}"));
                     let ok = !out.starts_with("ERROR");
-                    self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.into(),
+                        preview: out.chars().take(200).collect(),
+                        ok,
+                    });
                     return out;
                 }
                 let out = self.env.call(name, &args);
                 let ok = !out.starts_with("ERROR");
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: out.chars().take(200).collect(),
+                    ok,
+                });
                 out
             }
             Decision::Deny(reason) => {
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: dstr });
-                self.emit(AgentEvent::ToolResult { name: name.into(), preview: reason.clone(), ok: false });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: dstr,
+                });
+                self.emit(AgentEvent::ToolResult {
+                    name: name.into(),
+                    preview: reason.clone(),
+                    ok: false,
+                });
                 format!("DENIED: {reason}")
             }
             Decision::Ask(question) => {
-                self.emit(AgentEvent::ToolCall { name: name.into(), args: call.function.arguments.clone(), decision: dstr });
+                self.emit(AgentEvent::ToolCall {
+                    name: name.into(),
+                    args: call.function.arguments.clone(),
+                    decision: dstr,
+                });
                 let allow = match self.perm_answerer.as_mut() {
                     Some(f) => f(&question),
                     None => false,
                 };
                 if allow {
-                    self.emit(AgentEvent::ToolResult { name: name.into(), preview: "разрешено пользователем".into(), ok: true });
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.into(),
+                        preview: "разрешено пользователем".into(),
+                        ok: true,
+                    });
                     let out = self.env.call(name, &args);
                     let ok = !out.starts_with("ERROR");
-                    self.emit(AgentEvent::ToolResult { name: name.into(), preview: out.chars().take(200).collect(), ok });
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.into(),
+                        preview: out.chars().take(200).collect(),
+                        ok,
+                    });
                     out
                 } else {
-                    self.emit(AgentEvent::ToolResult { name: name.into(), preview: "отклонено пользователем".into(), ok: false });
+                    self.emit(AgentEvent::ToolResult {
+                        name: name.into(),
+                        preview: "отклонено пользователем".into(),
+                        ok: false,
+                    });
                     format!("DENIED: пользователь отклонил ({question})")
                 }
             }
         }
     }
-
-
 }

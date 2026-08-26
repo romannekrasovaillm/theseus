@@ -32,8 +32,16 @@ pub struct SearchResult {
 
 impl SearchResult {
     /// Конструктор-удобство для тестов и мок-провайдеров.
-    pub fn new(title: impl Into<String>, url: impl Into<String>, snippet: impl Into<String>) -> Self {
-        Self { title: title.into(), url: url.into(), snippet: snippet.into() }
+    pub fn new(
+        title: impl Into<String>,
+        url: impl Into<String>,
+        snippet: impl Into<String>,
+    ) -> Self {
+        Self {
+            title: title.into(),
+            url: url.into(),
+            snippet: snippet.into(),
+        }
     }
 }
 
@@ -153,7 +161,11 @@ impl DdgParser {
                 if url.is_empty() {
                     continue;
                 }
-                out.push(SearchResult { title: self.clean_text(inner), url, snippet: String::new() });
+                out.push(SearchResult {
+                    title: self.clean_text(inner),
+                    url,
+                    snippet: String::new(),
+                });
             } else if attrs.contains("result__snippet") {
                 let snippet = self.clean_text(inner);
                 if snippet.is_empty() {
@@ -192,7 +204,11 @@ impl DuckDuckGoProvider {
             .user_agent("theseus-websearch/0.2")
             .build()
             .context("сборка HTTP-клиента DDG")?;
-        Ok(Self { client, endpoint: endpoint.into(), parser: DdgParser::new()? })
+        Ok(Self {
+            client,
+            endpoint: endpoint.into(),
+            parser: DdgParser::new()?,
+        })
     }
 }
 
@@ -229,7 +245,9 @@ impl SearchProvider for DuckDuckGoProvider {
 /// по длине — идём по минимальной.
 fn parse_opensearch(body: &str, limit: usize) -> Result<Vec<SearchResult>> {
     let v: serde_json::Value = serde_json::from_str(body).context("opensearch: невалидный JSON")?;
-    let arr = v.as_array().ok_or_else(|| anyhow!("opensearch: корень не массив"))?;
+    let arr = v
+        .as_array()
+        .ok_or_else(|| anyhow!("opensearch: корень не массив"))?;
     let titles = arr.get(1).and_then(serde_json::Value::as_array);
     let descs = arr.get(2).and_then(serde_json::Value::as_array);
     let urls = arr.get(3).and_then(serde_json::Value::as_array);
@@ -239,7 +257,11 @@ fn parse_opensearch(body: &str, limit: usize) -> Result<Vec<SearchResult>> {
     let mut out = Vec::new();
     for (i, t) in titles.iter().enumerate().take(limit) {
         let title = t.as_str().unwrap_or_default().trim();
-        let url = urls.get(i).and_then(|u| u.as_str()).unwrap_or_default().trim();
+        let url = urls
+            .get(i)
+            .and_then(|u| u.as_str())
+            .unwrap_or_default()
+            .trim();
         if title.is_empty() || url.is_empty() {
             continue;
         }
@@ -249,7 +271,11 @@ fn parse_opensearch(body: &str, limit: usize) -> Result<Vec<SearchResult>> {
             .unwrap_or_default()
             .trim()
             .to_string();
-        out.push(SearchResult { title: title.to_string(), url: url.to_string(), snippet });
+        out.push(SearchResult {
+            title: title.to_string(),
+            url: url.to_string(),
+            snippet,
+        });
     }
     Ok(out)
 }
@@ -270,7 +296,10 @@ impl WikipediaProvider {
             .user_agent("theseus-websearch/0.2")
             .build()
             .context("сборка HTTP-клиента Wikipedia")?;
-        Ok(Self { client, lang: lang.into() })
+        Ok(Self {
+            client,
+            lang: lang.into(),
+        })
     }
 
     /// URL API для текущего языкового раздела.
@@ -345,7 +374,13 @@ impl SearchRouter {
         max_results: usize,
         clock: Box<dyn Fn() -> Instant + Send + Sync>,
     ) -> Self {
-        Self { providers, ttl, max_results: max_results.max(1), cache: BTreeMap::new(), clock }
+        Self {
+            providers,
+            ttl,
+            max_results: max_results.max(1),
+            cache: BTreeMap::new(),
+            clock,
+        }
     }
 
     /// Имена провайдеров в порядке опроса (для диагностики/логов).
@@ -422,7 +457,8 @@ impl SearchRouter {
 
         // 3) Запись в кэш + ленивая уборка протухших записей.
         let ttl = self.ttl;
-        self.cache.retain(|_, (ts, _)| now.saturating_duration_since(*ts) < ttl);
+        self.cache
+            .retain(|_, (ts, _)| now.saturating_duration_since(*ts) < ttl);
         self.cache.insert(key, (now, out.clone()));
         out.truncate(limit);
         Ok(out)
@@ -430,7 +466,11 @@ impl SearchRouter {
 }
 
 /// Фабрика цепочки по умолчанию: DDG (полнотекст) → Wikipedia (энциклопедия).
-pub fn default_router(timeout: Duration, ttl: Duration, max_results: usize) -> Result<SearchRouter> {
+pub fn default_router(
+    timeout: Duration,
+    ttl: Duration,
+    max_results: usize,
+) -> Result<SearchRouter> {
     let providers: Vec<Box<dyn SearchProvider>> = vec![
         Box::new(DuckDuckGoProvider::new(timeout)?),
         Box::new(WikipediaProvider::new("ru", timeout)?),
@@ -443,8 +483,8 @@ pub fn default_router(timeout: Duration, ttl: Duration, max_results: usize) -> R
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Arc, Mutex};
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
 
     /// Мок-провайдер: отдаёт заранее заданные результаты или падает,
     /// считает число вызовов (для проверки кэша и fallback).
@@ -456,12 +496,26 @@ mod tests {
     }
 
     impl MockProvider {
-        fn ok(label: &str, results: Vec<SearchResult>, calls: Arc<AtomicUsize>) -> Box<dyn SearchProvider> {
-            Box::new(Self { label: label.into(), results, fail: false, calls })
+        fn ok(
+            label: &str,
+            results: Vec<SearchResult>,
+            calls: Arc<AtomicUsize>,
+        ) -> Box<dyn SearchProvider> {
+            Box::new(Self {
+                label: label.into(),
+                results,
+                fail: false,
+                calls,
+            })
         }
 
         fn failing(label: &str, calls: Arc<AtomicUsize>) -> Box<dyn SearchProvider> {
-            Box::new(Self { label: label.into(), results: Vec::new(), fail: true, calls })
+            Box::new(Self {
+                label: label.into(),
+                results: Vec::new(),
+                fail: true,
+                calls,
+            })
         }
     }
 
@@ -488,7 +542,9 @@ mod tests {
 
     impl TestClock {
         fn new() -> Self {
-            Self { now: Arc::new(Mutex::new(Instant::now())) }
+            Self {
+                now: Arc::new(Mutex::new(Instant::now())),
+            }
         }
 
         fn clock(&self) -> Box<dyn Fn() -> Instant + Send + Sync> {
@@ -509,7 +565,11 @@ mod tests {
     #[test]
     fn router_returns_results_from_first_provider() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let providers = vec![MockProvider::ok("m1", vec![res("A", "https://a/"), res("B", "https://b/")], Arc::clone(&calls))];
+        let providers = vec![MockProvider::ok(
+            "m1",
+            vec![res("A", "https://a/"), res("B", "https://b/")],
+            Arc::clone(&calls),
+        )];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         let out = router.search("rust", 10).unwrap();
         assert_eq!(out.len(), 2);
@@ -528,7 +588,11 @@ mod tests {
         let out = router.search("rust", 5).unwrap();
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].url, "https://w/");
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "оба провайдера должны быть опрошены");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "оба провайдера должны быть опрошены"
+        );
     }
 
     #[test]
@@ -536,13 +600,25 @@ mod tests {
         let c1 = Arc::new(AtomicUsize::new(0));
         let c2 = Arc::new(AtomicUsize::new(0));
         let providers: Vec<Box<dyn SearchProvider>> = vec![
-            MockProvider::ok("p1", vec![res("A", "https://x/"), res("B", "https://y/")], c1),
-            MockProvider::ok("p2", vec![res("A2", "https://x/"), res("C", "https://z/")], c2),
+            MockProvider::ok(
+                "p1",
+                vec![res("A", "https://x/"), res("B", "https://y/")],
+                c1,
+            ),
+            MockProvider::ok(
+                "p2",
+                vec![res("A2", "https://x/"), res("C", "https://z/")],
+                c2,
+            ),
         ];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         let out = router.search("q", 10).unwrap();
         let urls: Vec<&str> = out.iter().map(|r| r.url.as_str()).collect();
-        assert_eq!(urls, ["https://x/", "https://y/", "https://z/"], "дубль по URL выкинут, порядок провайдеров сохранён");
+        assert_eq!(
+            urls,
+            ["https://x/", "https://y/", "https://z/"],
+            "дубль по URL выкинут, порядок провайдеров сохранён"
+        );
     }
 
     #[test]
@@ -555,13 +631,20 @@ mod tests {
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         let err = router.search("rust", 5).unwrap_err();
         let msg = format!("{err}");
-        assert!(msg.contains("m1") && msg.contains("m2"), "ошибка агрегирует имена провайдеров: {msg}");
+        assert!(
+            msg.contains("m1") && msg.contains("m2"),
+            "ошибка агрегирует имена провайдеров: {msg}"
+        );
     }
 
     #[test]
     fn router_cache_hit_skips_providers() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let providers = vec![MockProvider::ok("m", vec![res("A", "https://a/")], Arc::clone(&calls))];
+        let providers = vec![MockProvider::ok(
+            "m",
+            vec![res("A", "https://a/")],
+            Arc::clone(&calls),
+        )];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         let _ = router.search("rust", 10).unwrap();
         let out = router.search("rust", 10).unwrap();
@@ -573,32 +656,51 @@ mod tests {
     #[test]
     fn router_cache_expires_after_ttl() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let providers = vec![MockProvider::ok("m", vec![res("A", "https://a/")], Arc::clone(&calls))];
+        let providers = vec![MockProvider::ok(
+            "m",
+            vec![res("A", "https://a/")],
+            Arc::clone(&calls),
+        )];
         let clock = TestClock::new();
-        let mut router = SearchRouter::with_clock(providers, Duration::from_secs(30), 10, clock.clock());
+        let mut router =
+            SearchRouter::with_clock(providers, Duration::from_secs(30), 10, clock.clock());
         let _ = router.search("rust", 10).unwrap();
         clock.advance(Duration::from_secs(10));
         let _ = router.search("rust", 10).unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), 1, "в пределах TTL — кэш");
         clock.advance(Duration::from_secs(25));
         let _ = router.search("rust", 10).unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 2, "после TTL — повторный поиск");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            2,
+            "после TTL — повторный поиск"
+        );
     }
 
     #[test]
     fn router_cache_key_is_normalized() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let providers = vec![MockProvider::ok("m", vec![res("A", "https://a/")], Arc::clone(&calls))];
+        let providers = vec![MockProvider::ok(
+            "m",
+            vec![res("A", "https://a/")],
+            Arc::clone(&calls),
+        )];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         let _ = router.search("  Rust Lang ", 10).unwrap();
         let _ = router.search("rust lang", 10).unwrap();
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "trim + lowercase дают один ключ");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "trim + lowercase дают один ключ"
+        );
     }
 
     #[test]
     fn router_respects_max_results_and_limit() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let many: Vec<SearchResult> = (0..8).map(|i| res(&format!("T{i}"), &format!("https://e/{i}"))).collect();
+        let many: Vec<SearchResult> = (0..8)
+            .map(|i| res(&format!("T{i}"), &format!("https://e/{i}")))
+            .collect();
         let providers = vec![MockProvider::ok("m", many, Arc::clone(&calls))];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 3);
         let out = router.search("q", 10).unwrap();
@@ -611,7 +713,11 @@ mod tests {
     #[test]
     fn router_zero_limit_returns_empty_without_calls() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let providers = vec![MockProvider::ok("m", vec![res("A", "https://a/")], Arc::clone(&calls))];
+        let providers = vec![MockProvider::ok(
+            "m",
+            vec![res("A", "https://a/")],
+            Arc::clone(&calls),
+        )];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         let out = router.search("q", 0).unwrap();
         assert!(out.is_empty());
@@ -620,7 +726,8 @@ mod tests {
 
     #[test]
     fn router_rejects_empty_query() {
-        let providers: Vec<Box<dyn SearchProvider>> = vec![MockProvider::ok("m", vec![], Arc::new(AtomicUsize::new(0)))];
+        let providers: Vec<Box<dyn SearchProvider>> =
+            vec![MockProvider::ok("m", vec![], Arc::new(AtomicUsize::new(0)))];
         let mut router = SearchRouter::new(providers, Duration::from_secs(60), 10);
         assert!(router.search("   ", 5).is_err());
     }
@@ -666,7 +773,10 @@ to build reliable and <b>efficient</b> software.</a>
         assert_eq!(out.len(), 2, "рекламный якорь без result__a игнорируется");
 
         assert_eq!(out[0].title, "Rust Programming Language & Tools");
-        assert_eq!(out[0].url, "https://www.rust-lang.org/", "uddg-редирект развёрнут");
+        assert_eq!(
+            out[0].url, "https://www.rust-lang.org/",
+            "uddg-редирект развёрнут"
+        );
         assert_eq!(
             out[0].snippet,
             "A language empowering everyone to build reliable and efficient software.",
@@ -689,14 +799,17 @@ to build reliable and <b>efficient</b> software.</a>
     #[test]
     fn ddg_empty_html_yields_empty() {
         let parser = DdgParser::new().unwrap();
-        assert!(parser.parse("<html><body>no results</body></html>", 10).is_empty());
+        assert!(parser
+            .parse("<html><body>no results</body></html>", 10)
+            .is_empty());
         assert!(parser.parse("", 10).is_empty());
     }
 
     #[test]
     fn ddg_anchor_without_href_is_skipped() {
         let parser = DdgParser::new().unwrap();
-        let html = r#"<a class="result__a">No href</a><a class="result__a" href="https://ok/">Ok</a>"#;
+        let html =
+            r#"<a class="result__a">No href</a><a class="result__a" href="https://ok/">Ok</a>"#;
         let out = parser.parse(html, 10);
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].url, "https://ok/");
@@ -706,7 +819,10 @@ to build reliable and <b>efficient</b> software.</a>
     fn ddg_orphan_snippet_is_ignored() {
         let parser = DdgParser::new().unwrap();
         let html = r#"<a class="result__snippet" href="https://x/">lonely</a>"#;
-        assert!(parser.parse(html, 10).is_empty(), "сниппет без заголовка результата не создаёт");
+        assert!(
+            parser.parse(html, 10).is_empty(),
+            "сниппет без заголовка результата не создаёт"
+        );
     }
 
     // --- парсинг opensearch JSON ---
@@ -741,8 +857,14 @@ to build reliable and <b>efficient</b> software.</a>
     #[test]
     fn opensearch_malformed_json_errors() {
         assert!(parse_opensearch("not json", 10).is_err());
-        assert!(parse_opensearch(r#"{"a":1}"#, 10).is_err(), "объект вместо массива");
-        assert!(parse_opensearch(r#"["q"]"#, 10).is_err(), "нет массивов результатов");
+        assert!(
+            parse_opensearch(r#"{"a":1}"#, 10).is_err(),
+            "объект вместо массива"
+        );
+        assert!(
+            parse_opensearch(r#"["q"]"#, 10).is_err(),
+            "нет массивов результатов"
+        );
     }
 
     #[test]
@@ -757,15 +879,26 @@ to build reliable and <b>efficient</b> software.</a>
 
     #[test]
     fn percent_decode_roundtrip() {
-        assert_eq!(percent_decode("https%3A%2F%2Fexample.com%2Fa%20b"), "https://example.com/a b");
+        assert_eq!(
+            percent_decode("https%3A%2F%2Fexample.com%2Fa%20b"),
+            "https://example.com/a b"
+        );
         assert_eq!(percent_decode("plain+text"), "plain+text", "+ не трогаем");
         assert_eq!(percent_decode("100%"), "100%", "висячий % не паникует");
-        assert_eq!(percent_decode("%zz"), "%zz", "невалидный hex оставлен как есть");
+        assert_eq!(
+            percent_decode("%zz"),
+            "%zz",
+            "невалидный hex оставлен как есть"
+        );
     }
 
     #[test]
     fn html_unescape_order_is_safe() {
-        assert_eq!(html_unescape("&amp;lt;"), "&lt;", "двойная эскейпка разворачивается один раз");
+        assert_eq!(
+            html_unescape("&amp;lt;"),
+            "&lt;",
+            "двойная эскейпка разворачивается один раз"
+        );
         assert_eq!(html_unescape("&lt;b&gt;&amp;&quot;&#39;&nbsp;"), "<b>&\"' ");
     }
 

@@ -5,7 +5,7 @@
 use crate::api::{ApiClient, ChatResponse, Message, ToolCall};
 use crate::background::BgRegistry;
 use crate::config::{Config, HookConfig};
-use crate::hooks_ext::{HookEngine, HookMatcher, HookEvent as ExtHookEvent};
+use crate::hooks_ext::{HookEngine, HookEvent as ExtHookEvent, HookMatcher};
 use crate::mcp::McpRegistry;
 use crate::memory::Memory;
 use crate::permissions::{Decision, PermissionEngine};
@@ -18,8 +18,8 @@ use crate::trace::{SpanId, TraceRegistry};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 const SYSTEM_PROMPT: &str = r#"You are Тесей (Theseus) — an autonomous ML-engineering agent inside a TUI harness, created by Роман Некрасов. If asked who you are or who made you, answer exactly that.
@@ -91,7 +91,9 @@ impl Default for Controls {
             plan: Arc::new(AtomicBool::new(false)),
             goal_slot: Arc::new(Mutex::new(None)),
             prompt_slot: Arc::new(Mutex::new(crate::scheduler::PromptQueue::new())),
-            mode_atomic: Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_UNSET)),
+            mode_atomic: Arc::new(std::sync::atomic::AtomicU8::new(
+                crate::permissions::MODE_UNSET,
+            )),
             reset_session: Arc::new(AtomicBool::new(false)),
             bg_running: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             notes_slot: Arc::new(Mutex::new(Vec::new())),
@@ -165,7 +167,7 @@ pub struct Agent {
     /// единый движок хуков (V3 #2.2): PreToolUse/PostToolUse/UserPromptSubmit/
     /// PreCompact/PostCompact/SessionStart/SessionEnd/Notification/GoalSet
     hooks_ext: HookEngine,
-    /// rollout-трейсинг: реестр спанов сессии (JSONL-поток в .theseus/trace-<ts>.jsonl)
+    /// rollout-трейсинг: реестр спанов сессии (JSONL-поток в `.theseus/trace-<ts>.jsonl`)
     trace: TraceRegistry,
     skills: Vec<SkillSpec>,
     memory: Option<Memory>,
@@ -231,7 +233,9 @@ fn agents_md(workspace: &Path) -> Option<String> {
         let p = workspace.join(name);
         if p.exists() {
             let mut s = std::fs::read_to_string(&p).ok()?;
-            if s.len() > 32 * 1024 { s.truncate(32 * 1024); }
+            if s.len() > 32 * 1024 {
+                s.truncate(32 * 1024);
+            }
             return Some(s);
         }
     }
@@ -258,12 +262,18 @@ pub(crate) fn utc_date(ts: u64) -> String {
 /// Системный промпт через PromptBuilder (crate::prompts): base — прежний SYSTEM_PROMPT
 /// текстом без изменений, далее Environment, слои AGENTS.md (как раньше — только
 /// workspace AGENTS.md/CLAUDE.md), дайджест скиллов и цель (при goal-режиме).
-fn build_system_prompt(workspace: &Path, skills: &[SkillSpec], goal: Option<String>, date: &str) -> String {
+fn build_system_prompt(
+    workspace: &Path,
+    skills: &[SkillSpec],
+    goal: Option<String>,
+    date: &str,
+) -> String {
     let mut env = EnvContext::detect(date);
     // cwd процесса может отличаться от workspace агента — workspace важнее
     env.cwd = workspace.display().to_string();
     let md = agents_md(workspace).unwrap_or_default();
-    let digests: Vec<SkillDigest> = skills.iter()
+    let digests: Vec<SkillDigest> = skills
+        .iter()
         .map(|s| SkillDigest::new(s.name.as_str(), s.description.as_str()))
         .collect();
     PromptBuilder::new()
@@ -284,11 +294,17 @@ fn build_system_prompt(workspace: &Path, skills: &[SkillSpec], goal: Option<Stri
 fn build_hook_engine(hooks: &[HookConfig]) -> HookEngine {
     let mut specs = Vec::new();
     for h in hooks {
-        let Some(event) = ExtHookEvent::from_name(&h.event) else { continue };
+        let Some(event) = ExtHookEvent::from_name(&h.event) else {
+            continue;
+        };
         let pattern = (h.matcher != "*").then(|| format!("^{}$", regex::escape(&h.matcher)));
         // экранированный regex заведомо валиден — Err теоретически недостижим
-        if let Ok(m) = HookMatcher::new(event, pattern.as_deref(), &h.command,
-                                        std::time::Duration::from_secs(h.timeout_secs.max(1))) {
+        if let Ok(m) = HookMatcher::new(
+            event,
+            pattern.as_deref(),
+            &h.command,
+            std::time::Duration::from_secs(h.timeout_secs.max(1)),
+        ) {
             specs.push(m);
         }
     }
@@ -348,8 +364,13 @@ fn fingerprint(name: &str, args: &serde_json::Value) -> u64 {
 }
 
 impl Agent {
-    pub fn new(cfg: Config, perms: PermissionEngine, workspace: &Path,
-               max_turns: usize, events: Option<Sender<AgentEvent>>) -> Result<Self> {
+    pub fn new(
+        cfg: Config,
+        perms: PermissionEngine,
+        workspace: &Path,
+        max_turns: usize,
+        events: Option<Sender<AgentEvent>>,
+    ) -> Result<Self> {
         // уровень ризонинга из конфига применяем к extra_body один раз здесь —
         // дальше его пересобирают только switch_model и set_reasoning_effort
         let effort = crate::models::normalize_effort(&cfg.reasoning_effort).to_string();
@@ -365,18 +386,23 @@ impl Agent {
         let transcript_dir = workspace.join(".theseus");
         std::fs::create_dir_all(&transcript_dir).ok();
         let session_ts = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)?.as_secs();
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_secs();
         // rollout-трейсинг: JSONL-поток в .theseus/trace-<ts>.jsonl;
         // при ошибке открытия файла — реестр в памяти (трейсинг не роняет сессию)
-        let trace = TraceRegistry::with_jsonl(transcript_dir.join(format!("trace-{session_ts}.jsonl")))
-            .unwrap_or_else(|_| TraceRegistry::new());
+        let trace =
+            TraceRegistry::with_jsonl(transcript_dir.join(format!("trace-{session_ts}.jsonl")))
+                .unwrap_or_else(|_| TraceRegistry::new());
         // новый движок хуков поверх того же конфига (старый hooks.rs не трогаем)
         let hooks_ext = build_hook_engine(&cfg.hooks);
         // скиллы (v0.3): конфиг + дефолтные каталоги; "~" раскрываем в $HOME
-        let mut skill_dirs: Vec<PathBuf> = cfg.skill_dirs.iter()
+        let mut skill_dirs: Vec<PathBuf> = cfg
+            .skill_dirs
+            .iter()
             .map(|s| {
                 if let Some(rest) = s.strip_prefix("~/") {
-                    std::env::var("HOME").ok()
+                    std::env::var("HOME")
+                        .ok()
                         .map(|h| PathBuf::from(h).join(rest))
                         .unwrap_or_else(|| PathBuf::from(s))
                 } else {
@@ -390,7 +416,9 @@ impl Agent {
         }
         let skill_list = skills::discover(&skill_dirs);
         // память (v0.3)
-        let memory = std::env::var("HOME").ok().map(PathBuf::from)
+        let memory = std::env::var("HOME")
+            .ok()
+            .map(PathBuf::from)
             .map(|h| Memory::open(&h.join(".theseus")));
         let mut tool_env = ToolEnv::new(workspace);
         tool_env.sandbox = cfg.sandbox;
@@ -457,7 +485,7 @@ impl Agent {
     }
 
     /// Загрузить историю прежней сессии (resume в TUI из /resume N):
-    /// системный промпт обновится на следующем run() (ветка messages[0]
+    /// системный промпт обновится на следующем run() (ветка `messages[0]`
     /// в run_with), счётчики/детекторы хода не трогаем — они пер-задачные.
     pub fn load_history(&mut self, messages: Vec<Message>) {
         self.session_history = messages;
@@ -471,12 +499,24 @@ impl Agent {
     /// (models::apply_effort): kimi — срез (Kimi Code отвечает 400 на
     /// thinking без reasoning_content в истории), thinking-модели —
     /// enabled + effort, модели без thinking — чистое тело.
-    pub fn switch_model(&mut self, creds: &crate::models::Credentials, context_limit: usize)
-                        -> Result<()> {
+    pub fn switch_model(
+        &mut self,
+        creds: &crate::models::Credentials,
+        context_limit: usize,
+    ) -> Result<()> {
         self.sub.extra_body = crate::models::apply_effort(
-            &creds.model, std::mem::take(&mut self.sub.extra_body), &self.effort);
-        self.api = ApiClient::new(&creds.url, &creds.key, &creds.model,
-            self.sub.timeout_secs, self.sub.extra_body.clone(), self.sub.max_output_tokens)?;
+            &creds.model,
+            std::mem::take(&mut self.sub.extra_body),
+            &self.effort,
+        );
+        self.api = ApiClient::new(
+            &creds.url,
+            &creds.key,
+            &creds.model,
+            self.sub.timeout_secs,
+            self.sub.extra_body.clone(),
+            self.sub.max_output_tokens,
+        )?;
         self.model = creds.model.clone();
         self.context_limit = context_limit;
         self.sub.base_url = creds.url.clone();
@@ -492,34 +532,59 @@ impl Agent {
         let norm = crate::models::normalize_effort(effort);
         self.effort = norm.to_string();
         self.sub.extra_body = crate::models::apply_effort(
-            &self.model, std::mem::take(&mut self.sub.extra_body), norm);
-        self.api = ApiClient::new(&self.sub.base_url, &self.sub.api_key, &self.sub.model,
-            self.sub.timeout_secs, self.sub.extra_body.clone(), self.sub.max_output_tokens)?;
+            &self.model,
+            std::mem::take(&mut self.sub.extra_body),
+            norm,
+        );
+        self.api = ApiClient::new(
+            &self.sub.base_url,
+            &self.sub.api_key,
+            &self.sub.model,
+            self.sub.timeout_secs,
+            self.sub.extra_body.clone(),
+            self.sub.max_output_tokens,
+        )?;
         Ok(norm.to_string())
     }
 
     fn emit(&self, ev: AgentEvent) {
-        if let Some(tx) = &self.events { let _ = tx.send(ev.clone()); }
+        if let Some(tx) = &self.events {
+            let _ = tx.send(ev.clone());
+        }
         // транскрипт: события в JSONL (для внешнего аудита)
-        let f = self.transcript_dir.join(format!("events-{ts}.jsonl", ts = self.session_ts));
+        let f = self
+            .transcript_dir
+            .join(format!("events-{ts}.jsonl", ts = self.session_ts));
         use std::io::Write;
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(f) {
-            let _ = writeln!(f, "{}", serde_json::json!({"ts": std::time::SystemTime::now()
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(f)
+        {
+            let _ = writeln!(
+                f,
+                "{}",
+                serde_json::json!({"ts": std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0),
-                "event": format!("{:?}", ev)}));
+                "event": format!("{:?}", ev)})
+            );
         }
     }
 
     fn emit_accounting(&self) {
         let a = &self.api.accounting;
         self.emit(AgentEvent::Accounting {
-            calls: a.calls, prompt_t: a.prompt_tokens, completion_t: a.completion_tokens,
+            calls: a.calls,
+            prompt_t: a.prompt_tokens,
+            completion_t: a.completion_tokens,
         });
     }
 
     /// Снимок сессии (v0.3, урок Codex rollout): полные сообщения для --resume
     fn save_session(&self, messages: &[Message]) {
-        let f = self.transcript_dir.join(format!("session-{ts}.json", ts = self.session_ts));
+        let f = self
+            .transcript_dir
+            .join(format!("session-{ts}.json", ts = self.session_ts));
         let doc = serde_json::json!({
             "ts": self.session_ts,
             "workspace": self.workspace,
@@ -536,11 +601,14 @@ impl Agent {
         Ok(msgs)
     }
 
-
     /// Запуск хуков нового движка (hooks_ext) с заметками о сбоях в событиях TUI.
     /// Исходы не блокируют: блокировка определена только для PreToolUse, который
     /// продолжает обслуживать старый hooks.rs (обратная совместимость).
-    pub(crate) fn fire_ext(&self, ev: ExtHookEvent, payload: serde_json::Value) -> Vec<crate::hooks_ext::HookOutcome> {
+    pub(crate) fn fire_ext(
+        &self,
+        ev: ExtHookEvent,
+        payload: serde_json::Value,
+    ) -> Vec<crate::hooks_ext::HookOutcome> {
         let outcomes = self.hooks_ext.fire(ev, &payload.to_string());
         for o in &outcomes {
             let err = o.stderr.trim();
@@ -565,8 +633,14 @@ impl Agent {
     /// с тем же текстом, что и прежде; после двух отказов — «falling through».
     fn todo_gate(&mut self) -> Option<String> {
         let mut list = TodoList::new();
-        let items: Vec<GateTodoItem> = self.env.todos.iter().enumerate()
-            .map(|(i, t)| GateTodoItem::new(&format!("t{}", i + 1), &t.content, gate_status(&t.status)))
+        let items: Vec<GateTodoItem> = self
+            .env
+            .todos
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                GateTodoItem::new(&format!("t{}", i + 1), &t.content, gate_status(&t.status))
+            })
             .collect();
         // id сгенерированы уникальными и непустыми — валидация пройти обязана
         let _ = list.set_full(items);
@@ -587,19 +661,29 @@ impl Agent {
 
     /// autoDream-lite (v0.3): консолидация прочных фактов из сессии в память
     fn consolidate_memory(&mut self, messages: &[Message]) {
-        let Some(mem) = &self.memory else { return; };
-        if mem.fact_count() > 200 { return; }
+        let Some(mem) = &self.memory else {
+            return;
+        };
+        if mem.fact_count() > 200 {
+            return;
+        }
         // гейты по образцу Claude Code extractMemories (стоп-хук с пропусками):
         // 1) чистый разговор без инструментов — нечего запоминать (иначе MEMORY.md
         //    забивается фактами «пользователь спросил про GRPO» — живой урок);
         // 2) агент уже писал в память сам (memory_write) — взаимное исключение,
         //    повторная LLM-консолидация избыточна.
-        if !should_consolidate(messages) { return; }
-        let convo: String = messages.iter()
+        if !should_consolidate(messages) {
+            return;
+        }
+        let convo: String = messages
+            .iter()
             .filter_map(|m| m.content.as_deref())
-            .collect::<Vec<_>>().join("\n");
+            .collect::<Vec<_>>()
+            .join("\n");
         // порог в символах, не в байтах: кириллица даёт 2+ байта на символ (ревью 2.3/4)
-        if convo.chars().count() < 800 { return; }
+        if convo.chars().count() < 800 {
+            return;
+        }
         let prompt = vec![
             Message::system("Extract up to 5 durable facts about the USER or the PROJECT from this \
                 session that are worth remembering across sessions (preferences, environment facts, \
@@ -638,19 +722,22 @@ impl Agent {
         let mut verdicts: Vec<Option<String>> = Vec::with_capacity(calls.len());
         for c in calls {
             let name = &c.function.name;
-            let args: serde_json::Value = serde_json::from_str(&c.function.arguments)
-                .unwrap_or(serde_json::json!({}));
+            let args: serde_json::Value =
+                serde_json::from_str(&c.function.arguments).unwrap_or(serde_json::json!({}));
             let fp = fingerprint(name, &args);
             let verdict = if self.doom_warned.contains(&fp) {
                 Some("DENIED (doom-loop guard): идентичный вызов уже пропускался после предупреждения — измените подход".to_string())
             } else {
                 self.fp_window.push_back(fp);
-                if self.fp_window.len() > 20 { self.fp_window.pop_front(); }
+                if self.fp_window.len() > 20 {
+                    self.fp_window.pop_front();
+                }
                 let count = self.fp_window.iter().filter(|x| **x == fp).count();
                 if count >= 3 {
                     self.doom_warned.insert(fp);
                     self.emit(AgentEvent::HookNote(format!(
-                        "⚠ doom-loop: «{name}» ×{count} с одинаковыми аргументами (окно 20)")));
+                        "⚠ doom-loop: «{name}» ×{count} с одинаковыми аргументами (окно 20)"
+                    )));
                     Some(format!("[SYSTEM WARNING: doom loop suspected — «{name}» с теми же аргументами уже встречался {count} раз в окне 20. Вызов пропущен. Измените стратегию.]"))
                 } else {
                     None
@@ -669,8 +756,8 @@ impl Agent {
                 }
                 let name = c.function.name.clone();
                 let id = c.id.clone();
-                let args: serde_json::Value = serde_json::from_str(&c.function.arguments)
-                    .unwrap_or(serde_json::json!({}));
+                let args: serde_json::Value =
+                    serde_json::from_str(&c.function.arguments).unwrap_or(serde_json::json!({}));
                 let ws = workspace.clone();
                 handles.push(Some(s.spawn(move || {
                     let out = match name.as_str() {
@@ -682,20 +769,28 @@ impl Agent {
                     (id, out)
                 })));
             }
-            handles.into_iter().zip(calls.iter()).zip(&verdicts).map(|((h, c), verdict)| {
-                // паника в read-only потоке не должна валить агента (урок бага cap():
-                // join().unwrap() пробрасывал панику и убивал весь ход).
-                // id берём снаружи: при панике tool_call всё равно получает ответ,
-                // иначе DeepSeek вернёт 400 «insufficient tool messages».
-                match h {
-                    Some(h) => match h.join() {
-                        Ok(pair) => pair,
-                        Err(_) => (c.id.clone(), "ERROR: паника в параллельном read-only исполнении".to_string()),
-                    },
-                    // doom-вердикт: текст предупреждения вместо исполнения
-                    None => (c.id.clone(), verdict.clone().unwrap_or_default()),
-                }
-            }).collect()
+            handles
+                .into_iter()
+                .zip(calls.iter())
+                .zip(&verdicts)
+                .map(|((h, c), verdict)| {
+                    // паника в read-only потоке не должна валить агента (урок бага cap():
+                    // join().unwrap() пробрасывал панику и убивал весь ход).
+                    // id берём снаружи: при панике tool_call всё равно получает ответ,
+                    // иначе DeepSeek вернёт 400 «insufficient tool messages».
+                    match h {
+                        Some(h) => match h.join() {
+                            Ok(pair) => pair,
+                            Err(_) => (
+                                c.id.clone(),
+                                "ERROR: паника в параллельном read-only исполнении".to_string(),
+                            ),
+                        },
+                        // doom-вердикт: текст предупреждения вместо исполнения
+                        None => (c.id.clone(), verdict.clone().unwrap_or_default()),
+                    }
+                })
+                .collect()
         })
     }
 
@@ -715,8 +810,10 @@ impl Agent {
         // трейс-реестр привязан к файлу при создании агента — перепривязываем,
         // иначе спаны новой сессии уходили бы в trace-<старый ts>.jsonl
         self.trace = TraceRegistry::with_jsonl(
-            self.transcript_dir.join(format!("trace-{}.jsonl", self.session_ts)))
-            .unwrap_or_else(|_| TraceRegistry::new());
+            self.transcript_dir
+                .join(format!("trace-{}.jsonl", self.session_ts)),
+        )
+        .unwrap_or_else(|_| TraceRegistry::new());
         // пер-сессионные детекторы и счётчики — тоже с чистого листа
         self.fp_window.clear();
         self.doom_warned.clear();
@@ -739,7 +836,12 @@ impl Agent {
         // goal-режим: цель попадает в системный промпт секцией ## Goal (recency-эффект);
         // GoalState/hook выставляет run_with при своём разборе префикса
         let goal = user_prompt.strip_prefix("[GOAL] ").map(str::to_string);
-        let sys = build_system_prompt(&self.workspace, &self.skills, goal, &utc_date(self.session_ts));
+        let sys = build_system_prompt(
+            &self.workspace,
+            &self.skills,
+            goal,
+            &utc_date(self.session_ts),
+        );
         // история сессии (v0.5.7): продолжаем прошлый разговор, системный промпт
         // обновляем на месте (env/дата/goal могли измениться)
         if self.session_history.is_empty() {
@@ -756,8 +858,15 @@ impl Agent {
     /// resume (v0.3): продолжить из снимка сессии; снимок становится новой историей сессии
     pub fn run_resume(&mut self, mut messages: Vec<Message>, user_prompt: &str) -> Result<String> {
         if messages.is_empty() || messages[0].role != "system" {
-            messages.insert(0, Message::system(
-                build_system_prompt(&self.workspace, &self.skills, None, &utc_date(self.session_ts))));
+            messages.insert(
+                0,
+                Message::system(build_system_prompt(
+                    &self.workspace,
+                    &self.skills,
+                    None,
+                    &utc_date(self.session_ts),
+                )),
+            );
         }
         let out = self.run_with(&mut messages, user_prompt);
         // новый ход — обратно в историю сессии (баг: раньше resume терял его)
@@ -777,9 +886,17 @@ impl Agent {
         if content.is_none() && resp.tool_calls.is_empty() {
             return None;
         }
-        Some(Message::assistant(content,
-            if resp.tool_calls.is_empty() { None } else { Some(resp.tool_calls.clone()) })
-            .with_reasoning(resp.reasoning.clone()))
+        Some(
+            Message::assistant(
+                content,
+                if resp.tool_calls.is_empty() {
+                    None
+                } else {
+                    Some(resp.tool_calls.clone())
+                },
+            )
+            .with_reasoning(resp.reasoning.clone()),
+        )
     }
 
     /// Сборка сообщений прерванного преемпцией хода: частичный ответ ассистента
@@ -795,8 +912,10 @@ impl Agent {
         };
         let mut out = vec![head];
         for c in &resp.tool_calls {
-            out.push(Message::tool(c.id.clone(),
-                "[interrupted: preempted by user before execution]"));
+            out.push(Message::tool(
+                c.id.clone(),
+                "[interrupted: preempted by user before execution]",
+            ));
         }
         out
     }
@@ -809,7 +928,10 @@ impl Agent {
             let (tag, hint) = if d.priority == crate::scheduler::Priority::Immediate {
                 ("(вставка посреди хода)", "[user interjection mid-turn]")
             } else {
-                ("(из очереди)", "[user queued message while you were working]")
+                (
+                    "(из очереди)",
+                    "[user queued message while you were working]",
+                )
             };
             self.emit(AgentEvent::UserMsg(format!("{tag} {}", d.text)));
             messages.push(Message::user(format!("{hint} {}", d.text)));
@@ -837,10 +959,17 @@ impl Agent {
         let mut user_prompt = user_prompt.to_string();
         // /goal из TUI: "[GOAL] текст"
         if let Some(rest) = user_prompt.strip_prefix("[GOAL] ") {
-            self.goal = Some(GoalState { text: rest.to_string(), max_turns: 10, turns_used: 0, audit_sent: false });
+            self.goal = Some(GoalState {
+                text: rest.to_string(),
+                max_turns: 10,
+                turns_used: 0,
+                audit_sent: false,
+            });
             self.emit(AgentEvent::GoalSet(rest.to_string()));
             self.fire_ext(ExtHookEvent::GoalSet, serde_json::json!({"goal": rest}));
-            user_prompt = format!("The user set a GOAL for this session: {rest}. Work toward it; it will be audited.");
+            user_prompt = format!(
+                "The user set a GOAL for this session: {rest}. Work toward it; it will be audited."
+            );
         }
         // скиллы попали в системный промпт при сборке (build_system_prompt, секция Available skills)
         // контекстные заметки локальных команд (список /skill-search и т.п.) —
@@ -853,12 +982,22 @@ impl Agent {
         self.emit(AgentEvent::UserMsg(user_prompt.clone()));
         // Единый движок hooks_ext (V3 #2.2): SessionStart и UserPromptSubmit —
         // exit 2 хука блокирует промпт (семантика старого hooks.rs)
-        self.fire_ext(ExtHookEvent::SessionStart, serde_json::json!({"prompt": user_prompt}));
-        let submit = self.fire_ext(ExtHookEvent::UserPromptSubmit, serde_json::json!({"prompt": user_prompt}));
+        self.fire_ext(
+            ExtHookEvent::SessionStart,
+            serde_json::json!({"prompt": user_prompt}),
+        );
+        let submit = self.fire_ext(
+            ExtHookEvent::UserPromptSubmit,
+            serde_json::json!({"prompt": user_prompt}),
+        );
         let reason = crate::hooks_ext::block_reason(&submit);
         if !reason.is_empty() {
-            self.emit(AgentEvent::HookNote(format!("⛔ хук заблокировал промпт: {reason}")));
-            self.emit(AgentEvent::Error(format!("промпт заблокирован хуком: {reason}")));
+            self.emit(AgentEvent::HookNote(format!(
+                "⛔ хук заблокировал промпт: {reason}"
+            )));
+            self.emit(AgentEvent::Error(format!(
+                "промпт заблокирован хуком: {reason}"
+            )));
             return Ok(format!("промпт заблокирован хуком: {reason}"));
         }
 
@@ -915,27 +1054,39 @@ impl Agent {
                 let batch = initial_max;
                 let question = format!(
                     "⏱ достигнут лимит {} ходов. Продолжить ещё {} (потолок {})?",
-                    self.max_turns, batch, ceiling);
+                    self.max_turns, batch, ceiling
+                );
                 let allow = self.perm_answerer.as_mut().is_some_and(|f| f(&question));
                 if !allow {
                     break;
                 }
                 self.max_turns = (self.max_turns + batch).min(ceiling);
                 self.emit(AgentEvent::HookNote(format!(
-                    "▶ лимит ходов продлён до {} (потолок {})", self.max_turns, ceiling)));
+                    "▶ лимит ходов продлён до {} (потолок {})",
+                    self.max_turns, ceiling
+                )));
             }
         }
         self.emit_accounting();
         self.save_session(messages);
-        let err = format!("достигнут лимит ходов ({}) на ходе {}", self.max_turns, turn);
+        let err = format!(
+            "достигнут лимит ходов ({}) на ходе {}",
+            self.max_turns, turn
+        );
         self.emit(AgentEvent::Error(err.clone()));
         Ok(err)
     }
 
     /// Тело одного хода цикла run_with. Спан хода открыт/закрыт снаружи;
     /// вложенные спаны (api_call, tool_exec, compact) родительствуются к нему.
-    fn run_turn(&mut self, messages: &mut Vec<Message>, tools: &serde_json::Value,
-                turn: usize, t0: Instant, turn_span: SpanId) -> Result<TurnFlow> {
+    fn run_turn(
+        &mut self,
+        messages: &mut Vec<Message>,
+        tools: &serde_json::Value,
+        turn: usize,
+        t0: Instant,
+        turn_span: SpanId,
+    ) -> Result<TurnFlow> {
         // отмена пользователем (v0.3)
         if self.controls.abort.load(Ordering::Relaxed) {
             self.emit(AgentEvent::Error("прервано пользователем (Esc)".into()));
@@ -944,10 +1095,17 @@ impl Agent {
         }
         // /goal из слота TUI
         if let Some(text) = self.controls.goal_slot.lock().unwrap().take() {
-            self.goal = Some(GoalState { text: text.clone(), max_turns: 10, turns_used: 0, audit_sent: false });
+            self.goal = Some(GoalState {
+                text: text.clone(),
+                max_turns: 10,
+                turns_used: 0,
+                audit_sent: false,
+            });
             self.emit(AgentEvent::GoalSet(text.clone()));
             self.fire_ext(ExtHookEvent::GoalSet, serde_json::json!({"goal": text}));
-            messages.push(Message::user(format!("The user set a GOAL: {text}. Work toward it; it will be audited.")));
+            messages.push(Message::user(format!(
+                "The user set a GOAL: {text}. Work toward it; it will be audited."
+            )));
         }
         // пользовательские вставки посреди хода (библиотека: push-back — норма, SWE-chat 44%)
         self.drain_prompt_slot(messages);
@@ -964,7 +1122,9 @@ impl Agent {
                     match self.switch_model(&creds, limit) {
                         Ok(()) => {
                             self.emit(AgentEvent::HookNote(format!(
-                                "⚡ модель → {id} ({})", creds.url)));
+                                "⚡ модель → {id} ({})",
+                                creds.url
+                            )));
                             // egress-шлюз для провайдеров с явным прокси
                             // (OpenRouter): автозапуск vpn-egress, заметка —
                             // в статус TUI через тот же канал HookNote
@@ -973,11 +1133,13 @@ impl Agent {
                             }
                         }
                         Err(e) => self.emit(AgentEvent::Error(format!(
-                            "не удалось переключить модель на {id}: {e:#}"))),
+                            "не удалось переключить модель на {id}: {e:#}"
+                        ))),
                     }
                 }
                 Err(e) => self.emit(AgentEvent::Error(format!(
-                    "не удалось переключить модель на {id}: {e:#}"))),
+                    "не удалось переключить модель на {id}: {e:#}"
+                ))),
             }
         }
         // смена уровня ризонинга из TUI (/think): на границе хода, после
@@ -986,9 +1148,12 @@ impl Agent {
         if let Some(e) = effort_switch {
             match self.set_reasoning_effort(&e) {
                 Ok(norm) => self.emit(AgentEvent::HookNote(format!(
-                    "⚡ ризонинг → {}", crate::models::reasoning_label(&self.model, &norm)))),
+                    "⚡ ризонинг → {}",
+                    crate::models::reasoning_label(&self.model, &norm)
+                ))),
                 Err(err) => self.emit(AgentEvent::Error(format!(
-                    "не удалось сменить уровень ризонинга: {err:#}"))),
+                    "не удалось сменить уровень ризонинга: {err:#}"
+                ))),
             }
         }
         self.maybe_compact(messages, Some(turn_span))?;
@@ -996,15 +1161,26 @@ impl Agent {
         self.emit(AgentEvent::Status {
             turns: turn,
             est_tokens: est,
-            mode: format!("{:?}{}", self.perms.mode(),
-                if self.controls.plan.load(Ordering::Relaxed) { "+plan" } else { "" }),
+            mode: format!(
+                "{:?}{}",
+                self.perms.mode(),
+                if self.controls.plan.load(Ordering::Relaxed) {
+                    "+plan"
+                } else {
+                    ""
+                }
+            ),
         });
         // schema gating (OpenDev #3): в plan-режиме write-инструменты НЕВИДИМЫ, не заблокированы
         let mut turn_tools = tools.clone();
         if self.controls.plan.load(Ordering::Relaxed) {
             if let Some(arr) = turn_tools.as_array_mut() {
-                arr.retain(|t| !matches!(t["function"]["name"].as_str(),
-                    Some("write_file") | Some("edit_file") | Some("bash")));
+                arr.retain(|t| {
+                    !matches!(
+                        t["function"]["name"].as_str(),
+                        Some("write_file") | Some("edit_file") | Some("bash")
+                    )
+                });
             }
         }
         let events = self.events.clone();
@@ -1020,14 +1196,22 @@ impl Agent {
         // спан API-вызова: модель всегда, токены — при успехе, ошибка — при сбое
         let api_span = self.trace.open_span("api_call", Some(turn_span));
         self.trace.attr(api_span, "model", &self.model);
-        let resp = match self.api.chat_stream(messages, &turn_tools, &mut |chunk| {
-            if let Some(tx) = &events {
-                let _ = tx.send(AgentEvent::AgentTextDelta(chunk.to_string()));
-            }
-        }, &should_stop) {
+        let resp = match self.api.chat_stream(
+            messages,
+            &turn_tools,
+            &mut |chunk| {
+                if let Some(tx) = &events {
+                    let _ = tx.send(AgentEvent::AgentTextDelta(chunk.to_string()));
+                }
+            },
+            &should_stop,
+        ) {
             Ok(r) => {
-                self.trace.attr(api_span, "tokens",
-                    &format!("{}+{}", r.prompt_tokens, r.completion_tokens));
+                self.trace.attr(
+                    api_span,
+                    "tokens",
+                    &format!("{}+{}", r.prompt_tokens, r.completion_tokens),
+                );
                 self.trace.close_span(api_span);
                 r
             }
@@ -1039,16 +1223,20 @@ impl Agent {
                 let etext = format!("{e:#}").to_lowercase();
                 if is_context_overflow_error(&etext) {
                     self.emit(AgentEvent::HookNote(format!(
-                        "⤓ on-error триггер: L3 компактификация и повтор запроса ({e:#})")));
+                        "⤓ on-error триггер: L3 компактификация и повтор запроса ({e:#})"
+                    )));
                     // сперва гигантские tool-сообщения — L3 их в хвосте не тронет
                     let oversized = crate::agent::compact::mask_oversized_tool_outputs(messages);
                     if oversized > 0 {
                         self.emit(AgentEvent::HookNote(format!(
-                            "⤓ маскирование переразмера: {oversized} tool-сообщений (>32 КБ)")));
+                            "⤓ маскирование переразмера: {oversized} tool-сообщений (>32 КБ)"
+                        )));
                     }
                     // Pre/PostCompact — через hooks_ext (этот путь идёт мимо maybe_compact)
-                    self.fire_ext(ExtHookEvent::PreCompact,
-                        serde_json::json!({"trigger": "on-error", "level": "L3"}));
+                    self.fire_ext(
+                        ExtHookEvent::PreCompact,
+                        serde_json::json!({"trigger": "on-error", "level": "L3"}),
+                    );
                     let compacted = self.llm_compact(messages, Some(turn_span));
                     self.fire_ext(ExtHookEvent::PostCompact,
                         serde_json::json!({"trigger": "on-error", "level": "L3", "ok": compacted.is_ok()}));
@@ -1065,7 +1253,8 @@ impl Agent {
             let new_max = self.api.max_output() * 2;
             self.api.set_max_output(new_max);
             self.emit(AgentEvent::HookNote(format!(
-                "⇑ max_output ×2 → {new_max} (finish_reason=length, повтор запроса)")));
+                "⇑ max_output ×2 → {new_max} (finish_reason=length, повтор запроса)"
+            )));
             return Ok(TurnFlow::Continue);
         }
         if resp.aborted {
@@ -1097,7 +1286,9 @@ impl Agent {
                         *fires += 1;
                         messages.push(Message::user(
                             "REMINDER: ваш предыдущий ответ идентичен текущему — вы повторяетесь без прогресса. Измените подход или завершите задачу."));
-                        self.emit(AgentEvent::HookNote("⚠ doom-text: идентичный текст модели два хода подряд".into()));
+                        self.emit(AgentEvent::HookNote(
+                            "⚠ doom-text: идентичный текст модели два хода подряд".into(),
+                        ));
                     }
                 }
                 self.last_text_fp = fp;
@@ -1119,13 +1310,26 @@ impl Agent {
         }
 
         // v0.3: разделение на параллельные read-only и последовательные
-        let (ro_calls, serial_calls): (Vec<&ToolCall>, Vec<&ToolCall>) = resp.tool_calls.iter()
+        let (ro_calls, serial_calls): (Vec<&ToolCall>, Vec<&ToolCall>) = resp
+            .tool_calls
+            .iter()
             .partition(|c| is_readonly_tool(&c.function.name));
-        let mut ro_results: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut ro_results: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         if !ro_calls.is_empty() {
-            let allowed: Vec<&ToolCall> = ro_calls.iter().copied()
-                .filter(|c| matches!(self.decide(&c.function.name,
-                    &serde_json::from_str(&c.function.arguments).unwrap_or(serde_json::json!({}))), Decision::Allow))
+            let allowed: Vec<&ToolCall> = ro_calls
+                .iter()
+                .copied()
+                .filter(|c| {
+                    matches!(
+                        self.decide(
+                            &c.function.name,
+                            &serde_json::from_str(&c.function.arguments)
+                                .unwrap_or(serde_json::json!({}))
+                        ),
+                        Decision::Allow
+                    )
+                })
                 .collect();
             for (id, out) in self.parallel_readonly(&allowed) {
                 ro_results.insert(id, out);
@@ -1150,7 +1354,9 @@ impl Agent {
                         *fires += 1;
                         deferred_notes.push(
                             "REMINDER: много чтений подряд без продвижения — переходите к действию (анализ/план/правки) или к finish.".into());
-                        self.emit(AgentEvent::HookNote("⚠ exploration spiral: 5 read-only подряд — напоминание".into()));
+                        self.emit(AgentEvent::HookNote(
+                            "⚠ exploration spiral: 5 read-only подряд — напоминание".into(),
+                        ));
                     }
                 }
             } else {
@@ -1166,17 +1372,29 @@ impl Agent {
             }
             let out = if let Some(pre) = ro_results.remove(&call.id) {
                 self.trace.attr(tool_span, "decision", "Allow (parallel)");
-                self.emit(AgentEvent::ToolCall { name: call.function.name.clone(), args: call.function.arguments.clone(), decision: "Allow (parallel)".into() });
+                self.emit(AgentEvent::ToolCall {
+                    name: call.function.name.clone(),
+                    args: call.function.arguments.clone(),
+                    decision: "Allow (parallel)".into(),
+                });
                 let ok = !pre.starts_with("ERROR");
-                self.emit(AgentEvent::ToolResult { name: call.function.name.clone(), preview: pre.chars().take(200).collect(), ok });
+                self.emit(AgentEvent::ToolResult {
+                    name: call.function.name.clone(),
+                    preview: pre.chars().take(200).collect(),
+                    ok,
+                });
                 pre
             } else {
                 let out = self.execute(call);
                 // точное решение остаётся внутри execute (событие ToolCall);
                 // для спана выводим его по префиксу результата
-                let dec = if out.starts_with("DENIED") { "Deny" }
-                    else if out.starts_with("BLOCKED") { "Blocked (hook)" }
-                    else { "Allow" };
+                let dec = if out.starts_with("DENIED") {
+                    "Deny"
+                } else if out.starts_with("BLOCKED") {
+                    "Blocked (hook)"
+                } else {
+                    "Allow"
+                };
                 self.trace.attr(tool_span, "decision", dec);
                 out
             };
@@ -1212,18 +1430,22 @@ impl Agent {
             }
             self.emit(AgentEvent::Finished(summary.clone()));
             self.consolidate_memory(messages);
-            self.fire_ext(ExtHookEvent::SessionEnd, serde_json::json!({"summary": summary}));
+            self.fire_ext(
+                ExtHookEvent::SessionEnd,
+                serde_json::json!({"summary": summary}),
+            );
             self.emit_accounting();
             self.save_session(messages);
-            return Ok(TurnFlow::Done(format!("{summary}\n(ходов: {turn}, время: {:.0}s, API: {} вызовов, токены: {}+{})",
+            return Ok(TurnFlow::Done(format!(
+                "{summary}\n(ходов: {turn}, время: {:.0}s, API: {} вызовов, токены: {}+{})",
                 t0.elapsed().as_secs(),
                 self.api.accounting.calls,
                 self.api.accounting.prompt_tokens,
-                self.api.accounting.completion_tokens)));
+                self.api.accounting.completion_tokens
+            )));
         }
         Ok(TurnFlow::Continue)
     }
-
 }
 
 #[cfg(test)]
@@ -1278,16 +1500,25 @@ mod tests {
         // а не по дефолтному 0 (пустая регистрация: «задача 1 не найдена»)
         let out = agent.execute(&tool_call("c1", "task_output", r#"{"id": 1"#));
         assert!(out.contains("задача 1 не найдена"), "{out}");
-        assert!(!out.contains("задача 0 не найдена"), "фантомный дефолт: {out}");
-        assert!(out.contains("достроены харнессом"), "заметка для модели: {out}");
+        assert!(
+            !out.contains("задача 0 не найдена"),
+            "фантомный дефолт: {out}"
+        );
+        assert!(
+            out.contains("достроены харнессом"),
+            "заметка для модели: {out}"
+        );
         // мусор — честная ошибка без исполнения
         let out2 = agent.execute(&tool_call("c2", "task_output", "{id: garbage"));
         assert!(out2.starts_with("ERROR: невалидный JSON"), "{out2}");
         assert!(out2.contains("НЕ выполнен"), "{out2}");
         // write_file с оборванным content: файл записан, но модель получает
         // громкое предупреждение об усечении и рецепт записи частями
-        let out3 = agent.execute(&tool_call("c3", "write_file",
-            r#"{"path": "gen.py", "content": "print('start"#));
+        let out3 = agent.execute(&tool_call(
+            "c3",
+            "write_file",
+            r#"{"path": "gen.py", "content": "print('start"#,
+        ));
         assert!(out3.contains("УСЕЧЁН"), "{out3}");
         assert!(out3.contains("ЧАСТЯМИ"), "{out3}");
         let written = std::fs::read_to_string(ws.join("gen.py")).expect("файл записан");
@@ -1296,7 +1527,8 @@ mod tests {
 
     /// Рой субагентов: разбор аргументов swarm (валидация + дефолтный агент).
     #[test]
-    fn parse_swarm_tasks_validation() {        let reg = crate::agents::AgentRegistry::with_builtins();
+    fn parse_swarm_tasks_validation() {
+        let reg = crate::agents::AgentRegistry::with_builtins();
         let ok = execute::parse_swarm_tasks(
             &serde_json::json!({"tasks": [{"prompt": "разведать"}, {"agent": "plan", "prompt": "спланировать"}]}),
             &reg).expect("валидный рой");
@@ -1307,12 +1539,22 @@ mod tests {
         // пустой массив
         assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": []}), &reg).is_err());
         // переполнение (>8)
-        let many: Vec<serde_json::Value> = (0..9).map(|i| serde_json::json!({"prompt": i.to_string()})).collect();
+        let many: Vec<serde_json::Value> = (0..9)
+            .map(|i| serde_json::json!({"prompt": i.to_string()}))
+            .collect();
         assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": many}), &reg).is_err());
         // без prompt
-        assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": [{"agent": "plan"}]}), &reg).is_err());
+        assert!(execute::parse_swarm_tasks(
+            &serde_json::json!({"tasks": [{"agent": "plan"}]}),
+            &reg
+        )
+        .is_err());
         // неизвестный агент
-        assert!(execute::parse_swarm_tasks(&serde_json::json!({"tasks": [{"agent": "nope", "prompt": "x"}]}), &reg).is_err());
+        assert!(execute::parse_swarm_tasks(
+            &serde_json::json!({"tasks": [{"agent": "nope", "prompt": "x"}]}),
+            &reg
+        )
+        .is_err());
     }
 
     /// Рой: collect_bg_results дожидается всех задач, честно помечает таймаут
@@ -1320,28 +1562,40 @@ mod tests {
     #[test]
     fn collect_bg_results_waits_and_reports() {
         let mut bg = crate::background::BgRegistry::new();
-        let fast = bg.spawn_fn("fast".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| "быстрый ответ".to_string());
-        let slow = bg.spawn_fn("slow".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
-            std::thread::sleep(std::time::Duration::from_millis(400));
-            "медленный ответ".to_string()
-        });
-        let out = execute::collect_bg_results(&mut bg, &[fast, slow],
-            std::time::Duration::from_secs(5));
+        let fast = bg.spawn_fn(
+            "fast".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| "быстрый ответ".to_string(),
+        );
+        let slow = bg.spawn_fn(
+            "slow".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                "медленный ответ".to_string()
+            },
+        );
+        let out =
+            execute::collect_bg_results(&mut bg, &[fast, slow], std::time::Duration::from_secs(5));
         assert!(out.contains("быстрый ответ"), "{out}");
         assert!(out.contains("медленный ответ"), "{out}");
         assert!(!out.contains("не завершились"), "{out}");
         // таймаут: незавершившаяся помечается, результат можно добрать позже
         let mut bg2 = crate::background::BgRegistry::new();
-        let hang = bg2.spawn_fn("hang".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
-            std::thread::sleep(std::time::Duration::from_secs(3));
-            "поздний".to_string()
-        });
-        let out2 = execute::collect_bg_results(&mut bg2, &[hang],
-            std::time::Duration::from_millis(300));
+        let hang = bg2.spawn_fn(
+            "hang".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| {
+                std::thread::sleep(std::time::Duration::from_secs(3));
+                "поздний".to_string()
+            },
+        );
+        let out2 =
+            execute::collect_bg_results(&mut bg2, &[hang], std::time::Duration::from_millis(300));
         assert!(out2.contains("не завершились"), "{out2}");
         // несуществующий id — явная ошибка
-        let out3 = execute::collect_bg_results(&mut bg2, &[999],
-            std::time::Duration::from_millis(10));
+        let out3 =
+            execute::collect_bg_results(&mut bg2, &[999], std::time::Duration::from_millis(10));
         assert!(out3.contains("не найдена"), "{out3}");
     }
 
@@ -1352,13 +1606,17 @@ mod tests {
         let ws = temp_ws("skill_tool");
         let dir = ws.join("agent-sessions");
         std::fs::create_dir_all(&dir).expect("создать каталог скилла");
-        std::fs::write(dir.join("SKILL.md"),
-            "---\nname: agent-sessions\ndescription: про сессии\n---\n# Тело скилла сессий\n")
-            .expect("записать SKILL.md");
+        std::fs::write(
+            dir.join("SKILL.md"),
+            "---\nname: agent-sessions\ndescription: про сессии\n---\n# Тело скилла сессий\n",
+        )
+        .expect("записать SKILL.md");
         let mut agent = offline_agent(&ws);
         agent.skills = skills::discover(std::slice::from_ref(&ws));
         // подчёркивания нормализуются в дефисы: скилл найден, тело загружено
-        let out = agent.skill_invoked_as_tool("agent_sessions").expect("скилл подхвачен");
+        let out = agent
+            .skill_invoked_as_tool("agent_sessions")
+            .expect("скилл подхвачен");
         assert!(out.contains("а не инструмент"), "{out}");
         assert!(out.contains("agent-sessions"), "{out}");
         assert!(out.contains("Тело скилла сессий"), "{out}");
@@ -1376,14 +1634,20 @@ mod tests {
             "theseus_agent_test_{}_{}_{seq}_{tag}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0)
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or(0)
         ));
         std::fs::create_dir_all(&dir).expect("создать временный каталог теста");
         dir
     }
 
     fn skill_spec(name: &str, desc: &str) -> SkillSpec {
-        SkillSpec { name: name.into(), description: desc.into(), path: PathBuf::from("/tmp/SKILL.md") }
+        SkillSpec {
+            name: name.into(),
+            description: desc.into(),
+            path: PathBuf::from("/tmp/SKILL.md"),
+        }
     }
 
     #[test]
@@ -1410,7 +1674,10 @@ mod tests {
         assert!(out.contains(&format!("- CWD: {}", ws.display())));
         assert!(out.contains("## AGENTS.md"), "секция AGENTS.md: {out}");
         assert!(out.contains("ПРАВИЛА ВОРКСПЕЙСА 123"));
-        assert!(out.contains("## Available skills"), "дайджест скиллов: {out}");
+        assert!(
+            out.contains("## Available skills"),
+            "дайджест скиллов: {out}"
+        );
         assert!(out.contains("- demo-skill: тестовый скилл"));
         assert!(out.contains("## Goal"), "секция цели: {out}");
         assert!(out.contains("доделать задачу"));
@@ -1422,7 +1689,10 @@ mod tests {
             out.find("## Available skills").expect("skills"),
             out.find("## Goal").expect("goal"),
         ];
-        assert!(order.windows(2).all(|w| w[0] < w[1]), "порядок секций нарушен: {order:?}");
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "порядок секций нарушен: {order:?}"
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 
@@ -1430,10 +1700,22 @@ mod tests {
     fn system_prompt_minimal_skips_empty_sections() {
         let ws = temp_ws("minimal");
         let out = build_system_prompt(&ws, &[], None, "2026-07-18");
-        assert!(out.contains("ML-engineering agent"), "base всегда есть: {out}");
-        assert!(out.contains("## Environment"), "окружение есть всегда: {out}");
-        assert!(!out.contains("## AGENTS.md"), "нет файла — нет секции: {out}");
-        assert!(!out.contains("## Available skills"), "пустой список скиллов — нет секции: {out}");
+        assert!(
+            out.contains("ML-engineering agent"),
+            "base всегда есть: {out}"
+        );
+        assert!(
+            out.contains("## Environment"),
+            "окружение есть всегда: {out}"
+        );
+        assert!(
+            !out.contains("## AGENTS.md"),
+            "нет файла — нет секции: {out}"
+        );
+        assert!(
+            !out.contains("## Available skills"),
+            "пустой список скиллов — нет секции: {out}"
+        );
         assert!(!out.contains("## Goal"), "без цели — нет секции: {out}");
         std::fs::remove_dir_all(&ws).ok();
     }
@@ -1445,7 +1727,8 @@ mod tests {
             GateTodoItem::new("t1", "задача раз", TodoStatus::Done),
             GateTodoItem::new("t2", "задача два", TodoStatus::Pending),
             GateTodoItem::new("t3", "задача три", TodoStatus::InProgress),
-        ]).expect("валидные id");
+        ])
+        .expect("валидные id");
         let Err(reject) = list.gate_check("finish") else {
             panic!("незакрытые задачи обязаны давать GateReject");
         };
@@ -1463,9 +1746,15 @@ mod tests {
         let mut list = TodoList::new();
         list.set_full(vec![GateTodoItem::new("t1", "готово", TodoStatus::Done)])
             .expect("валидные id");
-        assert!(matches!(list.gate_check("finish"), Ok(crate::todo::GateVerdict::Allow)));
+        assert!(matches!(
+            list.gate_check("finish"),
+            Ok(crate::todo::GateVerdict::Allow)
+        ));
         // пустой список тоже пропускает finish
-        assert!(matches!(TodoList::new().gate_check("finish"), Ok(crate::todo::GateVerdict::Allow)));
+        assert!(matches!(
+            TodoList::new().gate_check("finish"),
+            Ok(crate::todo::GateVerdict::Allow)
+        ));
     }
 
     #[test]
@@ -1475,9 +1764,17 @@ mod tests {
         assert!(TodoStatus::Done.is_closed());
         assert_eq!(gate_status("in_progress"), TodoStatus::InProgress);
         assert_eq!(gate_status("pending"), TodoStatus::Pending);
-        assert_eq!(gate_status("cancelled"), TodoStatus::Cancelled, "cancelled — закрытая");
+        assert_eq!(
+            gate_status("cancelled"),
+            TodoStatus::Cancelled,
+            "cancelled — закрытая"
+        );
         assert!(gate_status("cancelled").is_closed());
-        assert_eq!(gate_status("мусор"), TodoStatus::Pending, "незнакомый статус — открытая");
+        assert_eq!(
+            gate_status("мусор"),
+            TodoStatus::Pending,
+            "незнакомый статус — открытая"
+        );
     }
 
     #[test]
@@ -1486,7 +1783,10 @@ mod tests {
             crate::api::ToolCall {
                 id: "c1".into(),
                 kind: "function".into(),
-                function: crate::api::ToolFunction { name: name.into(), arguments: "{}".into() },
+                function: crate::api::ToolFunction {
+                    name: name.into(),
+                    arguments: "{}".into(),
+                },
             }
         }
         // чистый разговор без инструментов — не консолидируем (анти-мусор в MEMORY.md)
@@ -1514,16 +1814,33 @@ mod tests {
     }
 
     #[test]
-    fn hook_engine_built_from_config_compat() {        let cfgs = vec![
-            HookConfig { event: "SessionStart".into(), matcher: "*".into(),
-                         command: "echo start".into(), timeout_secs: 5 },
-            HookConfig { event: "PreCompact".into(), matcher: "*".into(),
-                         command: "echo pre".into(), timeout_secs: 0 },
-            HookConfig { event: "PreToolUse".into(), matcher: "bash".into(),
-                         command: "echo tool".into(), timeout_secs: 5 },
+    fn hook_engine_built_from_config_compat() {
+        let cfgs = vec![
+            HookConfig {
+                event: "SessionStart".into(),
+                matcher: "*".into(),
+                command: "echo start".into(),
+                timeout_secs: 5,
+            },
+            HookConfig {
+                event: "PreCompact".into(),
+                matcher: "*".into(),
+                command: "echo pre".into(),
+                timeout_secs: 0,
+            },
+            HookConfig {
+                event: "PreToolUse".into(),
+                matcher: "bash".into(),
+                command: "echo tool".into(),
+                timeout_secs: 5,
+            },
             // единый движок (V3 #2.2): UserPromptSubmit теперь тоже включается
-            HookConfig { event: "UserPromptSubmit".into(), matcher: "*".into(),
-                         command: "echo submit".into(), timeout_secs: 5 },
+            HookConfig {
+                event: "UserPromptSubmit".into(),
+                matcher: "*".into(),
+                command: "echo submit".into(),
+                timeout_secs: 5,
+            },
         ];
         let engine = build_hook_engine(&cfgs);
         let m = engine.matchers();
@@ -1531,7 +1848,10 @@ mod tests {
         assert_eq!(m[0].event, ExtHookEvent::SessionStart);
         assert_eq!(m[1].event, ExtHookEvent::PreCompact);
         assert_eq!(m[3].event, ExtHookEvent::UserPromptSubmit);
-        assert!(m[0].tool_pattern.is_none(), "* — без фильтра по инструменту");
+        assert!(
+            m[0].tool_pattern.is_none(),
+            "* — без фильтра по инструменту"
+        );
         // matcher "bash" → точное совпадение, не подстрока
         assert!(m[2].matches_tool(Some("bash")));
         assert!(!m[2].matches_tool(Some("bashful")));
@@ -1576,7 +1896,8 @@ mod tests {
             compact_summary_pct: 95,
             reasoning_effort: "high".into(),
         };
-        let perms = PermissionEngine::new(crate::permissions::Mode::Yolo, cfg.permission.clone(), ws);
+        let perms =
+            PermissionEngine::new(crate::permissions::Mode::Yolo, cfg.permission.clone(), ws);
         Agent::new(cfg, perms, ws, 4, None).expect("агент создаётся")
     }
 
@@ -1584,7 +1905,10 @@ mod tests {
         crate::api::ToolCall {
             id: id.into(),
             kind: "function".into(),
-            function: crate::api::ToolFunction { name: name.into(), arguments: arguments.into() },
+            function: crate::api::ToolFunction {
+                name: name.into(),
+                arguments: arguments.into(),
+            },
         }
     }
 
@@ -1605,7 +1929,10 @@ mod tests {
                 break;
             }
         }
-        assert!(!saw_doom, "поллинг task_output не должен попадать под doom guard");
+        assert!(
+            !saw_doom,
+            "поллинг task_output не должен попадать под doom guard"
+        );
         // контроль: read_file с теми же аргументами по-прежнему ловится
         let rd = tool_call("c2", "read_file", r#"{"path":"x.txt"}"#);
         let mut doom_on_read = false;
@@ -1636,24 +1963,46 @@ mod tests {
         // контракт tool messages: каждый id получил ровно один ответ, порядок сохранён
         assert_eq!(out.len(), 5, "ответ на каждый вызов батча");
         for (i, (id, _)) in out.iter().enumerate() {
-            assert_eq!(id, &format!("c{}", i + 1), "порядок ответов соответствует вызовам");
+            assert_eq!(
+                id,
+                &format!("c{}", i + 1),
+                "порядок ответов соответствует вызовам"
+            );
         }
         // первые два исполняются честно
         assert!(out[0].1.contains("содержимое файла"), "1-й: {}", out[0].1);
         assert!(out[1].1.contains("содержимое файла"), "2-й: {}", out[1].1);
         // doom срабатывает на 3-м (окно 20, ≥3 идентичных)
-        assert!(out[2].1.contains("doom loop suspected"), "3-й: {}", out[2].1);
+        assert!(
+            out[2].1.contains("doom loop suspected"),
+            "3-й: {}",
+            out[2].1
+        );
         // после предупреждения идентичные вызовы отклоняются
-        assert!(out[3].1.starts_with("DENIED (doom-loop guard)"), "4-й: {}", out[3].1);
-        assert!(out[4].1.starts_with("DENIED (doom-loop guard)"), "5-й: {}", out[4].1);
+        assert!(
+            out[3].1.starts_with("DENIED (doom-loop guard)"),
+            "4-й: {}",
+            out[3].1
+        );
+        assert!(
+            out[4].1.starts_with("DENIED (doom-loop guard)"),
+            "5-й: {}",
+            out[4].1
+        );
         // окно общее с execute(): серийный повтор тех же аргументов сразу DENIED
         let again = tool_call("c6", "read_file", r#"{"path":"a.txt"}"#);
-        assert!(agent.execute(&again).starts_with("DENIED (doom-loop guard)"),
-            "execute() видит fingerprint из параллельного батча");
+        assert!(
+            agent
+                .execute(&again)
+                .starts_with("DENIED (doom-loop guard)"),
+            "execute() видит fingerprint из параллельного батча"
+        );
         // а вызов с ДРУГИМИ аргументами по-прежнему исполняется
         let other = tool_call("c7", "read_file", r#"{"path":"b.txt"}"#);
-        assert!(!agent.execute(&other).starts_with("DENIED"),
-            "неидентичный вызов не задет гардом");
+        assert!(
+            !agent.execute(&other).starts_with("DENIED"),
+            "неидентичный вызов не задет гардом"
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 
@@ -1676,14 +2025,18 @@ mod tests {
         agent.output_escalated = true;
         agent.l3_futile = true;
         agent.env.todos.push(crate::tools::TodoItem {
-            content: "задача".into(), status: "pending".into() });
+            content: "задача".into(),
+            status: "pending".into(),
+        });
 
         agent.reset_session_state();
 
         assert_ne!(agent.session_ts, old_ts, "новая метка времени сессии");
         assert!(agent.session_history.is_empty(), "история очищена");
-        assert!(agent.fp_window.is_empty() && agent.doom_warned.is_empty(),
-            "fingerprint-детекторы сброшены");
+        assert!(
+            agent.fp_window.is_empty() && agent.doom_warned.is_empty(),
+            "fingerprint-детекторы сброшены"
+        );
         assert_eq!(agent.spiral_reads, 0);
         assert_eq!(agent.last_prompt, 0);
         assert_eq!(agent.todo_rejections, 0);
@@ -1692,14 +2045,26 @@ mod tests {
         assert!(agent.env.todos.is_empty(), "туду-лист очищен");
         // файлы транскрипта новой сессии: trace-<новый ts>.jsonl создан
         let dir = ws.join(".theseus");
-        assert!(dir.join(format!("trace-{}.jsonl", agent.session_ts)).exists(),
-            "трейс перепривязан к файлу новой сессии");
-        assert!(dir.join(format!("trace-{old_ts}.jsonl")).exists(),
-            "старый трейс-файл не удалён (аудит прежней сессии)");
+        assert!(
+            dir.join(format!("trace-{}.jsonl", agent.session_ts))
+                .exists(),
+            "трейс перепривязан к файлу новой сессии"
+        );
+        assert!(
+            dir.join(format!("trace-{old_ts}.jsonl")).exists(),
+            "старый трейс-файл не удалён (аудит прежней сессии)"
+        );
         // события пишутся уже в events-файл новой сессии
-        agent.emit(AgentEvent::Status { turns: 1, est_tokens: 10, mode: "test".into() });
-        assert!(dir.join(format!("events-{}.jsonl", agent.session_ts)).exists(),
-            "events-файл новой сессии создан");
+        agent.emit(AgentEvent::Status {
+            turns: 1,
+            est_tokens: 10,
+            mode: "test".into(),
+        });
+        assert!(
+            dir.join(format!("events-{}.jsonl", agent.session_ts))
+                .exists(),
+            "events-файл новой сессии создан"
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 
@@ -1712,23 +2077,54 @@ mod tests {
         let mut agent = offline_agent(&ws);
         use crate::scheduler::{Priority, PromptSource, QueuedPrompt};
         // специально пушим Normal первой: Immediate всё равно выйдет раньше
-        agent.controls.prompt_slot.lock().unwrap().push(QueuedPrompt::new(
-            "дополни после хода", Priority::Normal, PromptSource::User));
-        agent.controls.prompt_slot.lock().unwrap().push(QueuedPrompt::new(
-            "стоп, срочно", Priority::Immediate, PromptSource::User));
+        agent
+            .controls
+            .prompt_slot
+            .lock()
+            .unwrap()
+            .push(QueuedPrompt::new(
+                "дополни после хода",
+                Priority::Normal,
+                PromptSource::User,
+            ));
+        agent
+            .controls
+            .prompt_slot
+            .lock()
+            .unwrap()
+            .push(QueuedPrompt::new(
+                "стоп, срочно",
+                Priority::Immediate,
+                PromptSource::User,
+            ));
 
         let mut messages = Vec::new();
         agent.drain_prompt_slot(&mut messages);
 
         assert_eq!(messages.len(), 2, "обе вставки влиты: {messages:?}");
-        assert!(agent.controls.prompt_slot.lock().unwrap().is_empty(), "очередь пуста");
+        assert!(
+            agent.controls.prompt_slot.lock().unwrap().is_empty(),
+            "очередь пуста"
+        );
         assert_eq!(messages[0].role, "user");
-        assert!(messages[0].content.as_deref().unwrap_or("")
-            .contains("[user interjection mid-turn] стоп, срочно"),
-            "Immediate первая и с пометкой interjection: {:?}", messages[0].content);
-        assert!(messages[1].content.as_deref().unwrap_or("")
-            .contains("[user queued message while you were working] дополни после хода"),
-            "Normal вторая и с пометкой queued: {:?}", messages[1].content);
+        assert!(
+            messages[0]
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("[user interjection mid-turn] стоп, срочно"),
+            "Immediate первая и с пометкой interjection: {:?}",
+            messages[0].content
+        );
+        assert!(
+            messages[1]
+                .content
+                .as_deref()
+                .unwrap_or("")
+                .contains("[user queued message while you were working] дополни после хода"),
+            "Normal вторая и с пометкой queued: {:?}",
+            messages[1].content
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 
@@ -1751,14 +2147,23 @@ mod tests {
         assert_eq!(msgs[1].role, "tool");
         assert_eq!(msgs[1].tool_call_id.as_deref(), Some("c1"));
         assert_eq!(msgs[2].tool_call_id.as_deref(), Some("c2"));
-        assert!(msgs[1].content.as_deref().unwrap_or("").contains("interrupted"));
+        assert!(msgs[1]
+            .content
+            .as_deref()
+            .unwrap_or("")
+            .contains("interrupted"));
         // обрыв в фазе thinking (ни контента, ни вызовов) — assistant-реплики нет
         // вовсе: DeepSeek отвергает пустое assistant (400 «content or tool_calls
         // must be set», живой тест 19.07)
         assert!(Agent::preempted_turn_messages(&ChatResponse::default()).is_empty());
-        let empty_text = ChatResponse { content: Some(String::new()), ..Default::default() };
-        assert!(Agent::preempted_turn_messages(&empty_text).is_empty(),
-            "пустая строка контента — тоже «ничего»");
+        let empty_text = ChatResponse {
+            content: Some(String::new()),
+            ..Default::default()
+        };
+        assert!(
+            Agent::preempted_turn_messages(&empty_text).is_empty(),
+            "пустая строка контента — тоже «ничего»"
+        );
     }
 
     /// История не принимает пустые assistant-сообщения (баг 26.07): ответ
@@ -1769,10 +2174,16 @@ mod tests {
         // reasoning-only ответ — сообщения нет вовсе
         assert!(Agent::assistant_history_message(&ChatResponse::default()).is_none());
         // пустая строка контента — тоже «пусто»
-        let empty_text = ChatResponse { content: Some(String::new()), ..Default::default() };
+        let empty_text = ChatResponse {
+            content: Some(String::new()),
+            ..Default::default()
+        };
         assert!(Agent::assistant_history_message(&empty_text).is_none());
         // нормальный текст — есть сообщение с контентом
-        let text = ChatResponse { content: Some("ответ".into()), ..Default::default() };
+        let text = ChatResponse {
+            content: Some("ответ".into()),
+            ..Default::default()
+        };
         let msg = Agent::assistant_history_message(&text).expect("текст обязан дать сообщение");
         assert_eq!(msg.role, "assistant");
         assert_eq!(msg.content.as_deref(), Some("ответ"));
@@ -1792,7 +2203,8 @@ mod tests {
             tool_calls: vec![tool_call("c2", "grep", r#"{"pattern":"x"}"#)],
             ..Default::default()
         };
-        let msg = Agent::assistant_history_message(&empty_text_tools).expect("тулы — валидная реплика");
+        let msg =
+            Agent::assistant_history_message(&empty_text_tools).expect("тулы — валидная реплика");
         assert!(msg.content.is_none(), "пустой контент не уходит в историю");
         assert_eq!(msg.tool_calls.as_ref().map(Vec::len), Some(1));
     }
@@ -1808,9 +2220,15 @@ mod tests {
             ..Default::default()
         };
         let msg = Agent::assistant_history_message(&resp).expect("реплика есть");
-        assert_eq!(msg.reasoning_content.as_deref(), Some("цепочка рассуждений"));
+        assert_eq!(
+            msg.reasoning_content.as_deref(),
+            Some("цепочка рассуждений")
+        );
         // без reasoning — поле отсутствует (None), история не раздувается
-        let bare = ChatResponse { content: Some("ответ".into()), ..Default::default() };
+        let bare = ChatResponse {
+            content: Some("ответ".into()),
+            ..Default::default()
+        };
         let msg = Agent::assistant_history_message(&bare).expect("реплика есть");
         assert!(msg.reasoning_content.is_none());
         // reasoning + тулы (типичный interleaved-кадр) — и то, и другое на месте
@@ -1831,12 +2249,16 @@ mod tests {
     #[test]
     fn context_overflow_error_detection() {
         assert!(is_context_overflow_error(
-            "api ответил ошибкой без ретрая: http 413: <html> 413 request entity too large"));
-        assert!(is_context_overflow_error("http 400: context length exceeded"));
+            "api ответил ошибкой без ретрая: http 413: <html> 413 request entity too large"
+        ));
+        assert!(is_context_overflow_error(
+            "http 400: context length exceeded"
+        ));
         assert!(is_context_overflow_error("maximum context window tokens"));
         assert!(is_context_overflow_error("payload too large"));
         assert!(!is_context_overflow_error(
-            "http 400: invalid assistant message: content or tool_calls must be set"));
+            "http 400: invalid assistant message: content or tool_calls must be set"
+        ));
         assert!(!is_context_overflow_error("http 401: unauthorized"));
         assert!(!is_context_overflow_error("таймаут соединения"));
     }

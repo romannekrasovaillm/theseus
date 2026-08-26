@@ -105,7 +105,10 @@ impl RawRelease {
 /// отличать битый JSON от честно пустого списка релизов.
 fn try_parse_releases(json: &str) -> Result<Vec<ReleaseInfo>, serde_json::Error> {
     let raw: Vec<RawRelease> = serde_json::from_str(json)?;
-    Ok(raw.into_iter().filter_map(RawRelease::into_release_info).collect())
+    Ok(raw
+        .into_iter()
+        .filter_map(RawRelease::into_release_info)
+        .collect())
 }
 
 /// Разобрать ответ GitHub releases API в список пригодных релизов.
@@ -211,9 +214,9 @@ pub fn check_against(current_str: &str, releases_json: &str) -> UpdateVerdict {
         return UpdateVerdict::ParseError;
     };
     match latest_stable(&releases) {
-        Some(info) if is_newer(&current, &info.version) => UpdateVerdict::NewerAvailable {
-            info: info.clone(),
-        },
+        Some(info) if is_newer(&current, &info.version) => {
+            UpdateVerdict::NewerAvailable { info: info.clone() }
+        }
         _ => UpdateVerdict::UpToDate,
     }
 }
@@ -310,12 +313,7 @@ mod tests {
             .collect();
         assert_eq!(
             versions,
-            [
-                v("0.3.2-beta.1"),
-                v("0.3.1"),
-                v("0.3.0"),
-                v("0.2.0")
-            ]
+            [v("0.3.2-beta.1"), v("0.3.1"), v("0.3.0"), v("0.2.0")]
         );
     }
 
@@ -324,10 +322,7 @@ mod tests {
     #[test]
     fn parse_fixture_maps_fields_and_tolerates_missing() {
         let releases = parse_releases_json(FIXTURE);
-        let r031 = releases
-            .iter()
-            .find(|r| r.version == v("0.3.1"))
-            .unwrap();
+        let r031 = releases.iter().find(|r| r.version == v("0.3.1")).unwrap();
         assert_eq!(
             r031.notes,
             "Исправления: враппинг в TUI, гонка в планировщике"
@@ -337,10 +332,7 @@ mod tests {
             "https://github.com/example/theseus/releases/tag/v0.3.1"
         );
 
-        let r020 = releases
-            .iter()
-            .find(|r| r.version == v("0.2.0"))
-            .unwrap();
+        let r020 = releases.iter().find(|r| r.version == v("0.2.0")).unwrap();
         assert!(r020.notes.is_empty());
         assert!(r020.url.is_empty());
     }
@@ -377,10 +369,7 @@ mod tests {
     #[test]
     fn parse_broken_json_is_empty_list() {
         for json in ["", "{не-json", "null", "{}", "[1, 2, 3]", "[\"x\"]"] {
-            assert!(
-                parse_releases_json(json).is_empty(),
-                "вход: «{json}»"
-            );
+            assert!(parse_releases_json(json).is_empty(), "вход: «{json}»");
         }
     }
 

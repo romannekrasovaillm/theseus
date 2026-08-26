@@ -387,17 +387,33 @@ pub fn wrap_command(spec: &BwrapSpec, argv: &[String]) -> Vec<String> {
     }
     args.extend(
         [
-            "--ro-bind", "/", "/", "--dev", "/dev", "--proc", "/proc", "--tmpfs", "/tmp",
+            "--ro-bind",
+            "/",
+            "/",
+            "--dev",
+            "/dev",
+            "--proc",
+            "/proc",
+            "--tmpfs",
+            "/tmp",
         ]
         .map(str::to_string),
     );
     for path in &spec.rw_binds {
         let rendered = path.to_string_lossy();
-        args.extend(["--bind".to_string(), rendered.to_string(), rendered.to_string()]);
+        args.extend([
+            "--bind".to_string(),
+            rendered.to_string(),
+            rendered.to_string(),
+        ]);
     }
     for path in &spec.ro_binds {
         let rendered = path.to_string_lossy();
-        args.extend(["--ro-bind".to_string(), rendered.to_string(), rendered.to_string()]);
+        args.extend([
+            "--ro-bind".to_string(),
+            rendered.to_string(),
+            rendered.to_string(),
+        ]);
     }
     // Урок Codex: свежий user namespace всегда, иначе root внутри контейнера
     // не сможет unshare остальные namespace без ambient CAP_SYS_ADMIN.
@@ -512,8 +528,8 @@ fn landlock_probe_child() -> bool {
 /// на любой машине (проверено: `AccessFs::from_read` включает `Execute`).
 fn enforce_landlock_minimal() -> Result<(), String> {
     use landlock::{
-        ABI, Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
-        RulesetStatus,
+        Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
+        RulesetStatus, ABI,
     };
     let abi = ABI::V1;
     let rw = AccessFs::from_all(abi);
@@ -579,13 +595,19 @@ mod tests {
             .ro_bind("/a/x")
             .build()
             .unwrap();
-        assert_eq!(spec.rw_binds, vec![PathBuf::from("/a"), PathBuf::from("/b")]);
+        assert_eq!(
+            spec.rw_binds,
+            vec![PathBuf::from("/a"), PathBuf::from("/b")]
+        );
         assert_eq!(spec.ro_binds, vec![PathBuf::from("/a/x")]);
     }
 
     #[test]
     fn builder_rejects_relative_paths() {
-        let err = BwrapSpec::builder().ro_bind("relative/dir").build().unwrap_err();
+        let err = BwrapSpec::builder()
+            .ro_bind("relative/dir")
+            .build()
+            .unwrap_err();
         assert_eq!(err, BwrapError::NotAbsolute(PathBuf::from("relative/dir")));
         let err = BwrapSpec::builder().rw_bind("rel").build().unwrap_err();
         assert!(matches!(err, BwrapError::NotAbsolute(_)));
@@ -593,7 +615,11 @@ mod tests {
 
     #[test]
     fn builder_rejects_exact_ro_rw_overlap() {
-        let err = BwrapSpec::builder().ro_bind("/x").rw_bind("/x").build().unwrap_err();
+        let err = BwrapSpec::builder()
+            .ro_bind("/x")
+            .rw_bind("/x")
+            .build()
+            .unwrap_err();
         match err {
             BwrapError::RoRwOverlap { ro, rw } => {
                 assert_eq!(ro, PathBuf::from("/x"));
@@ -606,16 +632,28 @@ mod tests {
     #[test]
     fn builder_rejects_rw_under_ro() {
         // ro-бинд применится позже и скроет rw-подпуть — это ошибка конфига
-        let err = BwrapSpec::builder().ro_bind("/a").rw_bind("/a/b").build().unwrap_err();
+        let err = BwrapSpec::builder()
+            .ro_bind("/a")
+            .rw_bind("/a/b")
+            .build()
+            .unwrap_err();
         assert!(matches!(err, BwrapError::RoRwOverlap { .. }));
     }
 
     #[test]
     fn builder_allows_ro_carveout_under_rw() {
         // обратное вложение — легальный ro-вырез (как .git внутри workspace)
-        BwrapSpec::builder().rw_bind("/a").ro_bind("/a/b").build().unwrap();
+        BwrapSpec::builder()
+            .rw_bind("/a")
+            .ro_bind("/a/b")
+            .build()
+            .unwrap();
         // и совсем непересекающиеся ветки
-        BwrapSpec::builder().rw_bind("/x").ro_bind("/y").build().unwrap();
+        BwrapSpec::builder()
+            .rw_bind("/x")
+            .ro_bind("/y")
+            .build()
+            .unwrap();
     }
 
     #[test]
@@ -681,7 +719,10 @@ mod tests {
         let cmd = wrap_command(&ws_spec(), &["true".to_string()]);
         let pos = |needle: &str| cmd.iter().position(|a| a == needle).unwrap();
         // порядок аргументов = порядок монтирования: rw раньше ro-выреза
-        assert!(pos("/ws") < pos("/ws/.git"), "rw-бинд должен идти раньше ro");
+        assert!(
+            pos("/ws") < pos("/ws/.git"),
+            "rw-бинд должен идти раньше ro"
+        );
         // и всё это — после базового дерева
         assert!(pos("/tmp") < pos("/ws"));
     }
@@ -699,7 +740,10 @@ mod tests {
         assert_eq!(parse_version("bubblewrap 1.2"), Some((1, 2, 0)));
         assert_eq!(parse_version("1.0.0"), Some((1, 0, 0)));
         assert_eq!(parse_version("bubblewrap 0.10.1-rc1"), Some((0, 10, 1)));
-        assert_eq!(parse_version("  bwrap версия 2.0.0 сборка 5"), Some((2, 0, 0)));
+        assert_eq!(
+            parse_version("  bwrap версия 2.0.0 сборка 5"),
+            Some((2, 0, 0))
+        );
     }
 
     #[test]
@@ -752,11 +796,26 @@ mod tests {
             fallback_plan(BwrapStatus::Available, true),
             SandboxPlan::BwrapPlusLandlock
         );
-        assert_eq!(fallback_plan(BwrapStatus::Available, false), SandboxPlan::BwrapOnly);
-        assert_eq!(fallback_plan(BwrapStatus::Missing, true), SandboxPlan::LandlockOnly);
-        assert_eq!(fallback_plan(BwrapStatus::NoUserNs, true), SandboxPlan::LandlockOnly);
-        assert_eq!(fallback_plan(BwrapStatus::Missing, false), SandboxPlan::Unprotected);
-        assert_eq!(fallback_plan(BwrapStatus::NoUserNs, false), SandboxPlan::Unprotected);
+        assert_eq!(
+            fallback_plan(BwrapStatus::Available, false),
+            SandboxPlan::BwrapOnly
+        );
+        assert_eq!(
+            fallback_plan(BwrapStatus::Missing, true),
+            SandboxPlan::LandlockOnly
+        );
+        assert_eq!(
+            fallback_plan(BwrapStatus::NoUserNs, true),
+            SandboxPlan::LandlockOnly
+        );
+        assert_eq!(
+            fallback_plan(BwrapStatus::Missing, false),
+            SandboxPlan::Unprotected
+        );
+        assert_eq!(
+            fallback_plan(BwrapStatus::NoUserNs, false),
+            SandboxPlan::Unprotected
+        );
     }
 
     #[test]
@@ -795,9 +854,11 @@ mod tests {
             eprintln!("пропуск: bwrap недоступен на этой машине");
             return;
         }
-        let status =
-            run_wrapped(&BwrapSpec::default(), &["echo".to_string(), "sandbox-ok".to_string()])
-                .unwrap();
+        let status = run_wrapped(
+            &BwrapSpec::default(),
+            &["echo".to_string(), "sandbox-ok".to_string()],
+        )
+        .unwrap();
         assert!(status.success(), "echo под bwrap должен отработать");
         // и с отрезанной сетью процесс тоже обязан запускаться
         let net_spec = BwrapSpec::builder().unshare_net(true).build().unwrap();
@@ -826,7 +887,10 @@ mod tests {
         // запись вне rw-биндов блокируется ro-корнем
         let status = run_wrapped(
             &spec,
-            &["touch".to_string(), "/etc/theseus_bwrap_forbidden".to_string()],
+            &[
+                "touch".to_string(),
+                "/etc/theseus_bwrap_forbidden".to_string(),
+            ],
         )
         .unwrap();
         assert!(!status.success(), "запись в ro-корень должна блокироваться");

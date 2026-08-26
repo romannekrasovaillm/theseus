@@ -39,16 +39,40 @@ pub struct Message {
 
 impl Message {
     pub fn system(s: impl Into<String>) -> Self {
-        Message { role: "system".into(), content: Some(s.into()), reasoning_content: None, tool_calls: None, tool_call_id: None }
+        Message {
+            role: "system".into(),
+            content: Some(s.into()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn user(s: impl Into<String>) -> Self {
-        Message { role: "user".into(), content: Some(s.into()), reasoning_content: None, tool_calls: None, tool_call_id: None }
+        Message {
+            role: "user".into(),
+            content: Some(s.into()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: None,
+        }
     }
     pub fn assistant(content: Option<String>, tool_calls: Option<Vec<ToolCall>>) -> Self {
-        Message { role: "assistant".into(), content, reasoning_content: None, tool_calls, tool_call_id: None }
+        Message {
+            role: "assistant".into(),
+            content,
+            reasoning_content: None,
+            tool_calls,
+            tool_call_id: None,
+        }
     }
     pub fn tool(call_id: impl Into<String>, content: impl Into<String>) -> Self {
-        Message { role: "tool".into(), content: Some(content.into()), reasoning_content: None, tool_calls: None, tool_call_id: Some(call_id.into()) }
+        Message {
+            role: "tool".into(),
+            content: Some(content.into()),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: Some(call_id.into()),
+        }
     }
     /// Прикрепить цепочку рассуждений (пустая строка отбрасывается).
     pub fn with_reasoning(mut self, reasoning: Option<String>) -> Self {
@@ -110,21 +134,28 @@ const REASONING_PASSBACK_PLACEHOLDER: &str = "(reasoning утерян при к�
 /// assistant-сообщениях заливаются плейсхолдером. Существующие цепочки и прочие
 /// роли не трогаем; входная история не мутируется (работаем на копии для запроса).
 fn ensure_reasoning_passback(messages: &[Message]) -> Vec<Message> {
-    messages.iter().map(|m| {
-        if m.role == "assistant" && m.reasoning_content.as_deref().is_none_or(str::is_empty) {
-            let mut m = m.clone();
-            m.reasoning_content = Some(REASONING_PASSBACK_PLACEHOLDER.to_string());
-            m
-        } else {
-            m.clone()
-        }
-    }).collect()
+    messages
+        .iter()
+        .map(|m| {
+            if m.role == "assistant" && m.reasoning_content.as_deref().is_none_or(str::is_empty) {
+                let mut m = m.clone();
+                m.reasoning_content = Some(REASONING_PASSBACK_PLACEHOLDER.to_string());
+                m
+            } else {
+                m.clone()
+            }
+        })
+        .collect()
 }
 
 impl ApiClient {
     pub fn new(
-        base_url: &str, api_key: &str, model: &str,
-        timeout_secs: u64, extra_body: serde_json::Value, max_output_tokens: usize,
+        base_url: &str,
+        api_key: &str,
+        model: &str,
+        timeout_secs: u64,
+        extra_body: serde_json::Value,
+        max_output_tokens: usize,
     ) -> Result<Self> {
         // Явный прокси провайдера из реестра (ProviderInfo::proxy — сейчас
         // только OpenRouter → локальный egress-шлюз 127.0.0.1:12080, его
@@ -160,10 +191,13 @@ impl ApiClient {
         // где-то утеряна (компактификация, старый снимок сессии), подставим
         // плейсхолдер на отправке — иначе 400 без ретрая (живой баг 25.08:
         // L3-саммари без reasoning убивало сессию на DeepSeek).
-        let reasoning_passback =
-            crate::models::find_model(model)
-                .map(|m| m.provider == "deepseek" || m.provider == "zhipu") == Some(true)
-                && extra_body.pointer("/thinking/type").and_then(|t| t.as_str()) == Some("enabled");
+        let reasoning_passback = crate::models::find_model(model)
+            .map(|m| m.provider == "deepseek" || m.provider == "zhipu")
+            == Some(true)
+            && extra_body
+                .pointer("/thinking/type")
+                .and_then(|t| t.as_str())
+                == Some("enabled");
         Ok(ApiClient {
             base_url: base_url.trim_end_matches('/').to_string(),
             api_key: api_key.to_string(),
@@ -176,21 +210,34 @@ impl ApiClient {
         })
     }
 
-    pub fn chat(&mut self, messages: &[Message], tools: &serde_json::Value) -> Result<ChatResponse> {
+    pub fn chat(
+        &mut self,
+        messages: &[Message],
+        tools: &serde_json::Value,
+    ) -> Result<ChatResponse> {
         self.chat_inner(messages, tools, false, &mut |_| {}, &|| false)
     }
 
     /// Стриминг-вариант (SSE): текстовые дельты уходят в on_text по мере поступления;
     /// should_stop()==true → досрочный разрыв стрима (преемпция, ChatResponse.aborted=true)
-    pub fn chat_stream(&mut self, messages: &[Message], tools: &serde_json::Value,
-                       on_text: &mut dyn FnMut(&str),
-                       should_stop: &dyn Fn() -> bool) -> Result<ChatResponse> {
+    pub fn chat_stream(
+        &mut self,
+        messages: &[Message],
+        tools: &serde_json::Value,
+        on_text: &mut dyn FnMut(&str),
+        should_stop: &dyn Fn() -> bool,
+    ) -> Result<ChatResponse> {
         self.chat_inner(messages, tools, true, on_text, should_stop)
     }
 
-    fn chat_inner(&mut self, messages: &[Message], tools: &serde_json::Value,
-                  stream: bool, on_text: &mut dyn FnMut(&str),
-                  should_stop: &dyn Fn() -> bool) -> Result<ChatResponse> {
+    fn chat_inner(
+        &mut self,
+        messages: &[Message],
+        tools: &serde_json::Value,
+        stream: bool,
+        on_text: &mut dyn FnMut(&str),
+        should_stop: &dyn Fn() -> bool,
+    ) -> Result<ChatResponse> {
         // Санитизация истории под контракт thinking+tools (DeepSeek, Zhipu GLM) —
         // только когда запрос несёт tools (без tools проброс reasoning не
         // требуется и игнорируется).
@@ -221,7 +268,9 @@ impl ApiClient {
         }
         // extra_body (напр. thinking) — поверх
         if let serde_json::Value::Object(m) = &self.extra_body {
-            for (k, v) in m { body[k] = v.clone(); }
+            for (k, v) in m {
+                body[k] = v.clone();
+            }
         }
 
         let url = format!("{}/chat/completions", self.base_url);
@@ -229,7 +278,9 @@ impl ApiClient {
         let mut last_err = anyhow!("—");
         for attempt in 0..5 {
             let t0 = Instant::now();
-            let resp = self.http.post(&url)
+            let resp = self
+                .http
+                .post(&url)
                 .header("Authorization", format!("Bearer {}", self.api_key))
                 .json(&body)
                 .send();
@@ -237,8 +288,11 @@ impl ApiClient {
                 Ok(r) => {
                     let status = r.status();
                     // уважение Retry-After (читаем ДО поглощения тела)
-                    let retry_after = r.headers().get("retry-after")
-                        .and_then(|v| v.to_str().ok()).and_then(|v| v.parse::<u64>().ok());
+                    let retry_after = r
+                        .headers()
+                        .get("retry-after")
+                        .and_then(|v| v.to_str().ok())
+                        .and_then(|v| v.parse::<u64>().ok());
                     if status.is_success() {
                         if stream {
                             return self.parse_stream(r, t0.elapsed(), on_text, should_stop);
@@ -266,7 +320,12 @@ impl ApiClient {
             if attempt < 4 {
                 if attempt > 0 && std::env::var_os("THESEUS_DEBUG").is_some() {
                     // см. комментарий в tools::run_bash — сырой stderr ломает TUI
-                    eprintln!("[api retry {}/4 через {}s] {}", attempt + 1, delay, last_err);
+                    eprintln!(
+                        "[api retry {}/4 через {}s] {}",
+                        attempt + 1,
+                        delay,
+                        last_err
+                    );
                 }
                 std::thread::sleep(Duration::from_secs(delay));
                 delay = (delay * 2).min(60);
@@ -284,26 +343,29 @@ impl ApiClient {
     }
 
     fn parse_response(&mut self, text: &str, latency: Duration) -> Result<ChatResponse> {
-        let v: serde_json::Value = serde_json::from_str(text)
-            .with_context(|| {
-                let preview: String = text.chars().take(200).collect();
-                format!("невалидный JSON ответа: {preview}")
-            })?;
+        let v: serde_json::Value = serde_json::from_str(text).with_context(|| {
+            let preview: String = text.chars().take(200).collect();
+            format!("невалидный JSON ответа: {preview}")
+        })?;
         let choice = &v["choices"][0];
         let msg = &choice["message"];
-        let tool_calls: Vec<ToolCall> = serde_json::from_value(msg["tool_calls"].clone())
-            .unwrap_or_default();
+        let tool_calls: Vec<ToolCall> =
+            serde_json::from_value(msg["tool_calls"].clone()).unwrap_or_default();
         let usage = &v["usage"];
         let prompt_tokens = usage["prompt_tokens"].as_u64().unwrap_or(0);
         let completion_tokens = usage["completion_tokens"].as_u64().unwrap_or(0);
-        let reasoning = msg["reasoning_content"].as_str().map(String::from)
+        let reasoning = msg["reasoning_content"]
+            .as_str()
+            .map(String::from)
             .filter(|s| !s.is_empty());
         self.accounting.calls += 1;
         self.accounting.prompt_tokens += prompt_tokens;
         self.accounting.completion_tokens += completion_tokens;
         self.accounting.total_latency += latency;
         Ok(ChatResponse {
-            content: msg["content"].as_str().map(String::from)
+            content: msg["content"]
+                .as_str()
+                .map(String::from)
                 .filter(|s| !s.is_empty()),
             tool_calls,
             reasoning_len: reasoning.as_deref().map(str::len).unwrap_or(0),
@@ -317,8 +379,13 @@ impl ApiClient {
     }
 
     /// Разбор SSE-потока: data: {...}\n\n ... data: [DONE]; should_stop → досрочный разрыв
-    fn parse_stream(&mut self, r: reqwest::blocking::Response, latency0: Duration,
-                    on_text: &mut dyn FnMut(&str), should_stop: &dyn Fn() -> bool) -> Result<ChatResponse> {
+    fn parse_stream(
+        &mut self,
+        r: reqwest::blocking::Response,
+        latency0: Duration,
+        on_text: &mut dyn FnMut(&str),
+        should_stop: &dyn Fn() -> bool,
+    ) -> Result<ChatResponse> {
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(r);
         let t0 = Instant::now();
@@ -329,19 +396,25 @@ impl ApiClient {
         let mut completion_tokens = 0u64;
         let mut aborted = false;
         // накопление tool calls по index
-        let mut tc_acc: std::collections::BTreeMap<u64, (String, String, String)> = std::collections::BTreeMap::new();
+        let mut tc_acc: std::collections::BTreeMap<u64, (String, String, String)> =
+            std::collections::BTreeMap::new();
 
         for line in reader.lines() {
             if should_stop() {
                 aborted = true;
                 break;
             }
-            let line = match line { Ok(l) => l, Err(_) => break };
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => break,
+            };
             let data = match line.strip_prefix("data:") {
                 Some(d) => d.trim(),
                 None => continue,
             };
-            if data == "[DONE]" { break; }
+            if data == "[DONE]" {
+                break;
+            }
             let v: serde_json::Value = match serde_json::from_str(data) {
                 Ok(v) => v,
                 Err(_) => continue,
@@ -366,27 +439,51 @@ impl ApiClient {
                 for tc in tcs {
                     let idx = tc["index"].as_u64().unwrap_or(0);
                     let e = tc_acc.entry(idx).or_default();
-                    if let Some(id) = tc["id"].as_str() { e.0 = id.to_string(); }
-                    if let Some(name) = tc["function"]["name"].as_str() { e.1 = name.to_string(); }
-                    if let Some(args) = tc["function"]["arguments"].as_str() { e.2.push_str(args); }
+                    if let Some(id) = tc["id"].as_str() {
+                        e.0 = id.to_string();
+                    }
+                    if let Some(name) = tc["function"]["name"].as_str() {
+                        e.1 = name.to_string();
+                    }
+                    if let Some(args) = tc["function"]["arguments"].as_str() {
+                        e.2.push_str(args);
+                    }
                 }
             }
         }
-        let latency = if latency0 > Duration::ZERO { latency0 } else { t0.elapsed() };
-        let tool_calls: Vec<ToolCall> = tc_acc.into_iter().map(|(_, (id, name, args))| ToolCall {
-            id,
-            kind: "function".into(),
-            function: ToolFunction { name, arguments: args },
-        }).collect();
+        let latency = if latency0 > Duration::ZERO {
+            latency0
+        } else {
+            t0.elapsed()
+        };
+        let tool_calls: Vec<ToolCall> = tc_acc
+            .into_iter()
+            .map(|(_, (id, name, args))| ToolCall {
+                id,
+                kind: "function".into(),
+                function: ToolFunction {
+                    name,
+                    arguments: args,
+                },
+            })
+            .collect();
         self.accounting.calls += 1;
         self.accounting.prompt_tokens += prompt_tokens;
         self.accounting.completion_tokens += completion_tokens;
         self.accounting.total_latency += latency;
         Ok(ChatResponse {
-            content: if content.is_empty() { None } else { Some(content) },
+            content: if content.is_empty() {
+                None
+            } else {
+                Some(content)
+            },
             tool_calls,
             reasoning_len: reasoning.len(),
-            reasoning: if reasoning.is_empty() { None } else { Some(reasoning) },
+            reasoning: if reasoning.is_empty() {
+                None
+            } else {
+                Some(reasoning)
+            },
             prompt_tokens,
             completion_tokens,
             finish_reason,
@@ -401,16 +498,23 @@ mod tests {
     #[test]
     fn sse_delta_accumulation_smoke() {
         // логика накопления tool-call дельт по index
-        let mut acc: std::collections::BTreeMap<u64, (String, String, String)> = std::collections::BTreeMap::new();
+        let mut acc: std::collections::BTreeMap<u64, (String, String, String)> =
+            std::collections::BTreeMap::new();
         let chunks = [
             (0u64, Some("call_1"), Some("bash"), Some("{\"command\":")),
             (0, None, None, Some(" \"ls\"}")),
         ];
         for (idx, id, name, args) in chunks {
             let e = acc.entry(idx).or_default();
-            if let Some(i) = id { e.0 = i.to_string(); }
-            if let Some(n) = name { e.1 = n.to_string(); }
-            if let Some(a) = args { e.2.push_str(a); }
+            if let Some(i) = id {
+                e.0 = i.to_string();
+            }
+            if let Some(n) = name {
+                e.1 = n.to_string();
+            }
+            if let Some(a) = args {
+                e.2.push_str(a);
+            }
         }
         let (_, (id, name, args)) = acc.into_iter().next().unwrap();
         assert_eq!(id, "call_1");
@@ -423,7 +527,14 @@ mod tests {
     #[test]
     fn parse_response_captures_reasoning() {
         let mut client = super::ApiClient::new(
-            "http://127.0.0.1:9/v1", "k", "m", 1, serde_json::json!({}), 16).unwrap();
+            "http://127.0.0.1:9/v1",
+            "k",
+            "m",
+            1,
+            serde_json::json!({}),
+            16,
+        )
+        .unwrap();
         let body = serde_json::json!({
             "choices": [{
                 "message": {"role": "assistant", "content": "готово",
@@ -432,7 +543,9 @@ mod tests {
             }],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2},
         });
-        let resp = client.parse_response(&body.to_string(), std::time::Duration::ZERO).unwrap();
+        let resp = client
+            .parse_response(&body.to_string(), std::time::Duration::ZERO)
+            .unwrap();
         assert_eq!(resp.reasoning.as_deref(), Some("цепочка"));
         assert_eq!(resp.reasoning_len, "цепочка".len());
         assert_eq!(resp.content.as_deref(), Some("готово"));
@@ -442,7 +555,9 @@ mod tests {
                          "finish_reason": "stop"}],
             "usage": {},
         });
-        let resp = client.parse_response(&body.to_string(), std::time::Duration::ZERO).unwrap();
+        let resp = client
+            .parse_response(&body.to_string(), std::time::Duration::ZERO)
+            .unwrap();
         assert_eq!(resp.reasoning, None);
         assert_eq!(resp.reasoning_len, 0);
     }
@@ -472,18 +587,51 @@ mod tests {
     #[test]
     fn kimi_provider_strips_thinking_from_extra_body() {
         let thinking = serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high", "x": 1});
-        let kimi = super::ApiClient::new(
-            "http://127.0.0.1:9/v1", "k", "k3", 1, thinking.clone(), 16).unwrap();
-        assert!(kimi.extra_body.get("thinking").is_none(), "thinking срезан: {}", kimi.extra_body);
-        assert!(kimi.extra_body.get("reasoning_effort").is_none(), "effort срезан: {}", kimi.extra_body);
-        assert_eq!(kimi.extra_body.get("x"), Some(&serde_json::json!(1)), "прочие ключи целы");
+        let kimi =
+            super::ApiClient::new("http://127.0.0.1:9/v1", "k", "k3", 1, thinking.clone(), 16)
+                .unwrap();
+        assert!(
+            kimi.extra_body.get("thinking").is_none(),
+            "thinking срезан: {}",
+            kimi.extra_body
+        );
+        assert!(
+            kimi.extra_body.get("reasoning_effort").is_none(),
+            "effort срезан: {}",
+            kimi.extra_body
+        );
+        assert_eq!(
+            kimi.extra_body.get("x"),
+            Some(&serde_json::json!(1)),
+            "прочие ключи целы"
+        );
         let ds = super::ApiClient::new(
-            "http://127.0.0.1:9/v1", "k", "deepseek-v4-pro", 1, thinking.clone(), 16).unwrap();
-        assert!(ds.extra_body.get("thinking").is_some(), "deepseek: thinking сохранён");
-        assert!(ds.extra_body.get("reasoning_effort").is_some(), "deepseek: effort сохранён");
+            "http://127.0.0.1:9/v1",
+            "k",
+            "deepseek-v4-pro",
+            1,
+            thinking.clone(),
+            16,
+        )
+        .unwrap();
+        assert!(
+            ds.extra_body.get("thinking").is_some(),
+            "deepseek: thinking сохранён"
+        );
+        assert!(
+            ds.extra_body.get("reasoning_effort").is_some(),
+            "deepseek: effort сохранён"
+        );
         // неизвестная реестру модель — не трогаем (openai-compatible эндпоинты)
         let custom = super::ApiClient::new(
-            "http://127.0.0.1:9/v1", "k", "my-local-model", 1, thinking, 16).unwrap();
+            "http://127.0.0.1:9/v1",
+            "k",
+            "my-local-model",
+            1,
+            thinking,
+            16,
+        )
+        .unwrap();
         assert!(custom.extra_body.get("thinking").is_some());
     }
 
@@ -504,13 +652,14 @@ mod tests {
             ("deepseek-v4-flash", serde_json::json!({}), false),
             ("glm-5.2", on.clone(), true),
             ("glm-5.3", on.clone(), true),
-            ("glm-5.2", off.clone(), false),
+            ("glm-5.2", off, false),
             ("k3", on.clone(), false),               // kimi — свой контракт
             ("stealth/ox-alpha", on.clone(), false), // openrouter без thinking
-            ("my-local-model", on.clone(), false),   // вне реестра
+            ("my-local-model", on, false),           // вне реестра
         ];
         for (model, extra, expected) in cases {
-            let c = super::ApiClient::new("http://127.0.0.1:9/v1", "k", model, 1, extra, 16).unwrap();
+            let c =
+                super::ApiClient::new("http://127.0.0.1:9/v1", "k", model, 1, extra, 16).unwrap();
             assert_eq!(c.reasoning_passback, expected, "модель {model}");
         }
     }
@@ -521,27 +670,50 @@ mod tests {
     /// цепочки и прочие роли не трогает; входная история не мутируется.
     #[test]
     fn ensure_reasoning_passback_fills_only_missing() {
-        use super::{ensure_reasoning_passback, Message, REASONING_PASSBACK_PLACEHOLDER, ToolCall, ToolFunction};
+        use super::{
+            ensure_reasoning_passback, Message, ToolCall, ToolFunction,
+            REASONING_PASSBACK_PLACEHOLDER,
+        };
         let tc = || ToolCall {
-            id: "c1".into(), kind: "function".into(),
-            function: ToolFunction { name: "bash".into(), arguments: "{}".into() },
+            id: "c1".into(),
+            kind: "function".into(),
+            function: ToolFunction {
+                name: "bash".into(),
+                arguments: "{}".into(),
+            },
         };
         let msgs = vec![
             Message::system("s"),
             Message::assistant(Some("CONTEXT COMPACTED: саммари".into()), None), // вставка L3
-            Message::assistant(None, Some(vec![tc()])),                          // tool_calls, цепочка утеряна
+            Message::assistant(None, Some(vec![tc()])), // tool_calls, цепочка утеряна
             Message::tool("c1", "ok"),
             Message::assistant(Some("a".into()), None).with_reasoning(Some("есть".into())),
             Message::user("u"),
         ];
         let out = ensure_reasoning_passback(&msgs);
-        assert_eq!(out[1].reasoning_content.as_deref(), Some(REASONING_PASSBACK_PLACEHOLDER));
-        assert_eq!(out[2].reasoning_content.as_deref(), Some(REASONING_PASSBACK_PLACEHOLDER));
-        assert_eq!(out[4].reasoning_content.as_deref(), Some("есть"), "живая цепочка не тронута");
-        assert!(out[0].reasoning_content.is_none() && out[3].reasoning_content.is_none()
-            && out[5].reasoning_content.is_none(), "прочие роли не тронуты");
-        assert!(msgs[1].reasoning_content.is_none() && msgs[2].reasoning_content.is_none(),
-            "входная история не мутирована");
+        assert_eq!(
+            out[1].reasoning_content.as_deref(),
+            Some(REASONING_PASSBACK_PLACEHOLDER)
+        );
+        assert_eq!(
+            out[2].reasoning_content.as_deref(),
+            Some(REASONING_PASSBACK_PLACEHOLDER)
+        );
+        assert_eq!(
+            out[4].reasoning_content.as_deref(),
+            Some("есть"),
+            "живая цепочка не тронута"
+        );
+        assert!(
+            out[0].reasoning_content.is_none()
+                && out[3].reasoning_content.is_none()
+                && out[5].reasoning_content.is_none(),
+            "прочие роли не тронуты"
+        );
+        assert!(
+            msgs[1].reasoning_content.is_none() && msgs[2].reasoning_content.is_none(),
+            "входная история не мутирована"
+        );
         // плейсхолдер реально уходит в JSON (skip_serializing_if пропускает лишь None)
         let wire = serde_json::to_string(&out[2]).unwrap();
         assert!(wire.contains("reasoning_content"), "wire: {wire}");
@@ -558,8 +730,14 @@ mod tests {
         let server = MockServer::start(vec![MockResponse::text("ок"), MockResponse::text("ок")])
             .expect("мок поднялся");
         let mut client = super::ApiClient::new(
-            &format!("http://127.0.0.1:{}", server.port()), "k", "deepseek-v4-flash", 5,
-            serde_json::json!({"thinking": {"type": "enabled"}}), 16).unwrap();
+            &format!("http://127.0.0.1:{}", server.port()),
+            "k",
+            "deepseek-v4-flash",
+            5,
+            serde_json::json!({"thinking": {"type": "enabled"}}),
+            16,
+        )
+        .unwrap();
         let msgs = vec![
             Message::system("s"),
             Message::assistant(Some("CONTEXT COMPACTED: саммари без цепочки".into()), None),
@@ -568,19 +746,32 @@ mod tests {
         ];
         let tools = serde_json::json!([{"type": "function",
             "function": {"name": "bash", "parameters": {"type": "object"}}}]);
-        client.chat_stream(&msgs, &tools, &mut |_| {}, &|| false).expect("запрос с tools");
+        client
+            .chat_stream(&msgs, &tools, &mut |_| {}, &|| false)
+            .expect("запрос с tools");
         let reqs = server.requests();
         let body: serde_json::Value = serde_json::from_str(&reqs[0].body).unwrap();
-        assert_eq!(body["messages"][1]["reasoning_content"], REASONING_PASSBACK_PLACEHOLDER,
-            "пробел залит на проводе: {}", body["messages"][1]);
+        assert_eq!(
+            body["messages"][1]["reasoning_content"], REASONING_PASSBACK_PLACEHOLDER,
+            "пробел залит на проводе: {}",
+            body["messages"][1]
+        );
         assert_eq!(body["messages"][2]["reasoning_content"], "живая цепочка");
-        assert!(body["messages"][3].get("reasoning_content").is_none(), "user не тронут");
+        assert!(
+            body["messages"][3].get("reasoning_content").is_none(),
+            "user не тронут"
+        );
         // без tools — как есть
-        client.chat_stream(&msgs, &serde_json::Value::Null, &mut |_| {}, &|| false).expect("запрос без tools");
+        client
+            .chat_stream(&msgs, &serde_json::Value::Null, &mut |_| {}, &|| false)
+            .expect("запрос без tools");
         let reqs = server.requests();
         let body: serde_json::Value = serde_json::from_str(&reqs[1].body).unwrap();
-        assert!(body["messages"][1].get("reasoning_content").is_none(),
-            "без tools история не трогается: {}", body["messages"][1]);
+        assert!(
+            body["messages"][1].get("reasoning_content").is_none(),
+            "без tools история не трогается: {}",
+            body["messages"][1]
+        );
         // исходная история не мутирована обоими вызовами
         assert!(msgs[1].reasoning_content.is_none());
     }
@@ -607,23 +798,50 @@ mod tests {
             "function": {"name": "bash", "parameters": {"type": "object"}}}]);
         // thinking enabled → sanitize
         let mut client = super::ApiClient::new(
-            &format!("http://127.0.0.1:{}", server.port()), "k", "glm-5.2", 5,
-            serde_json::json!({"thinking": {"type": "enabled"}}), 16).unwrap();
-        client.chat_stream(&msgs, &tools, &mut |_| {}, &|| false).expect("запрос с tools");
+            &format!("http://127.0.0.1:{}", server.port()),
+            "k",
+            "glm-5.2",
+            5,
+            serde_json::json!({"thinking": {"type": "enabled"}}),
+            16,
+        )
+        .unwrap();
+        client
+            .chat_stream(&msgs, &tools, &mut |_| {}, &|| false)
+            .expect("запрос с tools");
         let body: serde_json::Value = serde_json::from_str(&server.requests()[0].body).unwrap();
-        assert_eq!(body["messages"][1]["reasoning_content"], REASONING_PASSBACK_PLACEHOLDER,
-            "пробел залит: {}", body["messages"][1]);
-        assert_eq!(body["messages"][2]["reasoning_content"],
-            "живая GLM-цепочка: токены ↂ «» — не тронуть",
-            "живая цепочка ушла немодифицированной: {}", body["messages"][2]);
+        assert_eq!(
+            body["messages"][1]["reasoning_content"], REASONING_PASSBACK_PLACEHOLDER,
+            "пробел залит: {}",
+            body["messages"][1]
+        );
+        assert_eq!(
+            body["messages"][2]["reasoning_content"], "живая GLM-цепочка: токены ↂ «» — не тронуть",
+            "живая цепочка ушла немодифицированной: {}",
+            body["messages"][2]
+        );
         // thinking disabled → sanitize выключен
         let mut client = super::ApiClient::new(
-            &format!("http://127.0.0.1:{}", server.port()), "k", "glm-5.2", 5,
-            serde_json::json!({"thinking": {"type": "disabled"}}), 16).unwrap();
-        client.chat_stream(&msgs, &tools, &mut |_| {}, &|| false).expect("запрос, thinking off");
+            &format!("http://127.0.0.1:{}", server.port()),
+            "k",
+            "glm-5.2",
+            5,
+            serde_json::json!({"thinking": {"type": "disabled"}}),
+            16,
+        )
+        .unwrap();
+        client
+            .chat_stream(&msgs, &tools, &mut |_| {}, &|| false)
+            .expect("запрос, thinking off");
         let body: serde_json::Value = serde_json::from_str(&server.requests()[1].body).unwrap();
-        assert!(body["messages"][1].get("reasoning_content").is_none(),
-            "thinking off — история не трогается: {}", body["messages"][1]);
-        assert!(msgs[1].reasoning_content.is_none(), "входная история не мутирована");
+        assert!(
+            body["messages"][1].get("reasoning_content").is_none(),
+            "thinking off — история не трогается: {}",
+            body["messages"][1]
+        );
+        assert!(
+            msgs[1].reasoning_content.is_none(),
+            "входная история не мутирована"
+        );
     }
 }

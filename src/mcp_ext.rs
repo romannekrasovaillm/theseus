@@ -193,8 +193,14 @@ impl McpExtClient {
             .stderr(Stdio::null())
             .spawn()
             .with_context(|| format!("не запустить MCP-сервер: {command}"))?;
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("нет stdin у дочернего процесса"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("нет stdout у дочернего процесса"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("нет stdin у дочернего процесса"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("нет stdout у дочернего процесса"))?;
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines() {
@@ -315,8 +321,8 @@ impl McpExtClient {
     /// Прочитать ресурс по URI (`resources/read`).
     pub fn read_resource(&mut self, uri: &str) -> Result<Vec<McpResourceContent>> {
         let res = self.call_rpc("resources/read", json!({"uri": uri}))?;
-        let parsed: ReadResult =
-            serde_json::from_value(res).with_context(|| format!("resources/read {uri}: разбор ответа"))?;
+        let parsed: ReadResult = serde_json::from_value(res)
+            .with_context(|| format!("resources/read {uri}: разбор ответа"))?;
         Ok(parsed.contents)
     }
 
@@ -349,14 +355,20 @@ impl McpExtClient {
             .map(|(k, v)| (k.to_string(), json!(v)))
             .collect();
         let res = self.call_rpc("prompts/get", json!({"name": name, "arguments": arguments}))?;
-        let parsed: PromptGetResult =
-            serde_json::from_value(res).with_context(|| format!("prompts/get {name}: разбор ответа"))?;
+        let parsed: PromptGetResult = serde_json::from_value(res)
+            .with_context(|| format!("prompts/get {name}: разбор ответа"))?;
         let messages = parsed
             .messages
             .into_iter()
-            .map(|m| McpPromptMessage { role: m.role, text: content_to_text(&m.content) })
+            .map(|m| McpPromptMessage {
+                role: m.role,
+                text: content_to_text(&m.content),
+            })
             .collect();
-        Ok(McpPromptResult { description: parsed.description, messages })
+        Ok(McpPromptResult {
+            description: parsed.description,
+            messages,
+        })
     }
 }
 
@@ -515,7 +527,10 @@ for line in sys.stdin:
         let no_args: &[&str] = &[];
         match McpExtClient::spawn("theseus-no-such-binary-xyz", no_args) {
             Ok(_) => panic!("ожидали ошибку запуска несуществующего бинарника"),
-            Err(e) => assert!(e.to_string().contains("не запустить MCP-сервер"), "err: {e}"),
+            Err(e) => assert!(
+                e.to_string().contains("не запустить MCP-сервер"),
+                "err: {e}"
+            ),
         }
     }
 
@@ -569,7 +584,10 @@ for line in sys.stdin:
         assert_eq!(greet.arguments.len(), 1);
         assert_eq!(greet.arguments[0].name, "name");
         assert!(greet.arguments[0].required);
-        assert_eq!(greet.arguments[0].description.as_deref(), Some("Кого приветствуем"));
+        assert_eq!(
+            greet.arguments[0].description.as_deref(),
+            Some("Кого приветствуем")
+        );
         let noop = &prompts[1];
         assert_eq!(noop.name, "noop");
         assert!(noop.arguments.is_empty());
@@ -602,7 +620,10 @@ for line in sys.stdin:
         let started = Instant::now();
         let err = client.list_resources().unwrap_err();
         assert!(err.to_string().contains("таймаут"), "err: {err}");
-        assert!(started.elapsed() < Duration::from_secs(5), "слишком долго ждали");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "слишком долго ждали"
+        );
     }
 
     #[test]

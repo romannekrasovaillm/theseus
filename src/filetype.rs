@@ -15,7 +15,7 @@
 //!    затем проверка на NUL-байт в первых 8 КиБ (есть NUL → бинарь), иначе
 //!    файл считается «просто текстом» — [`Lang::Other`].
 //!
-//! Читается только голова файла (первые [`SNIFF_LEN`] байт), поэтому
+//! Читается только голова файла (первые `SNIFF_LEN` байт), поэтому
 //! детектор дёшев даже на огромных файлах. Любая ошибка чтения (файла
 //! нет, это каталог, нет прав) даёт [`FileKind::Unknown`] — без паник.
 //!
@@ -245,9 +245,7 @@ fn kind_from_extension(ext: &str) -> Option<FileKind> {
         "txt" | "text" | "log" | "csv" | "tsv" | "xml" | "svg" | "ini" | "cfg" | "conf"
         | "diff" | "patch" => FileKind::Text(Lang::Other),
         // Изображения.
-        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff" => {
-            FileKind::Image
-        }
+        "png" | "jpg" | "jpeg" | "gif" | "bmp" | "webp" | "ico" | "tif" | "tiff" => FileKind::Image,
         // Архивы.
         "zip" | "jar" | "war" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar" | "tar" => {
             FileKind::Archive
@@ -484,7 +482,11 @@ mod tests {
             let name = format!("blob.{ext}");
             // Текстовое содержимое нарочно: проверяем, что сработало имя.
             let path = write(&dir, &name, b"not really that format\n");
-            assert_eq!(detect(&path), kind, "расширение {ext} должно давать {kind:?}");
+            assert_eq!(
+                detect(&path),
+                kind,
+                "расширение {ext} должно давать {kind:?}"
+            );
         }
     }
 

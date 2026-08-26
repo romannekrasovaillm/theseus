@@ -5,9 +5,9 @@
 //! обёртка: парсинг аргументов и диспетчер подкоманд.
 //! (Паттерн «core as lib, cli as thin bin» — как codex-rs / grok-build.)
 
+pub mod acp;
 pub mod agent;
 pub mod agents;
-pub mod acp;
 pub mod api;
 pub mod argparse;
 pub mod ariadna;
@@ -32,14 +32,14 @@ pub mod keymap;
 pub mod larkpatch;
 pub mod library;
 pub mod limits;
-pub mod markdown;
 pub mod logbook;
+pub mod markdown;
 pub mod matchers;
 pub mod mcp;
-pub mod ml_concepts;
 pub mod mcp_ext;
 pub mod memory;
 pub mod memory_v2;
+pub mod ml_concepts;
 pub mod mock_sse;
 pub mod models;
 pub mod notify;
@@ -49,8 +49,8 @@ pub mod peers;
 pub mod permissions;
 pub mod prompt_cache;
 pub mod prompts;
-pub mod retry;
 pub mod report;
+pub mod retry;
 pub mod safety_scan;
 pub mod sandbox;
 pub mod sandbox_bwrap;
@@ -59,8 +59,8 @@ pub mod secrets;
 pub mod semver;
 pub mod session;
 pub mod shell;
-pub mod skills;
 pub mod shell_escape;
+pub mod skills;
 pub mod slash;
 pub mod subagent;
 pub mod telemetry;
@@ -129,7 +129,11 @@ pub fn run_headless(mut agent: Agent, prompt: &str) -> Result<()> {
 }
 
 /// Headless-продолжение сессии из снимка.
-pub fn run_headless_resume(mut agent: Agent, messages: Vec<api::Message>, prompt: &str) -> Result<()> {
+pub fn run_headless_resume(
+    mut agent: Agent,
+    messages: Vec<api::Message>,
+    prompt: &str,
+) -> Result<()> {
     let (tx, rx) = channel::<AgentEvent>();
     agent.events = Some(tx);
     let printer = spawn_printer(rx);
@@ -174,26 +178,43 @@ pub fn print_event(ev: AgentEvent) {
             let short: String = args.chars().take(100).collect();
             println!("\x1b[33m◈ {peer} ⚙ {name}\x1b[90m {short}\x1b[0m");
         }
-        AgentEvent::ToolCall { name, args, decision } => {
+        AgentEvent::ToolCall {
+            name,
+            args,
+            decision,
+        } => {
             let short: String = args.chars().take(100).collect();
             println!("\x1b[33m⚙ {name}\x1b[90m {short} [{decision}]\x1b[0m");
         }
         AgentEvent::ToolResult { preview, ok, .. } => {
             let short: String = preview.chars().take(120).collect();
-            if ok { println!("\x1b[90m  ↳ {short}\x1b[0m"); }
-            else { println!("\x1b[31m  ↳ {short}\x1b[0m"); }
+            if ok {
+                println!("\x1b[90m  ↳ {short}\x1b[0m");
+            } else {
+                println!("\x1b[31m  ↳ {short}\x1b[0m");
+            }
         }
-        AgentEvent::Status { turns, est_tokens, mode } =>
-            eprintln!("[ход {turns} | ~{est_tokens} ток | {mode}]"),
-        AgentEvent::Compact { from_msgs, to_msgs } =>
-            println!("\x1b[35m⤓ компактификация: {from_msgs} → {to_msgs}\x1b[0m"),
+        AgentEvent::Status {
+            turns,
+            est_tokens,
+            mode,
+        } => eprintln!("[ход {turns} | ~{est_tokens} ток | {mode}]"),
+        AgentEvent::Compact { from_msgs, to_msgs } => {
+            println!("\x1b[35m⤓ компактификация: {from_msgs} → {to_msgs}\x1b[0m")
+        }
         AgentEvent::TodoRejected(m) => println!("\x1b[31m⛔ {m}\x1b[0m"),
         AgentEvent::Finished(s) => println!("\x1b[36m✔ FINISH: {s}\x1b[0m"),
         AgentEvent::Error(e) => println!("\x1b[31m✖ {e}\x1b[0m"),
-        AgentEvent::Accounting { calls, prompt_t, completion_t } =>
-            eprintln!("[API: {calls} выз. | токены {prompt_t}+{completion_t}]"),
+        AgentEvent::Accounting {
+            calls,
+            prompt_t,
+            completion_t,
+        } => eprintln!("[API: {calls} выз. | токены {prompt_t}+{completion_t}]"),
         AgentEvent::GoalSet(g) => println!("\x1b[35m🎯 GOAL: {g}\x1b[0m"),
-        AgentEvent::PlanChanged(on) => println!("\x1b[34m📋 plan mode: {}\x1b[0m", if on { "ON" } else { "OFF" }),
+        AgentEvent::PlanChanged(on) => println!(
+            "\x1b[34m📋 plan mode: {}\x1b[0m",
+            if on { "ON" } else { "OFF" }
+        ),
         AgentEvent::MemoryConsolidated(n) => println!("\x1b[90m🧠 память: +{n} фактов\x1b[0m"),
         AgentEvent::HookNote(n) => println!("\x1b[90m🪝 {n}\x1b[0m"),
         AgentEvent::PermAsk { .. } => {}
@@ -210,7 +231,9 @@ pub mod atty {
     /// # Safety
     /// `fd` должен быть валидным открытым файловым дескриптором.
     unsafe fn libc_isatty(fd: i32) -> i32 {
-        extern "C" { fn isatty(fd: i32) -> i32; }
+        extern "C" {
+            fn isatty(fd: i32) -> i32;
+        }
         // SAFETY: контракт передан вызывающему; isatty — POSIX, без сайд-эффектов.
         unsafe { isatty(fd) }
     }
@@ -224,8 +247,12 @@ mod tests {
     /// сам `run_with` остаётся `Ok` — его текст ждёт live-тест max_turns_enforced.
     #[test]
     fn turn_limit_mark_detection() {
-        assert!(super::turn_limit_reached("достигнут лимит ходов (2) на ходе 2"));
-        assert!(super::turn_limit_reached("достигнут лимит ходов (40) на ходе 40"));
+        assert!(super::turn_limit_reached(
+            "достигнут лимит ходов (2) на ходе 2"
+        ));
+        assert!(super::turn_limit_reached(
+            "достигнут лимит ходов (40) на ходе 40"
+        ));
         assert!(!super::turn_limit_reached("готово: 42"));
         assert!(!super::turn_limit_reached(""));
     }

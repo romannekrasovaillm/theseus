@@ -97,7 +97,11 @@ impl FromStr for NotifyEvent {
             .into_iter()
             .find(|e| e.as_str() == s)
             .ok_or_else(|| {
-                let known = Self::all().iter().map(NotifyEvent::as_str).collect::<Vec<_>>().join(", ");
+                let known = Self::all()
+                    .iter()
+                    .map(NotifyEvent::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 anyhow!("неизвестное событие уведомления `{s}`; допустимые значения: {known}")
             })
     }
@@ -128,7 +132,9 @@ pub struct SystemClock;
 
 impl Clock for SystemClock {
     fn now_unix_secs(&self) -> u64 {
-        SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs())
     }
 }
 
@@ -159,17 +165,23 @@ pub struct BellNotifier {
 impl BellNotifier {
     /// Звонок в stderr (не путается с полезным выводом программы в stdout).
     pub fn new() -> Self {
-        Self { stream: BellStream::Stderr }
+        Self {
+            stream: BellStream::Stderr,
+        }
     }
 
     /// Звонок в stdout (для пайплайнов, где stderr занят логами).
     pub fn stdout() -> Self {
-        Self { stream: BellStream::Stdout }
+        Self {
+            stream: BellStream::Stdout,
+        }
     }
 
     fn emit(self, sink: &mut dyn Write) -> Result<()> {
-        sink.write_all(b"\x07").context("не удалось записать BEL в поток")?;
-        sink.flush().context("не удалось сбросить поток после BEL")?;
+        sink.write_all(b"\x07")
+            .context("не удалось записать BEL в поток")?;
+        sink.flush()
+            .context("не удалось сбросить поток после BEL")?;
         Ok(())
     }
 }
@@ -246,7 +258,11 @@ pub fn render_template(template: &str, event: NotifyEvent, message: &str) -> Res
                 chars.next();
                 out.push('}');
             }
-            '}' => return Err(anyhow!("шаблон команды: непарная `}}` (для литерала пишите `}}}}`)")),
+            '}' => {
+                return Err(anyhow!(
+                    "шаблон команды: непарная `}}` (для литерала пишите `}}}}`)"
+                ))
+            }
             _ => out.push(c),
         }
     }
@@ -273,7 +289,9 @@ fn run_command(rendered: &str, timeout: Duration) -> Result<std::process::Output
     });
     match rx.recv_timeout(timeout) {
         Ok(result) => result.context("ошибка ожидания команды уведомления"),
-        Err(_) => Err(anyhow!("таймаут {timeout:?}: команда уведомления не завершилась")),
+        Err(_) => Err(anyhow!(
+            "таймаут {timeout:?}: команда уведомления не завершилась"
+        )),
     }
 }
 
@@ -299,7 +317,10 @@ impl CommandNotifier {
         }
         // Валидация плейсхолдеров и скобок — сразу, а не на первом событии.
         render_template(template, NotifyEvent::TaskComplete, "")?;
-        Ok(Self { template: template.to_string(), timeout })
+        Ok(Self {
+            template: template.to_string(),
+            timeout,
+        })
     }
 
     /// Шаблон команды, как его передали в конструктор.
@@ -323,7 +344,9 @@ impl Notifier for CommandNotifier {
         let status = out.status;
         let stderr = String::from_utf8_lossy(&out.stderr);
         let preview: String = stderr.trim().chars().take(STDERR_PREVIEW_CHARS).collect();
-        Err(anyhow!("команда уведомления `{rendered}` завершилась: {status}; stderr: {preview}"))
+        Err(anyhow!(
+            "команда уведомления `{rendered}` завершилась: {status}; stderr: {preview}"
+        ))
     }
 }
 
@@ -364,7 +387,10 @@ impl LogNotifier {
 
     /// Журнал с инжектируемыми часами (для тестов и встраивания).
     pub fn with_clock(path: impl Into<PathBuf>, clock: Box<dyn Clock>) -> Self {
-        Self { path: path.into(), clock }
+        Self {
+            path: path.into(),
+            clock,
+        }
     }
 
     /// Путь к файлу журнала.
@@ -384,9 +410,18 @@ impl Notifier for LogNotifier {
             .create(true)
             .append(true)
             .open(&self.path)
-            .with_context(|| format!("не удалось открыть журнал уведомлений `{}`", self.path.display()))?;
-        writeln!(file, "{record}")
-            .with_context(|| format!("не удалось записать в журнал уведомлений `{}`", self.path.display()))?;
+            .with_context(|| {
+                format!(
+                    "не удалось открыть журнал уведомлений `{}`",
+                    self.path.display()
+                )
+            })?;
+        writeln!(file, "{record}").with_context(|| {
+            format!(
+                "не удалось записать в журнал уведомлений `{}`",
+                self.path.display()
+            )
+        })?;
         Ok(())
     }
 }
@@ -436,7 +471,11 @@ impl NotifyManager {
         if let Some(cmd) = &config.command {
             notifiers.push(Box::new(CommandNotifier::new(cmd)?));
         }
-        Ok(Self::with_notifiers(config, Box::new(SystemClock), notifiers))
+        Ok(Self::with_notifiers(
+            config,
+            Box::new(SystemClock),
+            notifiers,
+        ))
     }
 
     /// Полный контроль над каналами и часами (тесты, встраивание):
@@ -446,7 +485,12 @@ impl NotifyManager {
         clock: Box<dyn Clock>,
         notifiers: Vec<Box<dyn Notifier>>,
     ) -> Self {
-        Self { config, notifiers, last_sent: HashMap::new(), clock }
+        Self {
+            config,
+            notifiers,
+            last_sent: HashMap::new(),
+            clock,
+        }
     }
 
     /// Подключить дополнительный канал (например [`LogNotifier`]).
@@ -509,7 +553,10 @@ mod tests {
     /// Уникальный путь во временном каталоге (без стороннего tempdir).
     fn temp_path(tag: &str) -> PathBuf {
         let n = UNIQUE.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("theseus-notify-{tag}-{}-{n}.log", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "theseus-notify-{tag}-{}-{n}.log",
+            std::process::id()
+        ))
     }
 
     /// Часы-заглушка с ручным переводом времени.
@@ -563,10 +610,17 @@ mod tests {
     }
 
     fn enabled_config() -> NotifyConfig {
-        NotifyConfig { enabled: true, ..NotifyConfig::default() }
+        NotifyConfig {
+            enabled: true,
+            ..NotifyConfig::default()
+        }
     }
 
-    fn manager(cfg: NotifyConfig, clock: &MockClock, notifiers: Vec<Box<dyn Notifier>>) -> NotifyManager {
+    fn manager(
+        cfg: NotifyConfig,
+        clock: &MockClock,
+        notifiers: Vec<Box<dyn Notifier>>,
+    ) -> NotifyManager {
         NotifyManager::with_notifiers(cfg, Box::new(clock.clone()), notifiers)
     }
 
@@ -607,7 +661,8 @@ mod tests {
 
     #[test]
     fn render_basic_substitution() {
-        let got = render_template("notify-send {event} {message}", NotifyEvent::Error, "boom").unwrap();
+        let got =
+            render_template("notify-send {event} {message}", NotifyEvent::Error, "boom").unwrap();
         assert_eq!(got, "notify-send 'error' 'boom'");
     }
 
@@ -633,7 +688,10 @@ mod tests {
     #[test]
     fn render_without_placeholders_is_identity() {
         let tpl = "uptime && echo ok";
-        assert_eq!(render_template(tpl, NotifyEvent::TurnDone, "ignored").unwrap(), tpl);
+        assert_eq!(
+            render_template(tpl, NotifyEvent::TurnDone, "ignored").unwrap(),
+            tpl
+        );
     }
 
     // ---- CommandNotifier ----
@@ -650,8 +708,10 @@ mod tests {
     #[test]
     fn command_substitution_is_injection_proof() {
         // Враждебное сообщение: кавычки, $, обратные кавычки, $(), перевод строки.
-        let message = "it's \"quoted\"; $HOME `echo PWNED` $(id) && touch /tmp/pwned\nвторая строка";
-        let rendered = render_template("printf '%s' {message}", NotifyEvent::Error, message).unwrap();
+        let message =
+            "it's \"quoted\"; $HOME `echo PWNED` $(id) && touch /tmp/pwned\nвторая строка";
+        let rendered =
+            render_template("printf '%s' {message}", NotifyEvent::Error, message).unwrap();
         let out = run_command(&rendered, Duration::from_secs(5)).unwrap();
         assert!(out.status.success());
         // Вывод совпал с сообщением байт-в-байт: ни одна подстановка shell не сработала.
@@ -661,14 +721,16 @@ mod tests {
 
     #[test]
     fn command_substitutes_event_name() {
-        let rendered = render_template("printf '%s' {event}", NotifyEvent::NeedsPermission, "m").unwrap();
+        let rendered =
+            render_template("printf '%s' {event}", NotifyEvent::NeedsPermission, "m").unwrap();
         let out = run_command(&rendered, Duration::from_secs(5)).unwrap();
         assert_eq!(String::from_utf8(out.stdout).unwrap(), "needs_permission");
     }
 
     #[test]
     fn command_not_found_is_error_not_panic() {
-        let notifier = CommandNotifier::new("definitely-not-a-real-binary-xyz-737 {message}").unwrap();
+        let notifier =
+            CommandNotifier::new("definitely-not-a-real-binary-xyz-737 {message}").unwrap();
         let err = notifier.notify(NotifyEvent::Error, "boom").unwrap_err();
         // sh возвращает 127 «command not found» — это Err, а не паника.
         let text = err.to_string();
@@ -680,13 +742,17 @@ mod tests {
         let notifier = CommandNotifier::new("echo oops >&2; exit 3").unwrap();
         let err = notifier.notify(NotifyEvent::Error, "m").unwrap_err();
         let text = err.to_string();
-        assert!(text.contains("exit status: 3"), "неожиданный текст ошибки: {text}");
+        assert!(
+            text.contains("exit status: 3"),
+            "неожиданный текст ошибки: {text}"
+        );
         assert!(text.contains("oops"), "stderr не попал в ошибку: {text}");
     }
 
     #[test]
     fn command_timeout_is_error() {
-        let notifier = CommandNotifier::with_timeout("sleep 5", Duration::from_millis(150)).unwrap();
+        let notifier =
+            CommandNotifier::with_timeout("sleep 5", Duration::from_millis(150)).unwrap();
         let err = notifier.notify(NotifyEvent::TurnDone, "m").unwrap_err();
         let text = err.to_string();
         assert!(text.contains("таймаут"), "неожиданный текст ошибки: {text}");
@@ -725,7 +791,9 @@ mod tests {
         assert_eq!(second["message"], "ход завершён");
 
         // Второй инстанс на том же пути дописывает, а не перезаписывает.
-        LogNotifier::new(&path).notify(NotifyEvent::TaskComplete, "ещё").unwrap();
+        LogNotifier::new(&path)
+            .notify(NotifyEvent::TaskComplete, "ещё")
+            .unwrap();
         let content = fs::read_to_string(&path).unwrap();
         assert_eq!(content.lines().count(), 3);
         assert!(content.ends_with('\n'));
@@ -734,8 +802,12 @@ mod tests {
 
     #[test]
     fn log_bad_path_is_error_not_panic() {
-        let path = std::env::temp_dir().join("theseus-notify-no-such-dir-zzz").join("f.log");
-        let err = LogNotifier::new(&path).notify(NotifyEvent::Error, "x").unwrap_err();
+        let path = std::env::temp_dir()
+            .join("theseus-notify-no-such-dir-zzz")
+            .join("f.log");
+        let err = LogNotifier::new(&path)
+            .notify(NotifyEvent::Error, "x")
+            .unwrap_err();
         assert!(err.to_string().contains("не удалось открыть"));
     }
 
@@ -746,7 +818,10 @@ mod tests {
         let clock = MockClock::new(1_000);
         let rec = Recorder::new();
         let mut mgr = manager(NotifyConfig::default(), &clock, vec![Box::new(rec.clone())]);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "boom").unwrap(), NotifyOutcome::Disabled);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "boom").unwrap(),
+            NotifyOutcome::Disabled
+        );
         assert!(rec.taken().is_empty());
     }
 
@@ -759,8 +834,14 @@ mod tests {
             ..enabled_config()
         };
         let mut mgr = manager(cfg, &clock, vec![Box::new(rec.clone())]);
-        assert_eq!(mgr.notify(NotifyEvent::TaskComplete, "t").unwrap(), NotifyOutcome::NotSubscribed);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "e").unwrap(), NotifyOutcome::Sent);
+        assert_eq!(
+            mgr.notify(NotifyEvent::TaskComplete, "t").unwrap(),
+            NotifyOutcome::NotSubscribed
+        );
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "e").unwrap(),
+            NotifyOutcome::Sent
+        );
         assert_eq!(rec.taken(), vec![(NotifyEvent::Error, "e".to_string())]);
     }
 
@@ -768,16 +849,31 @@ mod tests {
     fn manager_throttles_repeated_events_with_boundary() {
         let clock = MockClock::new(1_000_000);
         let rec = Recorder::new();
-        let cfg = NotifyConfig { throttle_secs: 60, ..enabled_config() };
+        let cfg = NotifyConfig {
+            throttle_secs: 60,
+            ..enabled_config()
+        };
         let mut mgr = manager(cfg, &clock, vec![Box::new(rec.clone())]);
 
-        assert_eq!(mgr.notify(NotifyEvent::Error, "1").unwrap(), NotifyOutcome::Sent);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "1").unwrap(),
+            NotifyOutcome::Sent
+        );
         clock.advance(1);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "2").unwrap(), NotifyOutcome::Throttled);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "2").unwrap(),
+            NotifyOutcome::Throttled
+        );
         clock.advance(58); // всего 59 сек — ещё рано
-        assert_eq!(mgr.notify(NotifyEvent::Error, "3").unwrap(), NotifyOutcome::Throttled);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "3").unwrap(),
+            NotifyOutcome::Throttled
+        );
         clock.advance(1); // ровно 60 сек — граница: уже не троттлится
-        assert_eq!(mgr.notify(NotifyEvent::Error, "4").unwrap(), NotifyOutcome::Sent);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "4").unwrap(),
+            NotifyOutcome::Sent
+        );
         let msgs: Vec<String> = rec.taken().into_iter().map(|(_, m)| m).collect();
         assert_eq!(msgs, vec!["1".to_string(), "4".to_string()]);
     }
@@ -786,22 +882,43 @@ mod tests {
     fn manager_zero_throttle_never_throttles() {
         let clock = MockClock::new(1_000);
         let rec = Recorder::new();
-        let cfg = NotifyConfig { throttle_secs: 0, ..enabled_config() };
+        let cfg = NotifyConfig {
+            throttle_secs: 0,
+            ..enabled_config()
+        };
         let mut mgr = manager(cfg, &clock, vec![Box::new(rec.clone())]);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "1").unwrap(), NotifyOutcome::Sent);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "2").unwrap(), NotifyOutcome::Sent);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "1").unwrap(),
+            NotifyOutcome::Sent
+        );
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "2").unwrap(),
+            NotifyOutcome::Sent
+        );
         assert_eq!(rec.taken().len(), 2);
     }
 
     #[test]
     fn manager_throttle_is_per_event_type() {
         let clock = MockClock::new(1_000);
-        let cfg = NotifyConfig { throttle_secs: 60, ..enabled_config() };
+        let cfg = NotifyConfig {
+            throttle_secs: 60,
+            ..enabled_config()
+        };
         let mut mgr = manager(cfg, &clock, vec![]);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "e1").unwrap(), NotifyOutcome::Sent);
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "e1").unwrap(),
+            NotifyOutcome::Sent
+        );
         // Другой тип события не попадает под троттлинг первого.
-        assert_eq!(mgr.notify(NotifyEvent::TaskComplete, "t1").unwrap(), NotifyOutcome::Sent);
-        assert_eq!(mgr.notify(NotifyEvent::Error, "e2").unwrap(), NotifyOutcome::Throttled);
+        assert_eq!(
+            mgr.notify(NotifyEvent::TaskComplete, "t1").unwrap(),
+            NotifyOutcome::Sent
+        );
+        assert_eq!(
+            mgr.notify(NotifyEvent::Error, "e2").unwrap(),
+            NotifyOutcome::Throttled
+        );
     }
 
     #[test]
@@ -857,7 +974,9 @@ mod tests {
     fn config_serde_roundtrip_and_defaults() {
         let cfg = NotifyConfig {
             enabled: true,
-            events: [NotifyEvent::Error, NotifyEvent::TurnDone].into_iter().collect(),
+            events: [NotifyEvent::Error, NotifyEvent::TurnDone]
+                .into_iter()
+                .collect(),
             command: Some("notify-send {event} {message}".to_string()),
             throttle_secs: 5,
         };

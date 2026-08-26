@@ -5,7 +5,7 @@
 //! * Новостные дайджесты — markdown-файлы `YYYY-MM-DD_<заголовок>.md` в
 //!   подкаталогах-источниках (`AINews`, `Raschka`, ...): [`scan_digests`]
 //!   обходит корень на глубину ≤2, [`search_digests`] ранжирует по словам
-//!   запроса в заголовке, имени файла и первых [`TEXT_WINDOW_BYTES`] байтах
+//!   запроса в заголовке, имени файла и первых `TEXT_WINDOW_BYTES` байтах
 //!   текста, [`read_digest`] читает файл с обрезкой по числу символов.
 //! * HF-коллекции — `collections_data.json` вида `{ "<slug>": { поля } }`:
 //!   [`load_collections`] разбирает dict в `Vec<HfCollection>` (дефолты для
@@ -81,7 +81,7 @@ pub struct DigestHit {
     /// Итоговые очки ранжирования (см. [`search_digests`]).
     pub score: u64,
     /// Первая строка текста с совпадением, обрезанная до
-    /// [`SNIPPET_MAX_CHARS`] символов; пуста, если совпадение только в
+    /// `SNIPPET_MAX_CHARS` символов; пуста, если совпадение только в
     /// заголовке/имени файла.
     pub snippet: String,
 }
@@ -214,11 +214,11 @@ fn parse_dated_name(name: &str) -> Option<(String, String)> {
 
 /// Ищет слова запроса по дайджестам и возвращает находки по убыванию очков.
 ///
-/// Скоринг (на каждое слово запроса): [`SCORE_TITLE`] — слово есть в
-/// заголовке, [`SCORE_FILENAME`] — в имени файла,
-/// [`SCORE_TEXT_PER_MATCH`] за каждое вхождение в первые
-/// [`TEXT_WINDOW_BYTES`] байт текста (суммарный текстовый вклад ограничен
-/// [`TEXT_SCORE_CAP`]). Слова короче двух символов отбрасываются; пустой
+/// Скоринг (на каждое слово запроса): `SCORE_TITLE` — слово есть в
+/// заголовке, `SCORE_FILENAME` — в имени файла,
+/// `SCORE_TEXT_PER_MATCH` за каждое вхождение в первые
+/// `TEXT_WINDOW_BYTES` байт текста (суммарный текстовый вклад ограничен
+/// `TEXT_SCORE_CAP`). Слова короче двух символов отбрасываются; пустой
 /// запрос (или из одних коротких слов) даёт пустой результат.
 ///
 /// `days = Some(n)` оставляет записи не старше `n` дней от **максимальной
@@ -226,7 +226,7 @@ fn parse_dated_name(name: &str) -> Option<(String, String)> {
 /// Сравнение дат лексикографическое по ISO-строкам. `None` — без фильтра.
 ///
 /// Сниппет — первая строка окна текста с совпадением, обрезанная до
-/// [`SNIPPET_MAX_CHARS`] символов. Равные очки разрешаются по дате (новые
+/// `SNIPPET_MAX_CHARS` символов. Равные очки разрешаются по дате (новые
 /// вперёд) и заголовку. Нечитаемые файлы считаются пустыми.
 pub fn search_digests(
     entries: &[DigestEntry],
@@ -330,8 +330,8 @@ pub fn load_collections(json_path: &Path) -> Result<Vec<HfCollection>> {
 
 /// Ищет слова запроса по HF-коллекциям; возвращает ссылки на совпавшие.
 ///
-/// Скоринг (на каждое слово): [`SCORE_HF_TITLE`] — слово в заголовке,
-/// [`SCORE_HF_THEME`] — в теме, [`SCORE_HF_TEXT_PER_MATCH`] за каждое
+/// Скоринг (на каждое слово): `SCORE_HF_TITLE` — слово в заголовке,
+/// `SCORE_HF_THEME` — в теме, `SCORE_HF_TEXT_PER_MATCH` за каждое
 /// вхождение в `items_preview` + `description` (без потолка).
 /// `provider = Some(p)` оставляет коллекции, чей `provider_key` содержит
 /// `p` без учёта регистра. Пустой запрос даёт пустой результат.
@@ -700,7 +700,7 @@ mod tests {
         assert_eq!(shift_date("2026-01-01", -1).unwrap(), "2025-12-31");
         assert_eq!(shift_date("1970-01-01", 0).unwrap(), "1970-01-01");
         assert_eq!(shift_date("2026-02-30", 1), None); // невалидный вход
-        // roundtrip: дата → дни → дата
+                                                       // roundtrip: дата → дни → дата
         for date in ["1999-12-31", "2000-02-29", "2026-07-19"] {
             let (y, m, d) = parse_iso_date(date).unwrap();
             let (y2, m2, d2) = civil_from_days(days_from_civil(y, m, d));
@@ -738,8 +738,14 @@ mod tests {
     fn search_collections_ranks_title_theme_then_text() {
         let cols = vec![
             col("Robotics stack", 1),
-            HfCollection { theme: "robotics".to_owned(), ..col("", 2) },
-            HfCollection { description: "robotics robotics".to_owned(), ..col("", 3) },
+            HfCollection {
+                theme: "robotics".to_owned(),
+                ..col("", 2)
+            },
+            HfCollection {
+                description: "robotics robotics".to_owned(),
+                ..col("", 3)
+            },
         ];
         let hits = search_collections(&cols, "robotics", None, 10);
         assert_eq!(hits.len(), 3);
@@ -750,7 +756,11 @@ mod tests {
 
     #[test]
     fn search_collections_breaks_ties_by_upvotes_then_title() {
-        let cols = vec![col("vision beta", 3), col("vision alpha", 3), col("vision gamma", 9)];
+        let cols = vec![
+            col("vision beta", 3),
+            col("vision alpha", 3),
+            col("vision gamma", 9),
+        ];
         let hits = search_collections(&cols, "vision", None, 10);
         assert_eq!(hits[0].title, "vision gamma"); // равные очки → upvotes ↓
         assert_eq!(hits[1].title, "vision alpha"); // равные upvotes → title ↑
@@ -761,8 +771,14 @@ mod tests {
     #[test]
     fn search_collections_filters_provider_case_insensitive() {
         let cols = vec![
-            HfCollection { provider_key: "DeepSeek-AI".to_owned(), ..col("agents hub", 0) },
-            HfCollection { provider_key: "qwen".to_owned(), ..col("agents den", 0) },
+            HfCollection {
+                provider_key: "DeepSeek-AI".to_owned(),
+                ..col("agents hub", 0)
+            },
+            HfCollection {
+                provider_key: "qwen".to_owned(),
+                ..col("agents den", 0)
+            },
         ];
         let hits = search_collections(&cols, "agents", Some("deepseek"), 10);
         assert_eq!(hits.len(), 1);
@@ -785,7 +801,10 @@ mod tests {
         }
         let hf = Path::new(HF_ROOT);
         if hf.is_dir() {
-            assert!(!scan_digests(hf, "HF").is_empty(), "ожидались дайджесты в {HF_ROOT}");
+            assert!(
+                !scan_digests(hf, "HF").is_empty(),
+                "ожидались дайджесты в {HF_ROOT}"
+            );
         }
         let json = hf.join("collections_data.json");
         if json.is_file() {

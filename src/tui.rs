@@ -8,9 +8,13 @@ use crate::history::{InputHistory, DEFAULT_CAPACITY};
 use crate::slash::{self, Parsed};
 use crate::theme::{Color16, ColorSpec, Theme, ThemeRole};
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
-    EnableBracketedPaste, DisableBracketedPaste, EnableMouseCapture, DisableMouseCapture};
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::event::{
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind,
+};
+use crossterm::terminal::{
+    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
+};
 use crossterm::ExecutableCommand;
 use ratatui::backend::CrosstermBackend;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -34,7 +38,9 @@ pub struct PermBroker {
 
 impl PermBroker {
     pub fn new() -> Arc<Self> {
-        Arc::new(PermBroker { pending: Mutex::new(None) })
+        Arc::new(PermBroker {
+            pending: Mutex::new(None),
+        })
     }
     /// вызывается агентом (блокирует его поток до ответа)
     pub fn ask(&self, question: &str) -> bool {
@@ -46,7 +52,11 @@ impl PermBroker {
         self.pending.lock().unwrap().take()
     }
     fn peek(&self) -> Option<String> {
-        self.pending.lock().unwrap().as_ref().map(|(q, _)| q.clone())
+        self.pending
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(|(q, _)| q.clone())
     }
 }
 
@@ -66,10 +76,18 @@ struct MdStyle {
 impl MdStyle {
     fn to_style(self) -> Style {
         let mut s = Style::default();
-        if let Some(fg) = self.fg { s = s.fg(fg); }
-        if let Some(bg) = self.bg { s = s.bg(bg); }
-        if self.bold { s = s.add_modifier(Modifier::BOLD); }
-        if self.dim { s = s.add_modifier(Modifier::DIM); }
+        if let Some(fg) = self.fg {
+            s = s.fg(fg);
+        }
+        if let Some(bg) = self.bg {
+            s = s.bg(bg);
+        }
+        if self.bold {
+            s = s.add_modifier(Modifier::BOLD);
+        }
+        if self.dim {
+            s = s.add_modifier(Modifier::DIM);
+        }
         s
     }
 
@@ -110,7 +128,10 @@ fn md_ansi_to_lines(rendered: &str) -> Vec<Vec<Span<'static>>> {
                     style.apply_sgr(&tail[2..end]);
                     rest = &tail[end + 1..];
                 }
-                None => { rest = ""; break; }
+                None => {
+                    rest = "";
+                    break;
+                }
             }
         }
         if !rest.is_empty() {
@@ -360,7 +381,10 @@ fn slash_completions(input: &str) -> Vec<slash::SlashCmd> {
         .into_iter()
         .filter(|cmd| {
             cmd.name.starts_with(needle.as_str())
-                || cmd.aliases.iter().any(|alias| alias.starts_with(needle.as_str()))
+                || cmd
+                    .aliases
+                    .iter()
+                    .any(|alias| alias.starts_with(needle.as_str()))
         })
         .take(MAX_COMPLETIONS)
         .collect()
@@ -404,7 +428,8 @@ fn jump_badge_hit(btn: Option<(u16, u16)>, col: u16, row: u16) -> bool {
 /// Живая панель фоновых задач в шапке (v0.7): « · explore 1:20 · peer kimi 3:45»
 /// — только бегущие, усечение до max_chars (чистая функция — для тестов).
 fn format_bg_panel(items: &[crate::background::BgTaskInfo], max_chars: usize) -> String {
-    let running: Vec<String> = items.iter()
+    let running: Vec<String> = items
+        .iter()
         .filter(|i| !i.done)
         .map(|i| format!("{} {}", i.kind, fmt_mmss(i.started.elapsed().as_secs())))
         .collect();
@@ -433,7 +458,9 @@ fn input_placeholder(input: &str) -> Option<&'static str> {
 
 /// Общий префикс имён кандидатов (посимвольно, до первого расхождения).
 fn common_name_prefix(cmds: &[slash::SlashCmd]) -> String {
-    let Some(first) = cmds.first() else { return String::new(); };
+    let Some(first) = cmds.first() else {
+        return String::new();
+    };
     let mut prefix = first.name.to_string();
     for cmd in &cmds[1..] {
         while !cmd.name.starts_with(prefix.as_str()) {
@@ -451,7 +478,10 @@ fn common_name_prefix(cmds: &[slash::SlashCmd]) -> String {
 /// индекс следующего кандидата): совпадения считаются от ИСХОДНОГО префикса,
 /// иначе после подстановки полного имени множество схлопывалось бы до одного.
 /// Ввод с пробелом (аргументы) или без '/' не дополняется.
-fn slash_complete(input: &str, cycle: Option<(String, usize)>) -> Option<(String, Option<(String, usize)>)> {
+fn slash_complete(
+    input: &str,
+    cycle: Option<(String, usize)>,
+) -> Option<(String, Option<(String, usize)>)> {
     let body = input.strip_prefix('/')?;
     if body.is_empty() || body.chars().any(char::is_whitespace) {
         return None;
@@ -491,15 +521,24 @@ fn welcome_lines(model_info: &str, reasoning: &str, theme: &Theme) -> Vec<Line<'
     // компактный «логотип» рамкой — ширина рамки по контенту (CJK/кириллица — 1 ячейка)
     let logo = " T H E S E U S  — агентный TUI-харнесс ";
     let w = logo.chars().count();
-    lines.push(Line::from(Span::styled(format!("  ╔{}╗", "═".repeat(w)), dim)));
+    lines.push(Line::from(Span::styled(
+        format!("  ╔{}╗", "═".repeat(w)),
+        dim,
+    )));
     lines.push(Line::from(vec![
         Span::styled("  ║", dim),
         Span::styled(logo.to_string(), title),
         Span::styled("║", dim),
     ]));
-    lines.push(Line::from(Span::styled(format!("  ╚{}╝", "═".repeat(w)), dim)));
+    lines.push(Line::from(Span::styled(
+        format!("  ╚{}╝", "═".repeat(w)),
+        dim,
+    )));
     lines.extend([
-        Line::from(Span::styled(format!("  модель: {model_info} · ризонинг {reasoning}"), dim)),
+        Line::from(Span::styled(
+            format!("  модель: {model_info} · ризонинг {reasoning}"),
+            dim,
+        )),
         Line::raw(""),
         Line::from(Span::styled(
             "  Enter — отправить · ↑/↓ — история · /help — команды · Esc — выход",
@@ -508,7 +547,10 @@ fn welcome_lines(model_info: &str, reasoning: &str, theme: &Theme) -> Vec<Line<'
         Line::raw(""),
         Line::from(Span::styled("  С чего начать:", title)),
     ]);
-    for prompt in crate::onboarding::suggested_starter_prompts().iter().take(3) {
+    for prompt in crate::onboarding::suggested_starter_prompts()
+        .iter()
+        .take(3)
+    {
         lines.push(Line::from(vec![
             Span::styled("   • ", ok),
             Span::styled((*prompt).to_string(), prompt_style),
@@ -559,7 +601,10 @@ fn clip_axis(v: u16, start: u16, len: u16) -> u16 {
 
 /// Зажать экранную точку внутрь области лога (драг может уходить за края).
 fn clip_to_area(col: u16, row: u16, area: Rect) -> (u16, u16) {
-    (clip_axis(col, area.x, area.width), clip_axis(row, area.y, area.height))
+    (
+        clip_axis(col, area.x, area.width),
+        clip_axis(row, area.y, area.height),
+    )
 }
 
 /// Извлечь выделенный текст из лога. Маппинг экранной строки в индекс
@@ -590,12 +635,25 @@ fn extract_selection(app: &TuiApp, sel: Sel) -> String {
     let mut out: Vec<String> = Vec::new();
     for row in sy..=ey {
         let idx = first + (row - area.y) as usize;
-        let Some(line) = app.log.get(idx) else { continue };
+        let Some(line) = app.log.get(idx) else {
+            continue;
+        };
         let plain = line_plain(line);
         let len = plain.chars().count();
         let from = (if row == sy { (sx - area.x) as usize } else { 0 }).min(len);
-        let to = (if row == ey { (ex - area.x) as usize } else { len }).min(len);
-        out.push(plain.chars().skip(from).take(to.saturating_sub(from)).collect());
+        let to = (if row == ey {
+            (ex - area.x) as usize
+        } else {
+            len
+        })
+        .min(len);
+        out.push(
+            plain
+                .chars()
+                .skip(from)
+                .take(to.saturating_sub(from))
+                .collect(),
+        );
     }
     out.join("\n")
 }
@@ -858,7 +916,9 @@ fn theseus_dir() -> std::result::Result<PathBuf, String> {
 /// завершаем (иначе он висел бы до перехвата selection).
 fn kill_prev_clip_owner(dir: &Path) {
     let pidfile = dir.join(CLIP_PIDFILE_NAME);
-    let Ok(content) = std::fs::read_to_string(&pidfile) else { return };
+    let Ok(content) = std::fs::read_to_string(&pidfile) else {
+        return;
+    };
     let pid = content.trim();
     // pidfile пишем сами, но файл мог повредиться: принимаем только цифры
     if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
@@ -1031,7 +1091,12 @@ pub struct TuiApp {
 /// Тип блока в логе: пользователь / ответ агента / инструменты / системные заметки.
 /// Между разными типами вставляется пустая строка-разделитель.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum BlockKind { User, Agent, Tool, Notice }
+enum BlockKind {
+    User,
+    Agent,
+    Tool,
+    Notice,
+}
 
 /// Санитация текста перед показом в терминале: управляющие символы C0/C1
 /// (form feed \x0c из pdftotext, \x08, \x0b, табы) нельзя отдавать в вывод —
@@ -1047,11 +1112,16 @@ fn sanitize_log_str(s: &str) -> Cow<'_, str> {
     // ANSI-последовательности срезаем целиком и первыми: если лишь заменить
     // ESC на пробел, их параметры остаются текстом-мусором (протечка 03.08)
     let stripped = crate::textutil::strip_ansi(s);
-    Cow::Owned(stripped.chars().map(|c| match c {
-        '\n' | '\r' => '⏎',
-        c if c.is_control() => ' ',
-        c => c,
-    }).collect())
+    Cow::Owned(
+        stripped
+            .chars()
+            .map(|c| match c {
+                '\n' | '\r' => '⏎',
+                c if c.is_control() => ' ',
+                c => c,
+            })
+            .collect(),
+    )
 }
 
 /// Точная высота строк с учётом переносов: рендер в офскрин-буфер той же
@@ -1063,7 +1133,11 @@ fn wrapped_height(lines: Vec<Line>, width: u16, max_height: u16) -> usize {
     use ratatui::widgets::Widget;
     let area = Rect::new(0, 0, width.max(1), max_height.max(1));
     let mut buf = Buffer::empty(area);
-    Widget::render(Paragraph::new(lines).wrap(Wrap { trim: false }), area, &mut buf);
+    Widget::render(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        area,
+        &mut buf,
+    );
     for y in (0..max_height).rev() {
         if (0..width).any(|x| buf.get(x, y).symbol() != " ") {
             return y as usize + 1;
@@ -1080,7 +1154,11 @@ fn wrapped_end_pos(lines: Vec<Line>, width: u16, max_height: u16) -> (usize, usi
     use ratatui::widgets::Widget;
     let area = Rect::new(0, 0, width.max(1), max_height.max(1));
     let mut buf = Buffer::empty(area);
-    Widget::render(Paragraph::new(lines).wrap(Wrap { trim: false }), area, &mut buf);
+    Widget::render(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        area,
+        &mut buf,
+    );
     for y in (0..max_height).rev() {
         for x in (0..width).rev() {
             if buf.get(x, y).symbol() != " " {
@@ -1102,7 +1180,10 @@ fn wrapped_cursor_pos(lines: Vec<Line>, width: u16, max_height: u16) -> (usize, 
 
 /// Байтовый индекс символа `char_idx` в строке (для insert/remove по курсору).
 fn char_to_byte(s: &str, char_idx: usize) -> usize {
-    s.char_indices().nth(char_idx).map(|(b, _)| b).unwrap_or(s.len())
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(s.len())
 }
 
 /// Вставка текста в поле ввода по курсору (курсор — символьный индекс).
@@ -1145,19 +1226,24 @@ fn sanitize_paste(s: &str) -> String {
 /// где \n → ⏎).
 fn sanitize_stream(s: &str) -> String {
     crate::textutil::strip_ansi(s)
-        .chars().map(|c| if c.is_control() && c != '\n' { ' ' } else { c }).collect()
+        .chars()
+        .map(|c| if c.is_control() && c != '\n' { ' ' } else { c })
+        .collect()
 }
 
 /// Санитация спанов строки лога от управляющих символов (общий код push() и
 /// вставок стрим-блока — ни один путь не должен отдать C0/C1 в терминал).
 fn sanitize_spans(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
-    spans.into_iter().map(|sp| {
-        if sp.content.chars().any(char::is_control) {
-            Span::styled(sanitize_log_str(&sp.content).into_owned(), sp.style)
-        } else {
-            sp
-        }
-    }).collect()
+    spans
+        .into_iter()
+        .map(|sp| {
+            if sp.content.chars().any(char::is_control) {
+                Span::styled(sanitize_log_str(&sp.content).into_owned(), sp.style)
+            } else {
+                sp
+            }
+        })
+        .collect()
 }
 
 /// Приблизительная высота логической строки лога в визуальных строках
@@ -1165,7 +1251,11 @@ fn sanitize_spans(spans: Vec<Span<'static>>) -> Vec<Span<'static>> {
 /// запасом окна и точным пиннингом через wrapped_height).
 fn approx_rows(spans: &[Span], width: usize) -> usize {
     let w: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-    if w == 0 { 1 } else { w.div_ceil(width.max(1)) }
+    if w == 0 {
+        1
+    } else {
+        w.div_ceil(width.max(1))
+    }
 }
 
 /// Верх окна ручного скролла, при котором экран ещё полон: самая поздняя
@@ -1184,22 +1274,40 @@ fn manual_max_top(log: &[LogLine], visible_rows: usize, width: usize) -> usize {
 impl TuiApp {
     fn new() -> Self {
         TuiApp {
-            log: vec![], input: String::new(),
-            status: "инициализация…".into(), accounting: String::new(),
+            log: vec![],
+            input: String::new(),
+            status: "инициализация…".into(),
+            accounting: String::new(),
             git_status: String::new(),
-            scroll: 0, follow: true, agent_done: false, started_at: Instant::now(),
-            stream_open: false, stream_line_idx: None,
-            peer_stream_idx: None, peer_stream_text: String::new(), peer_stream_len: 0,
-            peer_stream_gutter: None, peer_stream_peer: String::new(),
-            stream_text: String::new(), stream_block_len: 0, stream_gutter: None,
+            scroll: 0,
+            follow: true,
+            agent_done: false,
+            started_at: Instant::now(),
+            stream_open: false,
+            stream_line_idx: None,
+            peer_stream_idx: None,
+            peer_stream_text: String::new(),
+            peer_stream_len: 0,
+            peer_stream_gutter: None,
+            peer_stream_peer: String::new(),
+            stream_text: String::new(),
+            stream_block_len: 0,
+            stream_gutter: None,
             // дефолты для тестов и до инициализации в run_tui: dark-тема,
             // стандартный лимит, UTC; боевые значения подставляет run_tui
             theme: tui_theme("dark").unwrap_or_else(|| Theme::new("dark")),
-            ctx_est_tokens: None, ctx_limit: 120_000, tz_offset_secs: 0,
-            agent_running: false, model_info: String::new(),
-            model_id: String::new(), effort: "high".into(),
-            completion_cycle: None, block_kind: None,
-            sel: None, log_area: Rect::default(), last_tool_open: None,
+            ctx_est_tokens: None,
+            ctx_limit: 120_000,
+            tz_offset_secs: 0,
+            agent_running: false,
+            model_info: String::new(),
+            model_id: String::new(),
+            effort: "high".into(),
+            completion_cycle: None,
+            block_kind: None,
+            sel: None,
+            log_area: Rect::default(),
+            last_tool_open: None,
             mode_code: crate::permissions::MODE_UNSET,
             bg_running: 0,
             bg_items: Vec::new(),
@@ -1211,14 +1319,20 @@ impl TuiApp {
     fn push(&mut self, spans: Vec<Span<'static>>) {
         // единая точка входа строк в лог — чистим управляющие символы здесь,
         // чтобы ни один путь (markdown, события, статусы) не расстроил терминал
-        self.log.push(LogLine { spans: sanitize_spans(spans) });
-        if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+        self.log.push(LogLine {
+            spans: sanitize_spans(spans),
+        });
+        if self.follow {
+            self.scroll = self.log.len().saturating_sub(1);
+        }
     }
     /// Перерендер стрим-блока (markdown налету, v0.6.4): старые rendered-строки
     /// снимаются по stream_line_idx, новые вставляются туда же. Строки,
     /// добавленные ПОСЛЕ начала стрима (Reasoning и т.п.), не задеваются.
     fn render_stream_block(&mut self) {
-        let Some(idx) = self.stream_line_idx else { return };
+        let Some(idx) = self.stream_line_idx else {
+            return;
+        };
         let end = (idx + self.stream_block_len).min(self.log.len());
         if idx < end {
             self.log.drain(idx..end);
@@ -1244,16 +1358,25 @@ impl TuiApp {
                 self.gutter_cont()
             };
             line.extend(spans);
-            self.log.insert(idx + off, LogLine { spans: sanitize_spans(line) });
+            self.log.insert(
+                idx + off,
+                LogLine {
+                    spans: sanitize_spans(line),
+                },
+            );
         }
         self.stream_block_len = count;
-        if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+        if self.follow {
+            self.scroll = self.log.len().saturating_sub(1);
+        }
     }
     /// Перерендер PEER-блока (нативный стриминг пиров): зеркало
     /// [`TuiApp::render_stream_block`], но для [`TuiApp::peer_stream_text`] —
     /// отдельное состояние от стрима основной модели (могут идти параллельно).
     fn render_peer_block(&mut self) {
-        let Some(idx) = self.peer_stream_idx else { return };
+        let Some(idx) = self.peer_stream_idx else {
+            return;
+        };
         let end = (idx + self.peer_stream_len).min(self.log.len());
         if idx < end {
             self.log.drain(idx..end);
@@ -1278,10 +1401,17 @@ impl TuiApp {
                 self.gutter_cont()
             };
             line.extend(spans);
-            self.log.insert(idx + off, LogLine { spans: sanitize_spans(line) });
+            self.log.insert(
+                idx + off,
+                LogLine {
+                    spans: sanitize_spans(line),
+                },
+            );
         }
         self.peer_stream_len = count;
-        if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+        if self.follow {
+            self.scroll = self.log.len().saturating_sub(1);
+        }
     }
     /// Финализация peer-блока без снятия строк: блок остаётся в логе,
     /// состояние сбрасывается (следующая дельта любого пира — новый блок).
@@ -1295,8 +1425,11 @@ impl TuiApp {
     /// Верх окна ручного скролла с полным экраном (кламп против «провала»
     /// колеса в пустоту под концом лога). Читает log_area последнего кадра.
     fn max_scroll(&self) -> usize {
-        manual_max_top(&self.log, self.log_area.height as usize,
-                       self.log_area.width.max(1) as usize)
+        manual_max_top(
+            &self.log,
+            self.log_area.height as usize,
+            self.log_area.width.max(1) as usize,
+        )
     }
     /// Начало блока нового типа: вставить пустую строку-разделитель
     /// (воздух между блоками — междустрочный ритм вместо сплошной простыни).
@@ -1317,17 +1450,26 @@ impl TuiApp {
     /// Желобок первой строки блока: «HH:MM ❯» — время один раз на блок.
     fn gutter_first(&self, marker: &str, style: Style) -> Vec<Span<'static>> {
         vec![
-            Span::styled(format!("{} ", self.ts()), role_style(&self.theme, ThemeRole::Dim)),
+            Span::styled(
+                format!("{} ", self.ts()),
+                role_style(&self.theme, ThemeRole::Dim),
+            ),
             Span::styled(marker.to_string(), style),
         ]
     }
     /// Желобок продолжения: тонкая вертикаль — блок читается как единое целое.
     fn gutter_cont(&self) -> Vec<Span<'static>> {
-        vec![Span::styled("     │ ", role_style(&self.theme, ThemeRole::Dim))]
+        vec![Span::styled(
+            "     │ ",
+            role_style(&self.theme, ThemeRole::Dim),
+        )]
     }
     /// Желобок вложенной строки (результат инструмента).
     fn gutter_sub(&self) -> Vec<Span<'static>> {
-        vec![Span::styled("     ↳ ", role_style(&self.theme, ThemeRole::Dim))]
+        vec![Span::styled(
+            "     ↳ ",
+            role_style(&self.theme, ThemeRole::Dim),
+        )]
     }
     fn on_event(&mut self, ev: AgentEvent) {
         if !matches!(ev, AgentEvent::AgentTextDelta(_)) {
@@ -1347,16 +1489,19 @@ impl TuiApp {
         // в нормальном ходе (живая регрессия — дубли фраз), их сброс ломал бы
         // замену стрим-блока. GoalSet/PlanChanged/TodoRejected/
         // MemoryConsolidated не означают конца ответа — тоже не сбрасывают.
-        if matches!(ev, AgentEvent::UserMsg(_)
-                    | AgentEvent::ToolCall { .. }
-                    | AgentEvent::ToolResult { .. }
-                    | AgentEvent::PermAsk { .. }
-                    | AgentEvent::HookNote(_)
-                    | AgentEvent::Accounting { .. }
-                    | AgentEvent::Finished(_)
-                    | AgentEvent::Error(_)
-                    | AgentEvent::Compact { .. })
-            && self.stream_line_idx.is_some() {
+        if matches!(
+            ev,
+            AgentEvent::UserMsg(_)
+                | AgentEvent::ToolCall { .. }
+                | AgentEvent::ToolResult { .. }
+                | AgentEvent::PermAsk { .. }
+                | AgentEvent::HookNote(_)
+                | AgentEvent::Accounting { .. }
+                | AgentEvent::Finished(_)
+                | AgentEvent::Error(_)
+                | AgentEvent::Compact { .. }
+        ) && self.stream_line_idx.is_some()
+        {
             self.stream_line_idx = None;
             self.stream_block_len = 0;
             self.stream_text.clear();
@@ -1418,14 +1563,18 @@ impl TuiApp {
                             self.log.drain(idx..block_end);
                         }
                     }
-                    if self.follow { self.scroll = self.log.len().saturating_sub(1); }
+                    if self.follow {
+                        self.scroll = self.log.len().saturating_sub(1);
+                    }
                 }
                 self.stream_block_len = 0;
                 self.stream_text.clear();
                 // желобок с замороженным временем начала стрима — переносим его
                 // с блока в финальный ответ внизу (время рождения сохраняется)
                 let agent = role_style(&theme, ThemeRole::AgentText);
-                let first_gutter = self.stream_gutter.take()
+                let first_gutter = self
+                    .stream_gutter
+                    .take()
                     .unwrap_or_else(|| self.gutter_first("◆ ", agent));
                 self.begin_block(BlockKind::Agent);
                 // финальный текст чистим так же, как дельты (strip ANSI + control):
@@ -1468,11 +1617,18 @@ impl TuiApp {
                 self.begin_block(BlockKind::Tool);
                 let mut line = self.gutter_sub();
                 line.push(Span::styled(format!("◈ {peer} "), tool));
-                line.push(Span::styled(format!("⚙ {name} "), tool.add_modifier(Modifier::BOLD)));
+                line.push(Span::styled(
+                    format!("⚙ {name} "),
+                    tool.add_modifier(Modifier::BOLD),
+                ));
                 line.push(Span::styled(short, dim));
                 self.push(line);
             }
-            AgentEvent::ToolCall { name, args, decision } => {
+            AgentEvent::ToolCall {
+                name,
+                args,
+                decision,
+            } => {
                 let short: String = args.chars().take(80).collect();
                 let tool = role_style(&theme, ThemeRole::ToolName);
                 self.begin_block(BlockKind::Tool);
@@ -1500,15 +1656,23 @@ impl TuiApp {
                 // остальные управляющие (\x0c из pdftotext, \x08) — через
                 // sanitize_log_str: xterm исполняет их как курсорные команды,
                 // кадр разъезжается (баг скриншота 16-42-57)
-                let short: String = sanitize_log_str(&preview.chars().take(90)
-                    .collect::<String>().replace('\n', " ⏎ ")).into_owned();
+                let short: String = sanitize_log_str(
+                    &preview
+                        .chars()
+                        .take(90)
+                        .collect::<String>()
+                        .replace('\n', " ⏎ "),
+                )
+                .into_owned();
                 // результат сразу после вызова — дописываем в ту же строку (1 строка
                 // на инструмент вместо двух: трейс не уходит вниз, скролл не нужен)
                 if self.last_tool_open == Some(self.log.len().saturating_sub(1))
                     && !self.log.is_empty()
                 {
                     let idx = self.log.len() - 1;
-                    self.log[idx].spans.push(Span::styled(format!("  → {short}"), style));
+                    self.log[idx]
+                        .spans
+                        .push(Span::styled(format!("  → {short}"), style));
                     self.last_tool_open = None;
                 } else {
                     self.last_tool_open = None;
@@ -1518,16 +1682,25 @@ impl TuiApp {
                     self.push(line);
                 }
             }
-            AgentEvent::Status { turns, est_tokens, mode } => {
+            AgentEvent::Status {
+                turns,
+                est_tokens,
+                mode,
+            } => {
                 // запоминаем оценку заполнения контекста для бара в заголовке
                 self.ctx_est_tokens = Some(est_tokens);
-                self.status = format!("ход {turns} | ~{est_tokens} ток | {mode} | {:.0}s",
-                                      self.started_at.elapsed().as_secs_f32());
+                self.status = format!(
+                    "ход {turns} | ~{est_tokens} ток | {mode} | {:.0}s",
+                    self.started_at.elapsed().as_secs_f32()
+                );
             }
             AgentEvent::Compact { from_msgs, to_msgs } => {
                 self.begin_block(BlockKind::Notice);
                 let mut line = self.gutter_first("⤓ ", accent);
-                line.push(Span::styled(format!("компактификация: {from_msgs} → {to_msgs} сообщений"), accent));
+                line.push(Span::styled(
+                    format!("компактификация: {from_msgs} → {to_msgs} сообщений"),
+                    accent,
+                ));
                 self.push(line);
             }
             AgentEvent::TodoRejected(m) => {
@@ -1551,25 +1724,45 @@ impl TuiApp {
                 self.push(line);
                 self.agent_done = true;
             }
-            AgentEvent::Accounting { calls, prompt_t, completion_t } => {
+            AgentEvent::Accounting {
+                calls,
+                prompt_t,
+                completion_t,
+            } => {
                 self.accounting = format!("API: {calls} выз. | токены {prompt_t}+{completion_t}");
             }
             AgentEvent::GoalSet(g) => {
                 self.begin_block(BlockKind::Notice);
                 let mut line = self.gutter_first("🎯 ", accent);
-                line.push(Span::styled(format!("GOAL: {g}"), accent.add_modifier(Modifier::BOLD)));
+                line.push(Span::styled(
+                    format!("GOAL: {g}"),
+                    accent.add_modifier(Modifier::BOLD),
+                ));
                 self.push(line);
             }
             AgentEvent::PlanChanged(on) => {
                 self.begin_block(BlockKind::Notice);
                 let mut line = self.gutter_first("📋 ", accent);
-                line.push(Span::styled(format!("plan mode: {}", if on { "ON (только чтение)" } else { "OFF" }), accent));
+                line.push(Span::styled(
+                    format!(
+                        "plan mode: {}",
+                        if on {
+                            "ON (только чтение)"
+                        } else {
+                            "OFF"
+                        }
+                    ),
+                    accent,
+                ));
                 self.push(line);
             }
             AgentEvent::MemoryConsolidated(n) => {
                 self.begin_block(BlockKind::Notice);
                 let mut line = self.gutter_first("🧠 ", dim);
-                line.push(Span::styled(format!("память: консолидировано {n} фактов"), dim));
+                line.push(Span::styled(
+                    format!("память: консолидировано {n} фактов"),
+                    dim,
+                ));
                 self.push(line);
             }
             AgentEvent::HookNote(n) => {
@@ -1588,7 +1781,9 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     // Голый «/» отдаёт ВЕСЬ список команд — панель не должна съедать экран:
     // максимум ~60% высоты терминала, остаток заменяет строка «…ещё N».
     let completions = slash_completions(&app.input);
-    let max_rows = ((f.size().height as usize) * 3 / 5).saturating_sub(2).max(3);
+    let max_rows = ((f.size().height as usize) * 3 / 5)
+        .saturating_sub(2)
+        .max(3);
     let shown = completions.len().min(max_rows);
     let hidden = completions.len() - shown;
     let completion_height = if shown == 0 {
@@ -1600,8 +1795,7 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     // враппинг длинных строк при ручном вводе тоже растят поле (по умолчанию
     // одна строка); буфер — точная верхняя оценка высоты по байтам
     let input_width = f.size().width.saturating_sub(2).max(1);
-    let input_cap = (app.input.len() / input_width as usize
-        + app.input.lines().count() + 2) as u16;
+    let input_cap = (app.input.len() / input_width as usize + app.input.lines().count() + 2) as u16;
     let input_lines: Vec<Line> = app.input.split('\n').map(Line::from).collect();
     let input_rows = wrapped_height(input_lines, input_width, input_cap).max(1);
     let input_height = (input_rows.min(MAX_INPUT_LINES) + 2) as u16;
@@ -1644,8 +1838,12 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         head.push(sep());
         head.push(Span::styled(
             format!("🧠 {}", app.model_id),
-            role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD)));
-        head.push(Span::styled(format!(" · {rlabel}"), role_style(&app.theme, rrole)));
+            role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD),
+        ));
+        head.push(Span::styled(
+            format!(" · {rlabel}"),
+            role_style(&app.theme, rrole),
+        ));
     }
     if app.agent_running {
         // агент работает: анимированный спиннер (кадр по тикам редрава 100 мс)
@@ -1664,7 +1862,11 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         let pulse = ["⡀", "⣀", "⣠", "⣰"][(tick % 4) as usize];
         head.push(sep());
         head.push(Span::styled(
-            format!("{pulse} фон: {}{}", app.bg_running, format_bg_panel(&app.bg_items, 48)),
+            format!(
+                "{pulse} фон: {}{}",
+                app.bg_running,
+                format_bg_panel(&app.bg_items, 48)
+            ),
             role_style(&app.theme, ThemeRole::ToolName),
         ));
     }
@@ -1692,9 +1894,11 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     app.log_area = log_block.inner(chunks[1]);
     let visible_rows = chunks[1].height.saturating_sub(2) as usize;
     let mut body: Vec<Line> = if app.log.is_empty() {
-        welcome_lines(&app.model_info,
-                      crate::models::reasoning_label(&app.model_id, &app.effort),
-                      &app.theme)
+        welcome_lines(
+            &app.model_info,
+            crate::models::reasoning_label(&app.model_id, &app.effort),
+            &app.theme,
+        )
     } else {
         let total = app.log.len();
         if app.follow {
@@ -1703,23 +1907,32 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
             // последние `visible` строк и рисовали с их начала: длинные
             // обёрнутые ответы уходили за нижний край, и пользователю
             // приходилось догонять лог мышью вручную.
-            app.log.iter().skip(total.saturating_sub(visible_rows + 20))
-                .map(|l| Line::from(l.spans.clone())).collect()
+            app.log
+                .iter()
+                .skip(total.saturating_sub(visible_rows + 20))
+                .map(|l| Line::from(l.spans.clone()))
+                .collect()
         } else {
             // ручной скролл: верх окна — логическая строка scroll, окно добирается
             // вперёд по приблизительной высоте до полного экрана и пиннится низом
             // (pin ниже). Верх клампится к manual_max_top: колесо не «проваливается»
             // в пустоту под концом лога (баг пользователя 20.07).
             let width = app.log_area.width.max(1) as usize;
-            let top = app.scroll.min(manual_max_top(&app.log, visible_rows, width));
+            let top = app
+                .scroll
+                .min(manual_max_top(&app.log, visible_rows, width));
             let mut approx = 0usize;
             let mut end = top;
             while end < total && approx < visible_rows + 2 {
                 approx += approx_rows(&app.log[end].spans, width);
                 end += 1;
             }
-            app.log.iter().skip(top).take(end - top)
-                .map(|l| Line::from(l.spans.clone())).collect()
+            app.log
+                .iter()
+                .skip(top)
+                .take(end - top)
+                .map(|l| Line::from(l.spans.clone()))
+                .collect()
         }
     };
     // подсветка активного выделения мышью: REVERSED на спанах попавших строк
@@ -1734,7 +1947,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     if app.agent_running && !app.stream_open && !app.log.is_empty() {
         let tick = app.started_at.elapsed().as_millis() as u64 / 100;
         body.push(Line::from(vec![
-            Span::styled(format!("{} ", spinner_frame(tick)), role_style(&app.theme, ThemeRole::Accent)),
+            Span::styled(
+                format!("{} ", spinner_frame(tick)),
+                role_style(&app.theme, ThemeRole::Accent),
+            ),
             Span::styled("думаю…".to_string(), role_style(&app.theme, ThemeRole::Dim)),
         ]));
     }
@@ -1742,15 +1958,22 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     // (офскрин-рендер тем же WordWrapper'ом) минус экран. Follow — низ лога,
     // ручной скролл — низ окна (полный экран контента, без пустого «подвала»)
     let pin = if !app.log.is_empty() {
-        wrapped_height(body.clone(), app.log_area.width,
-                       visible_rows as u16 * 4 + 60)
-            .saturating_sub(visible_rows) as u16
+        wrapped_height(
+            body.clone(),
+            app.log_area.width,
+            visible_rows as u16 * 4 + 60,
+        )
+        .saturating_sub(visible_rows) as u16
     } else {
         0
     };
     f.render_widget(
-        Paragraph::new(body).block(log_block).wrap(Wrap { trim: false }).scroll((pin, 0)),
-        chunks[1]);
+        Paragraph::new(body)
+            .block(log_block)
+            .wrap(Wrap { trim: false })
+            .scroll((pin, 0)),
+        chunks[1],
+    );
 
     // бейдж «▼ в самое низ» на нижней рамке лога (v0.7): виден при ручном
     // скролле вверх, кликабелен — мгновенный возврат к самому свежему;
@@ -1761,8 +1984,10 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         f.render_widget(
             Paragraph::new(Line::from(Span::styled(
                 jump_badge_text().to_string(),
-                role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD)))),
-            Rect::new(x, y, JUMP_BADGE_W, 1));
+                role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD),
+            ))),
+            Rect::new(x, y, JUMP_BADGE_W, 1),
+        );
         Some((x, y))
     } else {
         None
@@ -1786,11 +2011,14 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
             .collect();
         if hidden > 0 {
             lines.push(Line::from(Span::styled(
-                format!("…ещё {hidden} — продолжайте ввод"), dim)));
+                format!("…ещё {hidden} — продолжайте ввод"),
+                dim,
+            )));
         }
         f.render_widget(
             Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" команды ")),
-            chunks[2]);
+            chunks[2],
+        );
     }
 
     // заголовок ввода: слева — индикатор режима разрешений (Совет/Авто-правки/Автомат,
@@ -1805,24 +2033,36 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     };
     let mut title_spans: Vec<Span> = Vec::new();
     if !mode_badge.0.trim().is_empty() {
-        title_spans.push(Span::styled(mode_badge.0.to_string(),
-            role_style(&app.theme, mode_badge.1).add_modifier(Modifier::BOLD)));
-        title_spans.push(Span::styled("│ ".to_string(), role_style(&app.theme, ThemeRole::Dim)));
+        title_spans.push(Span::styled(
+            mode_badge.0.to_string(),
+            role_style(&app.theme, mode_badge.1).add_modifier(Modifier::BOLD),
+        ));
+        title_spans.push(Span::styled(
+            "│ ".to_string(),
+            role_style(&app.theme, ThemeRole::Dim),
+        ));
     }
     let (hint, hint_style) = if app.agent_running {
         let tick = app.started_at.elapsed().as_millis() as u64 / 100;
-        (format!("{} агент думает… (Enter — в очередь · Ctrl+S — вставить сразу · Esc — прервать) ",
-                 spinner_frame(tick)),
-         role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD))
+        (
+            format!(
+                "{} агент думает… (Enter — в очередь · Ctrl+S — вставить сразу · Esc — прервать) ",
+                spinner_frame(tick)
+            ),
+            role_style(&app.theme, ThemeRole::Accent).add_modifier(Modifier::BOLD),
+        )
     } else if app.agent_done {
-        ("Enter — новая задача | драг — выделение | Esc — выход ".to_string(),
-         role_style(&app.theme, ThemeRole::Dim))
+        (
+            "Enter — новая задача | драг — выделение | Esc — выход ".to_string(),
+            role_style(&app.theme, ThemeRole::Dim),
+        )
     } else {
         ("Enter — отправить | Ctrl+N — новая строка | ↑/↓ — история | /help — команды | PgUp/PgDn/колесо — скролл | драг — выделение | Esc — выход ".to_string(),
          role_style(&app.theme, ThemeRole::Dim))
     };
     title_spans.push(Span::styled(hint, hint_style));
-    let input_block = Block::default().borders(Borders::ALL)
+    let input_block = Block::default()
+        .borders(Borders::ALL)
         .title(Line::from(title_spans));
     // курсор в визуальных координатах: офскрин-рендер префикса ввода с
     // сентинелем «█» — и переносы, и враппинг, и ХВОСТОВЫЕ ПРОБЕЛЫ учтены точно
@@ -1831,17 +2071,28 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     let probe_lines: Vec<Line> = probe.split('\n').map(Line::from).collect();
     let (cur_row, cur_col) = wrapped_cursor_pos(probe_lines, input_width, input_cap);
     let visible_n = input_rows.min(MAX_INPUT_LINES);
-    let offset = if cur_row >= visible_n { cur_row + 1 - visible_n } else { 0 };
+    let offset = if cur_row >= visible_n {
+        cur_row + 1 - visible_n
+    } else {
+        0
+    };
     match input_placeholder(&app.input) {
         // пустой ввод — dim-плейсхолдер вместо пустой строки
         Some(placeholder) => f.render_widget(
-            Paragraph::new(Line::from(Span::styled(placeholder, role_style(&app.theme, ThemeRole::Dim))))
-                .block(input_block),
-            chunks[3]),
+            Paragraph::new(Line::from(Span::styled(
+                placeholder,
+                role_style(&app.theme, ThemeRole::Dim),
+            )))
+            .block(input_block),
+            chunks[3],
+        ),
         None => f.render_widget(
-            Paragraph::new(app.input.as_str()).block(input_block)
-                .wrap(Wrap { trim: false }).scroll((offset as u16, 0)),
-            chunks[3]),
+            Paragraph::new(app.input.as_str())
+                .block(input_block)
+                .wrap(Wrap { trim: false })
+                .scroll((offset as u16, 0)),
+            chunks[3],
+        ),
     }
     // курсор терминала — внутри рамки поля
     let cx = chunks[3].x + 1 + cur_col as u16;
@@ -1854,10 +2105,15 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
     if let Some(q) = perm_q {
         let area = centered(60, 30, f.size());
         f.render_widget(Clear, area);
-        let block = Block::default().borders(Borders::ALL).title(" запрос разрешения ")
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(" запрос разрешения ")
             .border_style(role_style(&app.theme, ThemeRole::Warn));
         let inner = block.inner(area);
-        f.render_widget(block.style(Style::default().bg(role_color(&app.theme, ThemeRole::PopupBg))), area);
+        f.render_widget(
+            block.style(Style::default().bg(role_color(&app.theme, ThemeRole::PopupBg))),
+            area,
+        );
         // две зоны: вопрос сверху (обрезается по высоте), ответы — фиксированные
         // 2 строки снизу. Длинная команда не может вытеснить [y]/[a]/[n]
         // (баг скриншота 12-15-53: подсказки ответа уехали за край попапа)
@@ -1868,19 +2124,38 @@ fn draw(f: &mut ratatui::Frame, app: &mut TuiApp, perm_q: Option<&str>) {
         let q_text = crate::textutil::cap_lines(q, zones[0].height as usize);
         f.render_widget(Paragraph::new(q_text).wrap(Wrap { trim: true }), zones[0]);
         let answer_style = role_style(&app.theme, ThemeRole::Warn).add_modifier(Modifier::BOLD);
-        f.render_widget(Paragraph::new(vec![
-            Line::from(Span::styled("[y] разрешить  [a] всегда*  [n] отклонить".to_string(), answer_style)),
-            Line::from(Span::styled("(*«всегда» — до конца сессии)".to_string(), role_style(&app.theme, ThemeRole::Dim))),
-        ]), zones[1]);
+        f.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled(
+                    "[y] разрешить  [a] всегда*  [n] отклонить".to_string(),
+                    answer_style,
+                )),
+                Line::from(Span::styled(
+                    "(*«всегда» — до конца сессии)".to_string(),
+                    role_style(&app.theme, ThemeRole::Dim),
+                )),
+            ]),
+            zones[1],
+        );
     }
 }
 
 fn centered(px: u16, py: u16, r: Rect) -> Rect {
-    let v = Layout::default().direction(Direction::Vertical)
-        .constraints([Constraint::Percentage((100 - py) / 2), Constraint::Percentage(py), Constraint::Percentage((100 - py) / 2)])
+    let v = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - py) / 2),
+            Constraint::Percentage(py),
+            Constraint::Percentage((100 - py) / 2),
+        ])
         .split(r);
-    Layout::default().direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage((100 - px) / 2), Constraint::Percentage(px), Constraint::Percentage((100 - px) / 2)])
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - px) / 2),
+            Constraint::Percentage(px),
+            Constraint::Percentage((100 - px) / 2),
+        ])
         .split(v[1])[1]
 }
 
@@ -1894,7 +2169,9 @@ fn workspace_guess() -> PathBuf {
 
 /// Путь к файлу истории ввода (`~/.theseus/history`); `None`, если HOME не задан.
 fn history_path() -> Option<PathBuf> {
-    std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".theseus").join("history"))
+    std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(h).join(".theseus").join("history"))
 }
 
 /// Сохранить историю на диск, создав `~/.theseus` при необходимости.
@@ -1913,9 +2190,17 @@ fn save_history(history: &InputHistory, path: Option<&Path>) {
 /// Вызывается редко (вход в TUI, конец задачи): spawn git стоит миллисекунды,
 /// но на каждый кадр его не делаем.
 fn git_status_line(workspace: &Path) -> String {
-    let Some(repo) = GitRepo::discover(workspace) else { return String::new(); };
-    let Some(branch) = repo.current_branch() else { return String::new(); };
-    if repo.is_dirty() { format!("⎇ {branch}*") } else { format!("⎇ {branch}") }
+    let Some(repo) = GitRepo::discover(workspace) else {
+        return String::new();
+    };
+    let Some(branch) = repo.current_branch() else {
+        return String::new();
+    };
+    if repo.is_dirty() {
+        format!("⎇ {branch}*")
+    } else {
+        format!("⎇ {branch}")
+    }
 }
 
 /// Печать многострочного текста в лог цветом семантической роли темы.
@@ -1929,11 +2214,20 @@ fn push_lines(app: &mut TuiApp, text: &str, role: ThemeRole) {
 /// Быстрый выбор модели в /model (порядок = нумерация в меню).
 const MODEL_CHOICES: [(&str, &str); 6] = [
     ("deepseek-v4-pro", "DeepSeek V4 Pro — фронтир-ризонинг"),
-    ("deepseek-v4-flash", "DeepSeek V4 Flash — быстрый и дешёвый (дефолт)"),
+    (
+        "deepseek-v4-flash",
+        "DeepSeek V4 Flash — быстрый и дешёвый (дефолт)",
+    ),
     ("glm-5.2", "GLM-5.2 (Zhipu, ключ ZHIPU_API_KEY)"),
     ("k3", "Kimi K3 (Kimi Code, ключ KIMI_API_KEY)"),
-    ("glm-5.3", "GLM-5.3 (Zhipu, 1M контекст, ключ ZHIPU_API_KEY)"),
-    ("stealth/ox-alpha", "OpenRouter Ox Alpha (stealth, reasoning)"),
+    (
+        "glm-5.3",
+        "GLM-5.3 (Zhipu, 1M контекст, ключ ZHIPU_API_KEY)",
+    ),
+    (
+        "stealth/ox-alpha",
+        "OpenRouter Ox Alpha (stealth, reasoning)",
+    ),
 ];
 
 /// Разрешение аргумента /model: номер из меню, алиас или точный id из реестра.
@@ -1979,9 +2273,12 @@ fn think_menu_lines(model_id: &str, effort: &str) -> Vec<String> {
     let mut out = vec![format!("ризонинг сейчас: {label} (модель {model_id})")];
     match label {
         "встроенный" => out.push(
-            "уровень фиксирован провайдером: Kimi K3 ризонит всегда, ключи мышления не принимает".to_string()),
-        "нет" => out.push(
-            "модель не поддерживает цепочку рассуждений — переключать нечего".to_string()),
+            "уровень фиксирован провайдером: Kimi K3 ризонит всегда, ключи мышления не принимает"
+                .to_string(),
+        ),
+        "нет" => {
+            out.push("модель не поддерживает цепочку рассуждений — переключать нечего".to_string())
+        }
         _ => {
             out.push("  off — без рассуждений (быстрее и дешевле)".to_string());
             out.push("  high — стандартный уровень (дефолт)".to_string());
@@ -2000,18 +2297,27 @@ fn cmd_skills(app: &mut TuiApp, filter: &str) {
         dirs.push(home.join(".theseus/skills"));
     }
     let all = crate::skills::discover(&dirs);
-    let shown: Vec<_> = all.iter()
+    let shown: Vec<_> = all
+        .iter()
         .filter(|s| filter.is_empty() || s.name.contains(filter))
         .collect();
     if shown.is_empty() {
-        app.push(vec![Span::styled("скиллов нет (искал в .theseus/skills и ~/.theseus/skills)".to_string(),
-            role_style(&theme, ThemeRole::Dim))]);
+        app.push(vec![Span::styled(
+            "скиллов нет (искал в .theseus/skills и ~/.theseus/skills)".to_string(),
+            role_style(&theme, ThemeRole::Dim),
+        )]);
         return;
     }
-    app.push(vec![Span::styled(format!("скиллы ({}):", shown.len()), role_style(&theme, ThemeRole::Accent))]);
+    app.push(vec![Span::styled(
+        format!("скиллы ({}):", shown.len()),
+        role_style(&theme, ThemeRole::Accent),
+    )]);
     for s in shown {
         let desc: String = s.description.chars().take(80).collect();
-        app.push(vec![Span::styled(format!("  {} — {desc}", s.name), role_style(&theme, ThemeRole::Dim))]);
+        app.push(vec![Span::styled(
+            format!("  {} — {desc}", s.name),
+            role_style(&theme, ThemeRole::Dim),
+        )]);
     }
 }
 
@@ -2042,7 +2348,9 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
     let query = words.join(" ");
     if !audit && query.is_empty() {
         app.push(vec![Span::styled(
-            "использование: /skill-search <запрос> [--no-embed] [--audit]".to_string(), error)]);
+            "использование: /skill-search <запрос> [--no-embed] [--audit]".to_string(),
+            error,
+        )]);
         return;
     }
 
@@ -2058,7 +2366,8 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
     let dirs: Vec<PathBuf> = dirs.into_iter().filter(|d| d.is_dir()).collect();
 
     // скрипт ищем как скилл tui-skill-finder в любом из каталогов
-    let script = dirs.iter()
+    let script = dirs
+        .iter()
         .map(|d| d.join("tui-skill-finder/scripts/smart_search.py"))
         .find(|p| p.is_file());
     let Some(script) = script else {
@@ -2068,19 +2377,31 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
         return;
     };
     if dirs.is_empty() {
-        app.push(vec![Span::styled("каталоги скиллов не найдены (skill_dirs в конфиге)".to_string(), error)]);
+        app.push(vec![Span::styled(
+            "каталоги скиллов не найдены (skill_dirs в конфиге)".to_string(),
+            error,
+        )]);
         return;
     }
 
     app.push(vec![Span::styled(
-        if audit { "аудирую библиотеку…".to_string() } else { format!("🔎 ищу «{query}» (первый прогон — до ~10с на загрузку модели)…") },
-        dim)]);
+        if audit {
+            "аудирую библиотеку…".to_string()
+        } else {
+            format!("🔎 ищу «{query}» (первый прогон — до ~10с на загрузку модели)…")
+        },
+        dim,
+    )]);
 
-    let mut next_num = 1usize;        // сквозная нумерация кандидатов по всем каталогам
+    let mut next_num = 1usize; // сквозная нумерация кандидатов по всем каталогам
     let mut note_names: Vec<String> = vec![]; // имена в порядке экрана — для заметки агенту
     for dir in &dirs {
         let mut cmd = std::process::Command::new("python3");
-        cmd.arg(&script).arg("--folder").arg(dir).arg("--format").arg("json");
+        cmd.arg(&script)
+            .arg("--folder")
+            .arg(dir)
+            .arg("--format")
+            .arg("json");
         if audit {
             cmd.arg("--audit");
         } else {
@@ -2090,11 +2411,17 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
             cmd.arg("--no-embed");
         }
         // запуск с таймаутом: python + загрузка модели не должны висеть вечно
-        let child = cmd.stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::piped()).spawn();
+        let child = cmd
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn();
         let mut child = match child {
             Ok(c) => c,
             Err(e) => {
-                app.push(vec![Span::styled(format!("не удалось запустить python3: {e}"), error)]);
+                app.push(vec![Span::styled(
+                    format!("не удалось запустить python3: {e}"),
+                    error,
+                )]);
                 return;
             }
         };
@@ -2102,13 +2429,21 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
         let status = loop {
             match child.try_wait() {
                 Ok(Some(st)) => break Some(st),
-                Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(100)),
-                Ok(None) => { let _ = child.kill(); break None; }
+                Ok(None) if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(100))
+                }
+                Ok(None) => {
+                    let _ = child.kill();
+                    break None;
+                }
                 Err(_) => break None,
             }
         };
         let Some(status) = status else {
-            app.push(vec![Span::styled(format!("таймаут 180с при поиске в {}", dir.display()), error)]);
+            app.push(vec![Span::styled(
+                format!("таймаут 180с при поиске в {}", dir.display()),
+                error,
+            )]);
             continue;
         };
         let mut out = String::new();
@@ -2117,13 +2452,22 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
             let _ = so.read_to_string(&mut out);
         }
         if !status.success() {
-            app.push(vec![Span::styled(format!("smart_search завершился с ошибкой ({status}) в {}", dir.display()), error)]);
+            app.push(vec![Span::styled(
+                format!(
+                    "smart_search завершился с ошибкой ({status}) в {}",
+                    dir.display()
+                ),
+                error,
+            )]);
             continue;
         }
         let parsed: serde_json::Value = match serde_json::from_str(&out) {
             Ok(v) => v,
             Err(e) => {
-                app.push(vec![Span::styled(format!("не смог разобрать вывод smart_search: {e}"), error)]);
+                app.push(vec![Span::styled(
+                    format!("не смог разобрать вывод smart_search: {e}"),
+                    error,
+                )]);
                 continue;
             }
         };
@@ -2157,8 +2501,11 @@ fn cmd_skill_search(app: &mut TuiApp, args: &str, controls: &Controls) {
 
 /// Текст заметки агенту со списком /skill-search (чистая функция — для тестов).
 fn skill_search_note(query: &str, names: &[String]) -> String {
-    let numbered: Vec<String> = names.iter().enumerate()
-        .map(|(i, n)| format!("{}. {}", i + 1, n)).collect();
+    let numbered: Vec<String> = names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("{}. {}", i + 1, n))
+        .collect();
     format!("[context: пользователь выполнил /skill-search «{query}». На его экране пронумерованный список кандидатов: {}. Если пользователь ссылается на скилл по номеру или позиции («скилл 2», «второй», «загрузи 5»), разрешай номер строго по ЭТОМУ списку и загружай инструментом skill. Это контекст, а не задача.]",
         numbered.join("; "))
 }
@@ -2166,15 +2513,25 @@ fn skill_search_note(query: &str, names: &[String]) -> String {
 /// Рендер JSON-вывода smart_search.py (режим поиска).
 /// `start` — с какого номера нумеровать (сквозная нумерация по каталогам);
 /// возвращает номер для следующего каталога.
-fn render_skill_search(app: &mut TuiApp, v: &serde_json::Value, query: &str,
-                       dir: &std::path::Path, theme: &crate::theme::Theme, start: usize) -> usize {
+fn render_skill_search(
+    app: &mut TuiApp,
+    v: &serde_json::Value,
+    query: &str,
+    dir: &std::path::Path,
+    theme: &crate::theme::Theme,
+    start: usize,
+) -> usize {
     let accent = role_style(theme, ThemeRole::Accent);
     let dim = role_style(theme, ThemeRole::Dim);
     let lines = skill_search_lines(v, query, dir, start);
     let count = v["candidates"].as_array().map(Vec::len).unwrap_or(0);
     for (i, line) in lines.iter().enumerate() {
         // первая строка (заголовок) и последняя (подсказка реранка) — акцентные
-        let style = if i == 0 || i + 1 == lines.len() { accent } else { dim };
+        let style = if i == 0 || i + 1 == lines.len() {
+            accent
+        } else {
+            dim
+        };
         app.push(vec![Span::styled(line.clone(), style)]);
     }
     start + count
@@ -2183,23 +2540,48 @@ fn render_skill_search(app: &mut TuiApp, v: &serde_json::Value, query: &str,
 /// Строки выдачи smart-поиска (чистая функция — для тестов).
 /// Все кандидаты по одной строке: имя + ранги каналов + усечённое описание;
 /// иначе хвост union-набора недоступен пользователю (баг: показывали только 8).
-fn skill_search_lines(v: &serde_json::Value, query: &str, dir: &std::path::Path, start: usize) -> Vec<String> {
+fn skill_search_lines(
+    v: &serde_json::Value,
+    query: &str,
+    dir: &std::path::Path,
+    start: usize,
+) -> Vec<String> {
     let cands = v["candidates"].as_array().cloned().unwrap_or_default();
     let embed = v["embed_status"].as_str().unwrap_or("?");
     let ms = v["elapsed_ms"].as_u64().unwrap_or(0);
     let mut out = vec![format!(
         "🔎 «{query}» в {}: кандидатов {} (эмбеддинги: {embed}, {ms}мс)",
-        dir.display(), cands.len())];
+        dir.display(),
+        cands.len()
+    )];
     for (i, c) in cands.iter().enumerate() {
         let name = c["name"].as_str().unwrap_or("?");
-        let desc: String = c["description"].as_str().unwrap_or("").chars().take(80).collect();
-        let ranks = c["channel_ranks"].as_object().map(|m| m.iter()
-            .map(|(k, v)| format!("{k}#{}", v.as_u64().unwrap_or(0)))
-            .collect::<Vec<_>>().join(" ")).unwrap_or_default();
+        let desc: String = c["description"]
+            .as_str()
+            .unwrap_or("")
+            .chars()
+            .take(80)
+            .collect();
+        let ranks = c["channel_ranks"]
+            .as_object()
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| format!("{k}#{}", v.as_u64().unwrap_or(0)))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .unwrap_or_default();
         out.push(format!("  {:>2}. {name} [{ranks}] — {desc}", start + i));
     }
-    let fused = v["fused_ranking"].as_array().map(|f| f.iter()
-        .filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ")).unwrap_or_default();
+    let fused = v["fused_ranking"]
+        .as_array()
+        .map(|f| {
+            f.iter()
+                .filter_map(|x| x.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
     if !fused.is_empty() {
         out.push(format!("  fused топ: {fused}"));
     }
@@ -2208,24 +2590,46 @@ fn skill_search_lines(v: &serde_json::Value, query: &str, dir: &std::path::Path,
 }
 
 /// Рендер JSON-вывода smart_search.py --audit (здоровье библиотеки).
-fn render_skill_audit(app: &mut TuiApp, v: &serde_json::Value,
-                      dir: &std::path::Path, theme: &crate::theme::Theme) {
+fn render_skill_audit(
+    app: &mut TuiApp,
+    v: &serde_json::Value,
+    dir: &std::path::Path,
+    theme: &crate::theme::Theme,
+) {
     let accent = role_style(theme, ThemeRole::Accent);
     let dim = role_style(theme, ThemeRole::Dim);
     let total = v["skills_total"].as_u64().unwrap_or(0);
     let unique = v["skills_unique"].as_u64().unwrap_or(0);
     let dups = v["duplicate_names"].as_array().cloned().unwrap_or_default();
-    let empty = v["empty_description"].as_array().cloned().unwrap_or_default();
+    let empty = v["empty_description"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
     let no_tags = v["no_tags_count"].as_u64().unwrap_or(0);
     app.push(vec![Span::styled(
-        format!("📋 аудит {}: {total} скиллов, уникальных {unique}, без тегов {no_tags}", dir.display()),
-        accent)]);
-    let join = |a: &[serde_json::Value]| a.iter().filter_map(|x| x.as_str()).collect::<Vec<_>>().join(", ");
+        format!(
+            "📋 аудит {}: {total} скиллов, уникальных {unique}, без тегов {no_tags}",
+            dir.display()
+        ),
+        accent,
+    )]);
+    let join = |a: &[serde_json::Value]| {
+        a.iter()
+            .filter_map(|x| x.as_str())
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
     if !dups.is_empty() {
-        app.push(vec![Span::styled(format!("  дубли имён ({}): {}", dups.len(), join(&dups)), dim)]);
+        app.push(vec![Span::styled(
+            format!("  дубли имён ({}): {}", dups.len(), join(&dups)),
+            dim,
+        )]);
     }
     if !empty.is_empty() {
-        app.push(vec![Span::styled(format!("  пустые описания: {}", join(&empty)), dim)]);
+        app.push(vec![Span::styled(
+            format!("  пустые описания: {}", join(&empty)),
+            dim,
+        )]);
     }
 }
 
@@ -2245,9 +2649,13 @@ fn cmd_bg(app: &mut TuiApp, controls: &Controls) {
     let items = controls.bg_snapshot.lock().unwrap().clone();
     let lines = format_bg_table(&items);
     for line in lines {
-        let role = if line.contains("работает") { ThemeRole::Warn }
-            else if line.starts_with("фоновых") { ThemeRole::Dim }
-            else { ThemeRole::Accent };
+        let role = if line.contains("работает") {
+            ThemeRole::Warn
+        } else if line.starts_with("фоновых") {
+            ThemeRole::Dim
+        } else {
+            ThemeRole::Accent
+        };
         app.push(vec![Span::styled(line, role_style(&theme, role))]);
     }
 }
@@ -2261,10 +2669,20 @@ fn format_bg_table(items: &[crate::background::BgTaskInfo]) -> Vec<String> {
     }
     let mut out = vec![format!("фоновые задачи ({}):", items.len())];
     for i in items {
-        let status = if i.done { "завершена" } else { "работает" };
+        let status = if i.done {
+            "завершена"
+        } else {
+            "работает"
+        };
         let label: String = i.label.chars().take(56).collect();
-        out.push(format!("  bg {:<3} {:<12} {:>6}  {:<10} {}",
-            i.id, i.kind, fmt_mmss(i.started.elapsed().as_secs()), status, label));
+        out.push(format!(
+            "  bg {:<3} {:<12} {:>6}  {:<10} {}",
+            i.id,
+            i.kind,
+            fmt_mmss(i.started.elapsed().as_secs()),
+            status,
+            label
+        ));
         // хвост вывода: последняя содержательная строка — видно, «не завис ли пир»
         if !i.tail.is_empty() {
             let tail: String = i.tail.chars().take(72).collect();
@@ -2282,12 +2700,19 @@ fn cmd_memory(app: &mut TuiApp) {
             let mem = crate::memory::Memory::open(&home.join(".theseus"));
             let accent = role_style(&app.theme, ThemeRole::Accent);
             app.push(vec![Span::styled(
-                format!("🧠 память: {} фактов (~/.theseus/memory/MEMORY.md)", mem.fact_count()),
-                accent)]);
+                format!(
+                    "🧠 память: {} фактов (~/.theseus/memory/MEMORY.md)",
+                    mem.fact_count()
+                ),
+                accent,
+            )]);
         }
         None => {
             let error = role_style(&app.theme, ThemeRole::Error);
-            app.push(vec![Span::styled("память недоступна: HOME не задан".to_string(), error)]);
+            app.push(vec![Span::styled(
+                "память недоступна: HOME не задан".to_string(),
+                error,
+            )]);
         }
     }
 }
@@ -2307,7 +2732,11 @@ fn one_line(text: &str, max: usize) -> String {
     let collapsed: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
     let mut chars = collapsed.chars();
     let taken: String = chars.by_ref().take(max).collect();
-    if chars.next().is_some() { format!("{taken}…") } else { taken }
+    if chars.next().is_some() {
+        format!("{taken}…")
+    } else {
+        taken
+    }
 }
 
 /// Внутренние реплики харнесса (нуджи «call finish» и REMINDER-детекторы):
@@ -2323,19 +2752,38 @@ fn session_card(messages: &[crate::api::Message]) -> (String, Vec<String>) {
     let mut title = String::new();
     let mut preview: Vec<String> = Vec::new();
     for m in messages {
-        if m.role == "system" { continue; }
-        let Some(text) = m.content.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { continue };
-        if is_harness_nudge(text) { continue; }
+        if m.role == "system" {
+            continue;
+        }
+        let Some(text) = m
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        else {
+            continue;
+        };
+        if is_harness_nudge(text) {
+            continue;
+        }
         if title.is_empty() && m.role == "user" {
             title = one_line(text, 70);
             continue;
         }
         if preview.len() < 2 && matches!(m.role.as_str(), "user" | "assistant") {
-            preview.push(format!("{} {}", if m.role == "user" { "❯" } else { "◆" }, one_line(text, 80)));
+            preview.push(format!(
+                "{} {}",
+                if m.role == "user" { "❯" } else { "◆" },
+                one_line(text, 80)
+            ));
         }
-        if !title.is_empty() && preview.len() == 2 { break; }
+        if !title.is_empty() && preview.len() == 2 {
+            break;
+        }
     }
-    if title.is_empty() { title = "(без заголовка)".to_string(); }
+    if title.is_empty() {
+        title = "(без заголовка)".to_string();
+    }
     (title, preview)
 }
 
@@ -2345,8 +2793,17 @@ fn session_card(messages: &[crate::api::Message]) -> (String, Vec<String>) {
 fn resume_preview(messages: &[crate::api::Message], max_msgs: usize) -> Vec<(PreviewRole, String)> {
     let mut rows: Vec<(PreviewRole, String)> = Vec::new();
     for m in messages {
-        let Some(text) = m.content.as_deref().map(str::trim).filter(|t| !t.is_empty()) else { continue };
-        if is_harness_nudge(text) { continue; }
+        let Some(text) = m
+            .content
+            .as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        else {
+            continue;
+        };
+        if is_harness_nudge(text) {
+            continue;
+        }
         let role = match m.role.as_str() {
             "user" => PreviewRole::User,
             "assistant" => PreviewRole::Assistant,
@@ -2362,7 +2819,9 @@ fn resume_preview(messages: &[crate::api::Message], max_msgs: usize) -> Vec<(Pre
 /// (имя session-<unixts>.json — лексикографический порядок обратный).
 fn session_files() -> Vec<PathBuf> {
     let dir = workspace_guess().join(".theseus");
-    let mut files: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten()
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
         .flatten()
         .filter(|e| {
             let n = e.file_name().to_string_lossy().into_owned();
@@ -2379,7 +2838,11 @@ fn session_files() -> Vec<PathBuf> {
 /// метку разобрать не удалось.
 fn session_date(path: &Path) -> String {
     path.file_name()
-        .and_then(|n| n.to_string_lossy().strip_prefix("session-").map(String::from))
+        .and_then(|n| {
+            n.to_string_lossy()
+                .strip_prefix("session-")
+                .map(String::from)
+        })
         .and_then(|s| s.strip_suffix(".json").map(String::from))
         .and_then(|s| s.parse::<u64>().ok())
         .map(crate::agent::utc_date)
@@ -2393,34 +2856,47 @@ fn cmd_sessions(app: &mut TuiApp) {
     let files = session_files();
     if files.is_empty() {
         app.push(vec![Span::styled(
-            format!("сессий нет в {}", workspace_guess().join(".theseus").display()),
-            role_style(&theme, ThemeRole::Dim))]);
+            format!(
+                "сессий нет в {}",
+                workspace_guess().join(".theseus").display()
+            ),
+            role_style(&theme, ThemeRole::Dim),
+        )]);
         return;
     }
     let shown = files.len().min(10);
     app.push(vec![Span::styled(
-        format!("сессии ({} из {}; свежие первые) — загрузить: /resume N",
-            shown, files.len()),
-        role_style(&theme, ThemeRole::Accent))]);
+        format!(
+            "сессии ({} из {}; свежие первые) — загрузить: /resume N",
+            shown,
+            files.len()
+        ),
+        role_style(&theme, ThemeRole::Accent),
+    )]);
     for (i, f) in files.iter().take(shown).enumerate() {
         let line = match Agent::load_session(f) {
             Ok(messages) => {
                 let (title, preview) = session_card(&messages);
-                let mut lines = vec![
-                    Span::styled(format!("  {}. {} · {}", i + 1, session_date(f), title),
-                        role_style(&theme, ThemeRole::AgentText)),
-                ];
+                let mut lines = vec![Span::styled(
+                    format!("  {}. {} · {}", i + 1, session_date(f), title),
+                    role_style(&theme, ThemeRole::AgentText),
+                )];
                 for p in preview {
-                    lines.push(Span::styled(format!("     {p}"), role_style(&theme, ThemeRole::Dim)));
+                    lines.push(Span::styled(
+                        format!("     {p}"),
+                        role_style(&theme, ThemeRole::Dim),
+                    ));
                 }
                 lines
             }
-            Err(e) => vec![
-                Span::styled(format!("  {}. {} · (битый файл: {e})", i + 1, session_date(f)),
-                    role_style(&theme, ThemeRole::Warn)),
-            ],
+            Err(e) => vec![Span::styled(
+                format!("  {}. {} · (битый файл: {e})", i + 1, session_date(f)),
+                role_style(&theme, ThemeRole::Warn),
+            )],
         };
-        for l in line { app.push(vec![l]); }
+        for l in line {
+            app.push(vec![l]);
+        }
     }
 }
 
@@ -2439,9 +2915,12 @@ fn resume_into_tui(app: &mut TuiApp, agent: &mut Agent, path: &Path) {
             agent.load_history(messages.clone());
             app.begin_block(BlockKind::Notice);
             app.push(vec![Span::styled(
-                format!("📂 сессия восстановлена: «{title}» (сообщений: {total}, {})",
-                    path.display()),
-                accent.add_modifier(Modifier::BOLD))]);
+                format!(
+                    "📂 сессия восстановлена: «{title}» (сообщений: {total}, {})",
+                    path.display()
+                ),
+                accent.add_modifier(Modifier::BOLD),
+            )]);
             for (role, text) in resume_preview(&messages, 6) {
                 let (mark, style) = match role {
                     PreviewRole::User => ("❯ ", role_style(&theme, ThemeRole::UserText)),
@@ -2454,13 +2933,18 @@ fn resume_into_tui(app: &mut TuiApp, agent: &mut Agent, path: &Path) {
                 app.push(line);
             }
             app.push(vec![Span::styled(
-                "— история в контексте: продолжайте обычным сообщением".to_string(), dim)]);
+                "— история в контексте: продолжайте обычным сообщением".to_string(),
+                dim,
+            )]);
         }
         Ok(_) => app.push(vec![Span::styled(
-            format!("сессия пуста: {}", path.display()), dim)]),
+            format!("сессия пуста: {}", path.display()),
+            dim,
+        )]),
         Err(e) => app.push(vec![Span::styled(
             format!("не удалось загрузить {}: {e}", path.display()),
-            role_style(&theme, ThemeRole::Error))]),
+            role_style(&theme, ThemeRole::Error),
+        )]),
     }
 }
 
@@ -2470,34 +2954,57 @@ fn resume_into_tui(app: &mut TuiApp, agent: &mut Agent, path: &Path) {
 fn cmd_trace(app: &mut TuiApp) {
     let theme = app.theme.clone();
     let dir = workspace_guess().join(".theseus");
-    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir).into_iter().flatten()
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
+        .into_iter()
+        .flatten()
         .flatten()
         .map(|e| e.path())
-        .filter(|p| p.file_name().is_some_and(|n| n.to_string_lossy().starts_with("trace-")))
+        .filter(|p| {
+            p.file_name()
+                .is_some_and(|n| n.to_string_lossy().starts_with("trace-"))
+        })
         .collect();
     files.sort();
     let Some(latest) = files.last() else {
-        app.push(vec![Span::styled(format!("трасса: файлов trace-*.jsonl нет в {}", dir.display()),
-            role_style(&theme, ThemeRole::Dim))]);
+        app.push(vec![Span::styled(
+            format!("трасса: файлов trace-*.jsonl нет в {}", dir.display()),
+            role_style(&theme, ThemeRole::Dim),
+        )]);
         return;
     };
     let mut opened: HashSet<u64> = HashSet::new();
     let mut closed: HashSet<u64> = HashSet::new();
     if let Ok(text) = std::fs::read_to_string(latest) {
         for line in text.lines() {
-            let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) else { continue };
-            let Some(id) = rec["id"].as_u64() else { continue };
+            let Ok(rec) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let Some(id) = rec["id"].as_u64() else {
+                continue;
+            };
             match rec["event"].as_str() {
-                Some("open") => { opened.insert(id); }
-                Some("close" | "auto_close") => { closed.insert(id); }
+                Some("open") => {
+                    opened.insert(id);
+                }
+                Some("close" | "auto_close") => {
+                    closed.insert(id);
+                }
                 _ => {}
             }
         }
     }
-    let name = latest.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+    let name = latest
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
     app.push(vec![Span::styled(
-        format!("📈 трасса {name}: {} спанов, открытые: {}", opened.len(), opened.difference(&closed).count()),
-        role_style(&theme, ThemeRole::Accent))]);
+        format!(
+            "📈 трасса {name}: {} спанов, открытые: {}",
+            opened.len(),
+            opened.difference(&closed).count()
+        ),
+        role_style(&theme, ThemeRole::Accent),
+    )]);
 }
 
 /// Slash-команды TUI (v0.4): разбор через реестр [`crate::slash`].
@@ -2514,166 +3021,213 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
             // «/abort» нет в общем реестре (реестр описывает и CLI-команды),
             // а в TUI это прерывание хода — сохраняем прежнее поведение.
             if name.eq_ignore_ascii_case("abort") {
-                controls.abort.store(true, std::sync::atomic::Ordering::Relaxed);
+                controls
+                    .abort
+                    .store(true, std::sync::atomic::Ordering::Relaxed);
                 app.push(vec![Span::styled("⏹ прерываю агента…".to_string(), error)]);
             } else {
                 let hint = if suggestions.is_empty() {
                     String::new()
                 } else {
-                    let list = suggestions.iter().map(|s| format!("/{s}")).collect::<Vec<_>>().join(", ");
+                    let list = suggestions
+                        .iter()
+                        .map(|s| format!("/{s}"))
+                        .collect::<Vec<_>>()
+                        .join(", ");
                     format!(" Похожие: {list}.")
                 };
-                app.push(vec![Span::styled(format!("неизвестная команда /{name} — см. /help.{hint}"), error)]);
+                app.push(vec![Span::styled(
+                    format!("неизвестная команда /{name} — см. /help.{hint}"),
+                    error,
+                )]);
             }
         }
-        Parsed::Cmd { cmd, args } => match cmd.name {
-            "help" => {
-                let topic = args.split_whitespace().next().unwrap_or("");
-                if topic.is_empty() {
-                    push_lines(app, &slash::help_index(), ThemeRole::Accent);
-                } else if let Some(found) = slash::builtin_commands().into_iter().find(|c| c.matches(topic)) {
-                    push_lines(app, &slash::help_page(&found), ThemeRole::Accent);
-                } else {
-                    app.push(vec![Span::styled(format!("нет справки по /{topic} — см. /help"), error)]);
-                }
-            }
-            "goal" => {
-                if args.is_empty() {
-                    app.push(vec![Span::styled("использование: /goal <текст цели>".to_string(), error)]);
-                } else {
-                    *controls.goal_slot.lock().unwrap() = Some(args.to_string());
-                    app.push(vec![Span::styled(format!("🎯 цель поставлена: {args}"), accent)]);
-                }
-            }
-            "plan" => {
-                let cur = controls.plan.load(std::sync::atomic::Ordering::Relaxed);
-                controls.plan.store(!cur, std::sync::atomic::Ordering::Relaxed);
-                app.push(vec![Span::styled(
-                    format!("📋 plan mode: {}", if !cur { "ON — агент только читает и планирует" } else { "OFF — реализация разрешена" }),
-                    accent)]);
-            }
-            "model" => {
-                let arg = args.split_whitespace().next().unwrap_or("");
-                if arg.is_empty() {
-                    // меню выбора: текущая модель + три быстрых варианта
-                    for line in model_menu_lines(&app.model_info) {
-                        app.push(vec![Span::styled(line, accent)]);
-                    }
-                } else {
-                    match resolve_model_choice(arg) {
-                        Some(id) => {
-                            // слот агенту: применится на границе хода (следующий API-вызов)
-                            *controls.model_slot.lock().unwrap() = Some(id.to_string());
-                            let url = crate::models::find_model(id)
-                                .and_then(|m| crate::models::find_provider(&m.provider))
-                                .map(|p| p.effective_base_url())
-                                .unwrap_or_default();
-                            app.model_info = format!("{id} @ {url}");
-                            app.model_id = id.to_string();
-                            app.push(vec![Span::styled(
-                                format!("⚡ модель → {id} (применится на следующем ходу)"),
-                                accent.add_modifier(Modifier::BOLD))]);
-                        }
-                        None => {
-                            app.push(vec![Span::styled(
-                                format!("неизвестная модель «{arg}» — варианты: /model 1|2|3|4|5|6 или pro|flash|glm|k3|glm-5.3|ox"), error)]);
-                        }
-                    }
-                }
-            }
-            "think" => {
-                let arg = args.split_whitespace().next().unwrap_or("");
-                if arg.is_empty() {
-                    // меню выбора: текущий уровень + варианты (с учётом модели)
-                    for line in think_menu_lines(&app.model_id, &app.effort) {
-                        app.push(vec![Span::styled(line, accent)]);
-                    }
-                } else {
-                    match parse_effort_token(arg) {
-                        Some(norm) => {
-                            // слот агенту: применится на границе хода (следующий API-вызов)
-                            *controls.effort_slot.lock().unwrap() = Some(norm.to_string());
-                            app.effort = norm.to_string();
-                            let label = crate::models::reasoning_label(&app.model_id, norm);
-                            app.push(vec![Span::styled(
-                                format!("⚡ ризонинг → {label} (применится на следующем ходу)"),
-                                accent.add_modifier(Modifier::BOLD))]);
-                        }
-                        None => {
-                            app.push(vec![Span::styled(
-                                format!("неизвестный уровень «{arg}» — варианты: /think off|high|max"), error)]);
-                        }
-                    }
-                }
-            }
-            "mode" => {
-                use crate::permissions::{MODE_ASK, MODE_MAX, MODE_SEMI, MODE_YOLO};
-                let arg = args.split_whitespace().next().unwrap_or("");
-                let (code, label) = match arg {
-                    "ask" => (MODE_ASK, "Совет"),
-                    "semi" => (MODE_SEMI, "Авто-правки"),
-                    "yolo" => (MODE_YOLO, "Автомат"),
-                    "max" => (MODE_MAX, "Максимум"),
-                    _ => {
-                        let cur = controls.mode_atomic.load(std::sync::atomic::Ordering::Relaxed);
-                        let label = match cur {
-                            MODE_SEMI => "Авто-правки",
-                            MODE_YOLO => "Автомат",
-                            MODE_MAX => "Максимум",
-                            MODE_ASK => "Совет",
-                            _ => "из запуска (по флагу)",
-                        };
+        Parsed::Cmd { cmd, args } => {
+            match cmd.name {
+                "help" => {
+                    let topic = args.split_whitespace().next().unwrap_or("");
+                    if topic.is_empty() {
+                        push_lines(app, &slash::help_index(), ThemeRole::Accent);
+                    } else if let Some(found) = slash::builtin_commands()
+                        .into_iter()
+                        .find(|c| c.matches(topic))
+                    {
+                        push_lines(app, &slash::help_page(&found), ThemeRole::Accent);
+                    } else {
                         app.push(vec![Span::styled(
-                            format!("режим разрешений: {label}. Переключить: /mode ask (Совет) | /mode semi (Авто-правки) | /mode yolo (Автомат) | /mode max (Максимум)"), accent)]);
-                        return false;
+                            format!("нет справки по /{topic} — см. /help"),
+                            error,
+                        )]);
                     }
-                };
-                controls.mode_atomic.store(code, std::sync::atomic::Ordering::Relaxed);
-                app.push(vec![Span::styled(format!("⚡ режим разрешений → {label}"),
-                    accent.add_modifier(Modifier::BOLD))]);
-                if code == MODE_MAX {
+                }
+                "goal" => {
+                    if args.is_empty() {
+                        app.push(vec![Span::styled(
+                            "использование: /goal <текст цели>".to_string(),
+                            error,
+                        )]);
+                    } else {
+                        *controls.goal_slot.lock().unwrap() = Some(args.to_string());
+                        app.push(vec![Span::styled(
+                            format!("🎯 цель поставлена: {args}"),
+                            accent,
+                        )]);
+                    }
+                }
+                "plan" => {
+                    let cur = controls.plan.load(std::sync::atomic::Ordering::Relaxed);
+                    controls
+                        .plan
+                        .store(!cur, std::sync::atomic::Ordering::Relaxed);
                     app.push(vec![Span::styled(
+                        format!(
+                            "📋 plan mode: {}",
+                            if !cur {
+                                "ON — агент только читает и планирует"
+                            } else {
+                                "OFF — реализация разрешена"
+                            }
+                        ),
+                        accent,
+                    )]);
+                }
+                "model" => {
+                    let arg = args.split_whitespace().next().unwrap_or("");
+                    if arg.is_empty() {
+                        // меню выбора: текущая модель + три быстрых варианта
+                        for line in model_menu_lines(&app.model_info) {
+                            app.push(vec![Span::styled(line, accent)]);
+                        }
+                    } else {
+                        match resolve_model_choice(arg) {
+                            Some(id) => {
+                                // слот агенту: применится на границе хода (следующий API-вызов)
+                                *controls.model_slot.lock().unwrap() = Some(id.to_string());
+                                let url = crate::models::find_model(id)
+                                    .and_then(|m| crate::models::find_provider(&m.provider))
+                                    .map(|p| p.effective_base_url())
+                                    .unwrap_or_default();
+                                app.model_info = format!("{id} @ {url}");
+                                app.model_id = id.to_string();
+                                app.push(vec![Span::styled(
+                                    format!("⚡ модель → {id} (применится на следующем ходу)"),
+                                    accent.add_modifier(Modifier::BOLD),
+                                )]);
+                            }
+                            None => {
+                                app.push(vec![Span::styled(
+                                format!("неизвестная модель «{arg}» — варианты: /model 1|2|3|4|5|6 или pro|flash|glm|k3|glm-5.3|ox"), error)]);
+                            }
+                        }
+                    }
+                }
+                "think" => {
+                    let arg = args.split_whitespace().next().unwrap_or("");
+                    if arg.is_empty() {
+                        // меню выбора: текущий уровень + варианты (с учётом модели)
+                        for line in think_menu_lines(&app.model_id, &app.effort) {
+                            app.push(vec![Span::styled(line, accent)]);
+                        }
+                    } else {
+                        match parse_effort_token(arg) {
+                            Some(norm) => {
+                                // слот агенту: применится на границе хода (следующий API-вызов)
+                                *controls.effort_slot.lock().unwrap() = Some(norm.to_string());
+                                app.effort = norm.to_string();
+                                let label = crate::models::reasoning_label(&app.model_id, norm);
+                                app.push(vec![Span::styled(
+                                    format!("⚡ ризонинг → {label} (применится на следующем ходу)"),
+                                    accent.add_modifier(Modifier::BOLD),
+                                )]);
+                            }
+                            None => {
+                                app.push(vec![Span::styled(
+                                format!("неизвестный уровень «{arg}» — варианты: /think off|high|max"), error)]);
+                            }
+                        }
+                    }
+                }
+                "mode" => {
+                    use crate::permissions::{MODE_ASK, MODE_MAX, MODE_SEMI, MODE_YOLO};
+                    let arg = args.split_whitespace().next().unwrap_or("");
+                    let (code, label) = match arg {
+                        "ask" => (MODE_ASK, "Совет"),
+                        "semi" => (MODE_SEMI, "Авто-правки"),
+                        "yolo" => (MODE_YOLO, "Автомат"),
+                        "max" => (MODE_MAX, "Максимум"),
+                        _ => {
+                            let cur = controls
+                                .mode_atomic
+                                .load(std::sync::atomic::Ordering::Relaxed);
+                            let label = match cur {
+                                MODE_SEMI => "Авто-правки",
+                                MODE_YOLO => "Автомат",
+                                MODE_MAX => "Максимум",
+                                MODE_ASK => "Совет",
+                                _ => "из запуска (по флагу)",
+                            };
+                            app.push(vec![Span::styled(
+                            format!("режим разрешений: {label}. Переключить: /mode ask (Совет) | /mode semi (Авто-правки) | /mode yolo (Автомат) | /mode max (Максимум)"), accent)]);
+                            return false;
+                        }
+                    };
+                    controls
+                        .mode_atomic
+                        .store(code, std::sync::atomic::Ordering::Relaxed);
+                    app.push(vec![Span::styled(
+                        format!("⚡ режим разрешений → {label}"),
+                        accent.add_modifier(Modifier::BOLD),
+                    )]);
+                    if code == MODE_MAX {
+                        app.push(vec![Span::styled(
                         "⚠ МАКСИМАЛЬНЫЕ ПРАВА: hard-deny, confinement на workspace, .git-защита и ядерный sandbox ВЫКЛЮЧЕНЫ — агент может читать, писать и выполнять всё на этом хосте. Вернуться: /mode ask".to_string(),
                         role_style(&app.theme, ThemeRole::Error).add_modifier(Modifier::BOLD))]);
+                    }
                 }
-            }
-            "theme" => {
-                let arg = args.split_whitespace().next().unwrap_or("");
-                if arg.is_empty() {
+                "theme" => {
+                    let arg = args.split_whitespace().next().unwrap_or("");
+                    if arg.is_empty() {
+                        app.push(vec![Span::styled(
+                            format!("тема: {} (варианты: dark, light, mono)", app.theme.name),
+                            accent,
+                        )]);
+                    } else if let Some(new_theme) = tui_theme(arg) {
+                        // переключаем в рантайме: следующий кадр уже в новой палитре
+                        app.theme = new_theme;
+                        let ok = role_style(&app.theme, ThemeRole::Ok);
+                        app.push(vec![Span::styled(
+                            format!("🎨 тема переключена: {arg}"),
+                            ok,
+                        )]);
+                    } else {
+                        app.push(vec![Span::styled(
+                            format!("неизвестная тема «{arg}» — варианты: dark, light, mono"),
+                            error,
+                        )]);
+                    }
+                }
+                "compact" => {
+                    // публичного метода ручной компактификации у агента нет
+                    // (maybe_compact — приватный, agent/mod.rs не трогаем):
+                    // честно сообщаем про автоматический порог (L1→L2→L3)
                     app.push(vec![Span::styled(
-                        format!("тема: {} (варианты: dark, light, mono)", app.theme.name),
-                        accent)]);
-                } else if let Some(new_theme) = tui_theme(arg) {
-                    // переключаем в рантайме: следующий кадр уже в новой палитре
-                    app.theme = new_theme;
-                    let ok = role_style(&app.theme, ThemeRole::Ok);
-                    app.push(vec![Span::styled(format!("🎨 тема переключена: {arg}"), ok)]);
-                } else {
-                    app.push(vec![Span::styled(
-                        format!("неизвестная тема «{arg}» — варианты: dark, light, mono"),
-                        error)]);
+                        "⤓ compact: будет выполнено автоматически по порогу".to_string(),
+                        accent,
+                    )]);
                 }
-            }
-            "compact" => {
-                // публичного метода ручной компактификации у агента нет
-                // (maybe_compact — приватный, agent/mod.rs не трогаем):
-                // честно сообщаем про автоматический порог (L1→L2→L3)
-                app.push(vec![Span::styled("⤓ compact: будет выполнено автоматически по порогу".to_string(),
-                    accent)]);
-            }
-            "skills" => cmd_skills(app, args),
-            "skill-search" => cmd_skill_search(app, args, controls),
-            "bg" => cmd_bg(app, controls),
-            "memory" => cmd_memory(app),
-            "sessions" => cmd_sessions(app),
-            "resume" => {
-                let arg = args.split_whitespace().next().unwrap_or("");
-                if arg.is_empty() {
-                    // без номера — показать пикер
-                    cmd_sessions(app);
-                    return false;
-                }
-                match arg.parse::<usize>() {
+                "skills" => cmd_skills(app, args),
+                "skill-search" => cmd_skill_search(app, args, controls),
+                "bg" => cmd_bg(app, controls),
+                "memory" => cmd_memory(app),
+                "sessions" => cmd_sessions(app),
+                "resume" => {
+                    let arg = args.split_whitespace().next().unwrap_or("");
+                    if arg.is_empty() {
+                        // без номера — показать пикер
+                        cmd_sessions(app);
+                        return false;
+                    }
+                    match arg.parse::<usize>() {
                     Ok(n) if n >= 1 => {
                         let files = session_files();
                         match files.get(n - 1) {
@@ -2689,73 +3243,87 @@ fn handle_slash(text: &str, app: &mut TuiApp, controls: &Controls) -> bool {
                     _ => app.push(vec![Span::styled(
                         "использование: /resume [N] (N — номер из /sessions; из CLI: theseus --resume <файл>)".to_string(), error)]),
                 }
-            }
-            "trace" => cmd_trace(app),
-            "yolo" => {
-                // переключателя режима разрешений в рантайме нет: режим
-                // фиксируется в PermissionEngine при старте (флаг --yolo)
-                app.push(vec![Span::styled(
+                }
+                "trace" => cmd_trace(app),
+                "yolo" => {
+                    // переключателя режима разрешений в рантайме нет: режим
+                    // фиксируется в PermissionEngine при старте (флаг --yolo)
+                    app.push(vec![Span::styled(
                     "режим yolo задаётся флагом --yolo при запуске; в текущей сессии не переключается".to_string(),
                     accent)]);
-            }
-            "doctor" => {
-                app.push(vec![Span::styled("диагностика запускается из CLI: theseus doctor [--fix]".to_string(),
-                    accent)]);
-            }
-            "hooks" => {
-                app.push(vec![Span::styled(
+                }
+                "doctor" => {
+                    app.push(vec![Span::styled(
+                        "диагностика запускается из CLI: theseus doctor [--fix]".to_string(),
+                        accent,
+                    )]);
+                }
+                "hooks" => {
+                    app.push(vec![Span::styled(
                     "хуки настраиваются в конфиге (~/.config/theseus/config.toml); проверка — theseus doctor".to_string(),
                     accent)]);
-            }
-            "mcp" => {
-                app.push(vec![Span::styled("MCP-серверы подключаются из конфига при старте сессии".to_string(),
-                    accent)]);
-            }
-            "peers" => {
-                // статус внешних CLI-агентов (probe по PATH, ~5с на пару)
-                app.push(vec![Span::styled("проверяю внешних агентов…".to_string(), dim)]);
-                let probed = crate::peers::probe_peers(&crate::peers::builtin_peers());
-                let ok = role_style(&theme, ThemeRole::Ok);
-                for line in crate::peers::format_peers(&probed).lines() {
-                    app.push(vec![Span::styled(line.to_string(),
-                        if line.contains('✅') { ok } else { dim })]);
                 }
-            }
-            "new" | "clear" => {
-                // новая сессия: лог очищается сразу, историю агента и файлы
-                // транскрипта ротирует run() при старте следующей задачи
-                // (флаг reset_session → Agent::reset_session_state)
-                app.log.clear();
-                app.block_kind = None;
-                app.follow = true;
-                app.scroll = 0;
-                // индексы в очищенный лог недействительны — сбрасываем всё,
-                // что ссылается на строки/области прежней сессии
-                app.stream_open = false;
-                app.stream_line_idx = None;
-                app.stream_block_len = 0;
-                app.stream_text.clear();
-                app.stream_gutter = None;
-                app.last_tool_open = None;
-                app.sel = None;
-                app.completion_cycle = None;
-                app.ctx_est_tokens = None;
-                // сброс фонового слежения: снимок и announced начинаются заново
-                controls.bg_snapshot.lock().unwrap().clear();
-                app.bg_items.clear();
-                app.announced_bg.clear();
-                app.jump_btn = None;
-                controls.reset_session.store(true, std::sync::atomic::Ordering::Relaxed);
-                app.push(vec![Span::styled(
+                "mcp" => {
+                    app.push(vec![Span::styled(
+                        "MCP-серверы подключаются из конфига при старте сессии".to_string(),
+                        accent,
+                    )]);
+                }
+                "peers" => {
+                    // статус внешних CLI-агентов (probe по PATH, ~5с на пару)
+                    app.push(vec![Span::styled(
+                        "проверяю внешних агентов…".to_string(),
+                        dim,
+                    )]);
+                    let probed = crate::peers::probe_peers(&crate::peers::builtin_peers());
+                    let ok = role_style(&theme, ThemeRole::Ok);
+                    for line in crate::peers::format_peers(&probed).lines() {
+                        app.push(vec![Span::styled(
+                            line.to_string(),
+                            if line.contains('✅') { ok } else { dim },
+                        )]);
+                    }
+                }
+                "new" | "clear" => {
+                    // новая сессия: лог очищается сразу, историю агента и файлы
+                    // транскрипта ротирует run() при старте следующей задачи
+                    // (флаг reset_session → Agent::reset_session_state)
+                    app.log.clear();
+                    app.block_kind = None;
+                    app.follow = true;
+                    app.scroll = 0;
+                    // индексы в очищенный лог недействительны — сбрасываем всё,
+                    // что ссылается на строки/области прежней сессии
+                    app.stream_open = false;
+                    app.stream_line_idx = None;
+                    app.stream_block_len = 0;
+                    app.stream_text.clear();
+                    app.stream_gutter = None;
+                    app.last_tool_open = None;
+                    app.sel = None;
+                    app.completion_cycle = None;
+                    app.ctx_est_tokens = None;
+                    // сброс фонового слежения: снимок и announced начинаются заново
+                    controls.bg_snapshot.lock().unwrap().clear();
+                    app.bg_items.clear();
+                    app.announced_bg.clear();
+                    app.jump_btn = None;
+                    controls
+                        .reset_session
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                    app.push(vec![Span::styled(
                     format!("╭─ новая сессия: история очищена, транскрипт — в новые файлы (/{0}) ─╮", cmd.name),
                     role_style(&app.theme, ThemeRole::Dim))]);
+                }
+                "quit" => return true,
+                other => {
+                    app.push(vec![Span::styled(
+                        format!("команда /{other} пока не поддержана в TUI — см. /help"),
+                        error,
+                    )]);
+                }
             }
-            "quit" => return true,
-            other => {
-                app.push(vec![Span::styled(format!("команда /{other} пока не поддержана в TUI — см. /help"),
-                    error)]);
-            }
-        },
+        }
     }
     false
 }
@@ -2766,8 +3334,15 @@ enum AState {
     Empty,
 }
 
-pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<String>,
-               controls: Controls, model_info: String, model_id: String, effort: String) -> Result<()> {
+pub fn run_tui(
+    mut agent: Agent,
+    broker: Arc<PermBroker>,
+    first_prompt: Option<String>,
+    controls: Controls,
+    model_info: String,
+    model_id: String,
+    effort: String,
+) -> Result<()> {
     let (tx, rx) = channel::<AgentEvent>();
     let b2 = broker.clone();
     agent.perm_answerer = Some(Box::new(move |q: &str| b2.ask(q)));
@@ -2803,14 +3378,17 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
 
     // история ввода (~/.theseus/history) и git-контекст заголовка (v0.4)
     let hist_path = history_path();
-    let mut history = hist_path.as_deref()
+    let mut history = hist_path
+        .as_deref()
         .map(|p| InputHistory::load(p, DEFAULT_CAPACITY))
         .unwrap_or_else(InputHistory::with_default_capacity);
     let workspace = workspace_guess();
     app.git_status = git_status_line(&workspace);
 
     loop {
-        while let Ok(ev) = rx.try_recv() { app.on_event(ev); }
+        while let Ok(ev) = rx.try_recv() {
+            app.on_event(ev);
+        }
         // загрузка прежней сессии из /resume N (v0.8): слот обслуживаем только
         // на свободном агенте — историю нельзя менять посреди хода; занят —
         // вернём в слот, сработает сразу после завершения
@@ -2825,15 +3403,22 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
         // спиннер «работаю…» показываем только пока агент выполняет задачу
         app.agent_running = matches!(state, AState::Running(_));
         // индикатор режима разрешений (слева в заголовке ввода)
-        app.mode_code = controls.mode_atomic.load(std::sync::atomic::Ordering::Relaxed);
+        app.mode_code = controls
+            .mode_atomic
+            .load(std::sync::atomic::Ordering::Relaxed);
         // индикатор фоновых задач в шапке («фон: N») и живая панель (v0.7)
-        app.bg_running = controls.bg_running.load(std::sync::atomic::Ordering::Relaxed);
+        app.bg_running = controls
+            .bg_running
+            .load(std::sync::atomic::Ordering::Relaxed);
         app.bg_items = controls.bg_snapshot.lock().unwrap().clone();
         // уведомления о завершении фоновых задач в лог (v0.7): без опроса,
         // один раз на задачу; /new|/clear сбрасывает announced_bg
-        let newly_done: Vec<crate::background::BgTaskInfo> = app.bg_items.iter()
+        let newly_done: Vec<crate::background::BgTaskInfo> = app
+            .bg_items
+            .iter()
             .filter(|i| i.done && !app.announced_bg.contains(&i.id))
-            .cloned().collect();
+            .cloned()
+            .collect();
         for info in newly_done {
             app.announced_bg.insert(info.id);
             let secs = info.started.elapsed().as_secs();
@@ -2843,7 +3428,11 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                 role_style(&app.theme, ThemeRole::Ok))]);
             // пробуждение агента по событию (резерв 06.08: вместо sleep-поллинга
             // bash'ем) — заметка вливается в следующий промпт как контекст
-            controls.notes_slot.lock().unwrap().push(bg_done_note(&info));
+            controls
+                .notes_slot
+                .lock()
+                .unwrap()
+                .push(bg_done_note(&info));
         }
         let pq = broker.peek();
         terminal.draw(|f| draw(f, &mut app, pq.as_deref()))?;
@@ -2872,7 +3461,10 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         // вниз — до нижнего полного окна, дальше — follow (низ лога)
                         let mt = app.max_scroll();
                         app.scroll = app.scroll.saturating_add(3);
-                        if app.scroll >= mt { app.scroll = mt; app.follow = true; }
+                        if app.scroll >= mt {
+                            app.scroll = mt;
+                            app.follow = true;
+                        }
                     }
                     // выделение в логе: Down начинает, Drag тянет, Up копирует
                     MouseEventKind::Down(MouseButton::Left) => {
@@ -2883,7 +3475,10 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                             app.sel = None;
                             app.jump_btn = None;
                         } else if point_in_rect(m.column, m.row, app.log_area) {
-                            app.sel = Some(Sel { anchor: (m.column, m.row), current: (m.column, m.row) });
+                            app.sel = Some(Sel {
+                                anchor: (m.column, m.row),
+                                current: (m.column, m.row),
+                            });
                             app.follow = false;
                         } else {
                             // клик вне области лога — сброс выделения
@@ -2902,7 +3497,10 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                             if !text.is_empty() {
                                 let count = text.chars().count();
                                 let (msg, role) = match copy_to_clipboard(&text) {
-                                    Ok(backend) => (format!("📋 скопировано {count} символов ({backend})"), ThemeRole::Ok),
+                                    Ok(backend) => (
+                                        format!("📋 скопировано {count} символов ({backend})"),
+                                        ThemeRole::Ok,
+                                    ),
                                     Err(e) => (format!("📋 {e}"), ThemeRole::Error),
                                 };
                                 let style = role_style(&app.theme, role);
@@ -2915,19 +3513,27 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                 continue;
             }
             if let Event::Key(key) = ev {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
 
                 // активный попап разрешения?
                 if pq.is_some() {
                     match key.code {
                         KeyCode::Char('y') | KeyCode::Char('Y') => {
-                            if let Some((_, answer)) = broker.take() { let _ = answer.send(true); }
+                            if let Some((_, answer)) = broker.take() {
+                                let _ = answer.send(true);
+                            }
                         }
                         KeyCode::Char('a') | KeyCode::Char('A') => {
-                            if let Some((_, answer)) = broker.take() { let _ = answer.send(true); }
+                            if let Some((_, answer)) = broker.take() {
+                                let _ = answer.send(true);
+                            }
                         }
                         KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
-                            if let Some((_, answer)) = broker.take() { let _ = answer.send(false); }
+                            if let Some((_, answer)) = broker.take() {
+                                let _ = answer.send(false);
+                            }
                         }
                         _ => {}
                     }
@@ -2942,7 +3548,9 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                     KeyCode::Esc => {
                         // Esc: агент работает → прервать ход; idle → выход (v0.3)
                         if matches!(state, AState::Running(_)) {
-                            controls.abort.store(true, std::sync::atomic::Ordering::Relaxed);
+                            controls
+                                .abort
+                                .store(true, std::sync::atomic::Ordering::Relaxed);
                             let error = role_style(&app.theme, ThemeRole::Error);
                             app.push(vec![Span::styled("⏹ прерываю агента…", error)]);
                         } else {
@@ -2953,7 +3561,9 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                     KeyCode::Tab => {
                         // автодополнение: один кандидат — полное имя (+пробел),
                         // несколько — общий префикс, дальше — цикл по кандидатам
-                        if let Some((new_input, cycle)) = slash_complete(&app.input, app.completion_cycle.clone()) {
+                        if let Some((new_input, cycle)) =
+                            slash_complete(&app.input, app.completion_cycle.clone())
+                        {
                             app.input = new_input;
                             app.cursor = app.input.chars().count();
                             app.completion_cycle = cycle;
@@ -2974,7 +3584,9 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                             continue;
                         }
                         let text = app.input.trim().to_string();
-                        if text.is_empty() { continue; }
+                        if text.is_empty() {
+                            continue;
+                        }
                         app.input.clear();
                         app.cursor = 0;
                         // история: любая отправленная строка (и промпт, и команда);
@@ -2983,7 +3595,9 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                         save_history(&history, hist_path.as_deref());
                         // slash-команды через реестр crate::slash (v0.4)
                         if text.starts_with('/') {
-                            if handle_slash(&text, &mut app, &controls) { break; }
+                            if handle_slash(&text, &mut app, &controls) {
+                                break;
+                            }
                             continue;
                         }
                         if let AState::Idle(mut a) = state {
@@ -3006,13 +3620,22 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                             // агент занят → Enter ставит в ОЧЕРЕДЬ (Normal): вольётся
                             // на границе хода, стрим не прерывается; срочная вставка
                             // с прерыванием — Ctrl+S (урок Codex steering/mailbox)
-                            controls.prompt_slot.lock().unwrap().push(crate::scheduler::QueuedPrompt::new(
-                                text.clone(), crate::scheduler::Priority::Normal,
-                                crate::scheduler::PromptSource::User));
+                            controls.prompt_slot.lock().unwrap().push(
+                                crate::scheduler::QueuedPrompt::new(
+                                    text.clone(),
+                                    crate::scheduler::Priority::Normal,
+                                    crate::scheduler::PromptSource::User,
+                                ),
+                            );
                             let user = role_style(&app.theme, ThemeRole::UserText);
-                            app.push(vec![Span::styled(format!("📨 в очередь: {text}"), user),
-                                Span::styled("  (приму после текущего хода · Ctrl+S — вставить сразу)".to_string(),
-                                    role_style(&app.theme, ThemeRole::Dim))]);
+                            app.push(vec![
+                                Span::styled(format!("📨 в очередь: {text}"), user),
+                                Span::styled(
+                                    "  (приму после текущего хода · Ctrl+S — вставить сразу)"
+                                        .to_string(),
+                                    role_style(&app.theme, ThemeRole::Dim),
+                                ),
+                            ]);
                         }
                     }
                     // Ctrl+N — новая строка в поле ввода (надёжно во всех терминалах;
@@ -3024,13 +3647,17 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                     // когда агент свободен — эквивалент Enter
                     KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                         let text = app.input.trim().to_string();
-                        if text.is_empty() { continue; }
+                        if text.is_empty() {
+                            continue;
+                        }
                         app.input.clear();
                         app.cursor = 0;
                         history.push(&text);
                         save_history(&history, hist_path.as_deref());
                         if text.starts_with('/') {
-                            if handle_slash(&text, &mut app, &controls) { break; }
+                            if handle_slash(&text, &mut app, &controls) {
+                                break;
+                            }
                             continue;
                         }
                         if let AState::Idle(mut a) = state {
@@ -3052,18 +3679,30 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                             }));
                         } else {
                             // Immediate: стрим прервётся, частичный ответ сохранится
-                            controls.prompt_slot.lock().unwrap().push(crate::scheduler::QueuedPrompt::new(
-                                text.clone(), crate::scheduler::Priority::Immediate,
-                                crate::scheduler::PromptSource::User));
+                            controls.prompt_slot.lock().unwrap().push(
+                                crate::scheduler::QueuedPrompt::new(
+                                    text.clone(),
+                                    crate::scheduler::Priority::Immediate,
+                                    crate::scheduler::PromptSource::User,
+                                ),
+                            );
                             let user = role_style(&app.theme, ThemeRole::UserText);
-                            app.push(vec![Span::styled(format!("⚡ вставляю посреди хода: {text}"), user),
-                                Span::styled("  (стрим прервётся, частичный ответ сохранится)".to_string(),
-                                    role_style(&app.theme, ThemeRole::Dim))]);
+                            app.push(vec![
+                                Span::styled(format!("⚡ вставляю посреди хода: {text}"), user),
+                                Span::styled(
+                                    "  (стрим прервётся, частичный ответ сохранится)".to_string(),
+                                    role_style(&app.theme, ThemeRole::Dim),
+                                ),
+                            ]);
                         }
                     }
-                    KeyCode::Backspace => { input_backspace(&mut app.input, &mut app.cursor); }
+                    KeyCode::Backspace => {
+                        input_backspace(&mut app.input, &mut app.cursor);
+                    }
                     // ← / → — навигация курсором по тексту (многострочный ввод)
-                    KeyCode::Left => { app.cursor = app.cursor.saturating_sub(1); }
+                    KeyCode::Left => {
+                        app.cursor = app.cursor.saturating_sub(1);
+                    }
                     KeyCode::Right => {
                         app.cursor = (app.cursor + 1).min(app.input.chars().count());
                     }
@@ -3092,9 +3731,14 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                     KeyCode::PageDown => {
                         let mt = app.max_scroll();
                         app.scroll = app.scroll.saturating_add(10);
-                        if app.scroll >= mt { app.scroll = mt; app.follow = true; }
+                        if app.scroll >= mt {
+                            app.scroll = mt;
+                            app.follow = true;
+                        }
                     }
-                    KeyCode::End => { app.follow = true; }
+                    KeyCode::End => {
+                        app.follow = true;
+                    }
                     _ => {}
                 }
             }
@@ -3115,12 +3759,16 @@ pub fn run_tui(mut agent: Agent, broker: Arc<PermBroker>, first_prompt: Option<S
                             state = AState::Idle(Box::new(a));
                             app.agent_done = true;
                         } else {
-                            let joined = queued.iter()
-                                .map(|p| p.text.clone()).collect::<Vec<_>>().join("\n");
+                            let joined = queued
+                                .iter()
+                                .map(|p| p.text.clone())
+                                .collect::<Vec<_>>()
+                                .join("\n");
                             let preview: String = joined.chars().take(80).collect();
                             app.push(vec![Span::styled(
                                 format!("📨 беру из очереди ({}): {preview}", queued.len()),
-                                role_style(&app.theme, ThemeRole::Accent))]);
+                                role_style(&app.theme, ThemeRole::Accent),
+                            )]);
                             app.agent_done = false;
                             // новая задача — возвращаем автопрокрутку: ручной скролл
                             // выше (PgUp/колесо/выделение мышью) выключал follow, и
@@ -3204,9 +3852,15 @@ mod md_render_tests {
     fn code_fence_background() {
         let rendered = crate::markdown::render("```rust\nfn main() {}\n```", 80);
         let lines = md_ansi_to_lines(&rendered);
-        let has_bg = lines.iter().flatten().any(|s| s.style.bg == Some(Color::Indexed(238)));
+        let has_bg = lines
+            .iter()
+            .flatten()
+            .any(|s| s.style.bg == Some(Color::Indexed(238)));
         assert!(has_bg, "ожидалась фоновая полоса gray-238: {lines:?}");
-        let has_fg = lines.iter().flatten().any(|s| s.style.fg == Some(Color::Indexed(248)));
+        let has_fg = lines
+            .iter()
+            .flatten()
+            .any(|s| s.style.fg == Some(Color::Indexed(248)));
         assert!(has_fg, "ожидался текст gray-248 на полосе: {lines:?}");
         // и вся цепочка до буфера кадра: bg доходит до ячеек терминала
         let mut app = TuiApp::new();
@@ -3229,14 +3883,27 @@ mod md_render_tests {
         // закрытым — фон фенса обязан появиться в логе после финала
         let mut app = TuiApp::new();
         let final_text = "## Пример\n\nЗдесь идёт обычный параграф текста.\n\n```python\ndef greet(name):\n    \"\"\"Приветствует пользователя.\"\"\"\n    return message\n```\n";
-        app.on_event(AgentEvent::AgentTextDelta("## Пример\n\n```python\ndef greet(name):\n".into()));
+        app.on_event(AgentEvent::AgentTextDelta(
+            "## Пример\n\n```python\ndef greet(name):\n".into(),
+        ));
         app.on_event(AgentEvent::AgentText(final_text.into()));
-        let has_bg_log = app.log.iter()
+        let has_bg_log = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter())
             .any(|s| s.style.bg == Some(Color::Indexed(238)));
-        assert!(has_bg_log, "после стрима фон фенса потерян: {:?}", app.log.iter()
-            .map(|l| l.spans.iter().map(|s| (s.content.clone(), s.style.bg))
-                .collect::<Vec<_>>()).collect::<Vec<_>>());
+        assert!(
+            has_bg_log,
+            "после стрима фон фенса потерян: {:?}",
+            app.log
+                .iter()
+                .map(|l| l
+                    .spans
+                    .iter()
+                    .map(|s| (s.content.clone(), s.style.bg))
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
     }
 
     /// Список: маркер заменён на •, текст не потерян.
@@ -3253,10 +3920,15 @@ mod md_render_tests {
     /// Ни один спан не содержит сырых ESC-последовательностей.
     #[test]
     fn no_raw_escapes_leak() {
-        let rendered = crate::markdown::render("# H\n**жирный** и `код`\n> цитата\n---\n[т](http://u)", 80);
+        let rendered =
+            crate::markdown::render("# H\n**жирный** и `код`\n> цитата\n---\n[т](http://u)", 80);
         let lines = md_ansi_to_lines(&rendered);
         for span in lines.iter().flatten() {
-            assert!(!span.content.contains('\u{1b}'), "ESC в спане: {:?}", span.content);
+            assert!(
+                !span.content.contains('\u{1b}'),
+                "ESC в спане: {:?}",
+                span.content
+            );
         }
     }
 
@@ -3268,20 +3940,36 @@ mod md_render_tests {
         let mut app = TuiApp::new();
         app.on_event(AgentEvent::AgentTextDelta("Привет, ".into()));
         app.on_event(AgentEvent::AgentTextDelta("мир".into()));
-        app.on_event(AgentEvent::Status { turns: 1, est_tokens: 100, mode: "Ask".into() });
+        app.on_event(AgentEvent::Status {
+            turns: 1,
+            est_tokens: 100,
+            mode: "Ask".into(),
+        });
         app.on_event(AgentEvent::Reasoning(42));
         let before = app.log.len();
         app.on_event(AgentEvent::AgentText("Привет, мир!".into()));
         // сырая стрим-строка заменена: строк столько же или больше, но текста «Привет, »
         // в сыром виде (без рендера) быть не должно
         assert!(app.log.len() >= before, "строки: {}", app.log.len());
-        let raw_count = app.log.iter()
+        let raw_count = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter())
             .filter(|s| s.content.contains("Привет, "))
             .count();
-        assert_eq!(raw_count, 1, "фраза не должна дублироваться: {:?}", app.log.iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()).collect::<Vec<_>>())
-            .collect::<Vec<_>>());
+        assert_eq!(
+            raw_count,
+            1,
+            "фраза не должна дублироваться: {:?}",
+            app.log
+                .iter()
+                .flat_map(|l| l
+                    .spans
+                    .iter()
+                    .map(|s| s.content.to_string())
+                    .collect::<Vec<_>>())
+                .collect::<Vec<_>>()
+        );
     }
 }
 
@@ -3321,16 +4009,27 @@ mod ui_helpers_tests {
     #[test]
     fn model_choice_resolution_and_menu() {
         for (arg, expected) in [
-            ("1", "deepseek-v4-pro"), ("pro", "deepseek-v4-pro"),
-            ("v4-pro", "deepseek-v4-pro"), ("deepseek-v4-pro", "deepseek-v4-pro"),
-            ("2", "deepseek-v4-flash"), ("flash", "deepseek-v4-flash"),
+            ("1", "deepseek-v4-pro"),
+            ("pro", "deepseek-v4-pro"),
+            ("v4-pro", "deepseek-v4-pro"),
+            ("deepseek-v4-pro", "deepseek-v4-pro"),
+            ("2", "deepseek-v4-flash"),
+            ("flash", "deepseek-v4-flash"),
             ("deepseek-v4-flash", "deepseek-v4-flash"),
-            ("3", "glm-5.2"), ("glm", "glm-5.2"), ("GLM-5.2", "glm-5.2"),
-            ("4", "k3"), ("k3", "k3"), ("kimi", "k3"),
+            ("3", "glm-5.2"),
+            ("glm", "glm-5.2"),
+            ("GLM-5.2", "glm-5.2"),
+            ("4", "k3"),
+            ("k3", "k3"),
+            ("kimi", "k3"),
             ("kimi-k3", "k3"),
-            ("5", "glm-5.3"), ("glm-5.3", "glm-5.3"), ("GLM53", "glm-5.3"),
-            ("6", "stealth/ox-alpha"), ("ox", "stealth/ox-alpha"),
-            ("openrouter", "stealth/ox-alpha"), ("ox-alpha", "stealth/ox-alpha"),
+            ("5", "glm-5.3"),
+            ("glm-5.3", "glm-5.3"),
+            ("GLM53", "glm-5.3"),
+            ("6", "stealth/ox-alpha"),
+            ("ox", "stealth/ox-alpha"),
+            ("openrouter", "stealth/ox-alpha"),
+            ("ox-alpha", "stealth/ox-alpha"),
             ("stealth/ox-alpha", "stealth/ox-alpha"),
         ] {
             assert_eq!(resolve_model_choice(arg), Some(expected), "аргумент: {arg}");
@@ -3340,8 +4039,15 @@ mod ui_helpers_tests {
         assert_eq!(resolve_model_choice("9"), None);
         // меню: текущая модель + пронумерованные варианты + подсказка
         let menu = model_menu_lines("deepseek-v4-flash @ https://api.deepseek.com/v1");
-        assert!(menu[0].contains("deepseek-v4-flash"), "текущая модель: {menu:?}");
-        assert_eq!(menu.len(), 1 + MODEL_CHOICES.len() + 1, "строк меню: {menu:?}");
+        assert!(
+            menu[0].contains("deepseek-v4-flash"),
+            "текущая модель: {menu:?}"
+        );
+        assert_eq!(
+            menu.len(),
+            1 + MODEL_CHOICES.len() + 1,
+            "строк меню: {menu:?}"
+        );
         assert!(menu[1].contains("1. deepseek-v4-pro"), "{menu:?}");
         assert!(menu[2].contains("2. deepseek-v4-flash"), "{menu:?}");
         assert!(menu[3].contains("3. glm-5.2"), "{menu:?}");
@@ -3365,7 +4071,10 @@ mod ui_helpers_tests {
         let (title, preview) = session_card(&messages);
         assert_eq!(title, "первая задача с продолжением на второй строке");
         assert_eq!(preview.len(), 2, "две строки превью: {preview:?}");
-        assert!(preview[0].starts_with("◆ "), "превью ассистента: {preview:?}");
+        assert!(
+            preview[0].starts_with("◆ "),
+            "превью ассистента: {preview:?}"
+        );
         assert!(preview[0].contains("ответ ассистента"));
         assert!(preview[1].starts_with("❯ "), "превью юзера: {preview:?}");
         // без user-реплик — заглушка
@@ -3382,8 +4091,11 @@ mod ui_helpers_tests {
         ];
         let (t3, p3) = session_card(&with_nudge);
         assert_eq!(t3, "настоящая задача");
-        assert!(p3.iter().all(|p| !p.contains("fully answered") && !p.contains("REMINDER")),
-            "нуджи не должны попадать в превью: {p3:?}");
+        assert!(
+            p3.iter()
+                .all(|p| !p.contains("fully answered") && !p.contains("REMINDER")),
+            "нуджи не должны попадать в превью: {p3:?}"
+        );
     }
 
     /// Хвост для /resume: последние max_msgs содержательных реплик с ролями,
@@ -3393,7 +4105,10 @@ mod ui_helpers_tests {
         let mut messages = vec![crate::api::Message::system("sys")];
         for i in 1..=10 {
             messages.push(crate::api::Message::user(format!("задача {i}")));
-            messages.push(crate::api::Message::assistant(Some(format!("ответ {i}")), None));
+            messages.push(crate::api::Message::assistant(
+                Some(format!("ответ {i}")),
+                None,
+            ));
         }
         messages.push(crate::api::Message::tool("c1", "хвост инструмента"));
         let rows = resume_preview(&messages, 4);
@@ -3401,7 +4116,10 @@ mod ui_helpers_tests {
         assert_eq!(rows[0], (PreviewRole::Assistant, "ответ 9".to_string()));
         assert_eq!(rows[1], (PreviewRole::User, "задача 10".to_string()));
         assert_eq!(rows[2], (PreviewRole::Assistant, "ответ 10".to_string()));
-        assert_eq!(rows[3], (PreviewRole::Tool, "хвост инструмента".to_string()));
+        assert_eq!(
+            rows[3],
+            (PreviewRole::Tool, "хвост инструмента".to_string())
+        );
         // усечение длинных текстов до одной строки
         assert!(rows.iter().all(|(_, t)| !t.contains('\n')));
     }
@@ -3435,14 +4153,23 @@ mod ui_helpers_tests {
     #[test]
     fn agent_text_with_ansi_renders_clean() {
         let mut app = TuiApp::new();
-        app.on_event(AgentEvent::AgentTextDelta("старт \u{1b}[38;2;1;2;3m".into()));
-        app.on_event(AgentEvent::AgentText("старт \u{1b}[38;2;1;2;3mфиниш\u{1b}[0m".into()));
-        let text: String = app.log.iter()
+        app.on_event(AgentEvent::AgentTextDelta(
+            "старт \u{1b}[38;2;1;2;3m".into(),
+        ));
+        app.on_event(AgentEvent::AgentText(
+            "старт \u{1b}[38;2;1;2;3mфиниш\u{1b}[0m".into(),
+        ));
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("старт финиш"), "чистый текст: {text}");
         assert!(!text.contains("[38;2"), "параметры ANSI протекли: {text}");
-        assert!(!text.contains("1;2;3"), "части последовательности протекли: {text}");
+        assert!(
+            !text.contains("1;2;3"),
+            "части последовательности протекли: {text}"
+        );
     }
 
     /// Slash-completion: «/» + непустой префикс без пробелов, регистронезависимо.
@@ -3454,11 +4181,16 @@ mod ui_helpers_tests {
         // регистронезависимо
         assert!(slash_completions("/TH").iter().any(|c| c.name == "theme"));
         // префикс алиаса тоже находит команду (/heal → алиас health → doctor)
-        assert!(slash_completions("/heal").iter().any(|c| c.name == "doctor"));
+        assert!(slash_completions("/heal")
+            .iter()
+            .any(|c| c.name == "doctor"));
         // голый «/» — ВЕСЬ список команд (осмотр доступного), без обрезки по MAX
         let bare = slash_completions("/");
-        assert_eq!(bare.len(), slash::builtin_commands().len(),
-            "голый «/» обязан показать все команды");
+        assert_eq!(
+            bare.len(),
+            slash::builtin_commands().len(),
+            "голый «/» обязан показать все команды"
+        );
         assert!(bare.iter().any(|c| c.name == "new") && bare.iter().any(|c| c.name == "clear"));
         // пробел в команде, ввод без слеша, неизвестный префикс — панели нет
         assert!(slash_completions("/help тема").is_empty());
@@ -3467,16 +4199,21 @@ mod ui_helpers_tests {
         // не больше MAX_COMPLETIONS, и все команды — по префиксу имени или алиаса
         let all = slash_completions("/m");
         assert!(all.len() <= MAX_COMPLETIONS);
-        assert!(all.iter().all(|c| c.name.starts_with('m')
-            || c.aliases.iter().any(|a| a.starts_with('m'))));
+        assert!(all
+            .iter()
+            .all(|c| c.name.starts_with('m') || c.aliases.iter().any(|a| a.starts_with('m'))));
     }
 
     /// /skill-search: команда в реестре, доступна по имени и алиасу /sfind.
     #[test]
     fn slash_completion_skill_search() {
-        assert!(slash_completions("/skill").iter().any(|c| c.name == "skill-search"));
+        assert!(slash_completions("/skill")
+            .iter()
+            .any(|c| c.name == "skill-search"));
         // префикс алиаса sfind тоже выводит на команду
-        assert!(slash_completions("/sfi").iter().any(|c| c.name == "skill-search"));
+        assert!(slash_completions("/sfi")
+            .iter()
+            .any(|c| c.name == "skill-search"));
         // полный реестр валиден (уникальность имён и алиасов)
         assert!(slash::validate_commands(&slash::builtin_commands()).is_ok());
     }
@@ -3484,11 +4221,15 @@ mod ui_helpers_tests {
     /// Регрессия: выдача /skill-search показывает ВСЕХ кандидатов, а не первых 8.
     #[test]
     fn skill_search_renders_all_candidates() {
-        let cands: Vec<serde_json::Value> = (1..=12).map(|i| serde_json::json!({
-            "name": format!("skill-{i:02}"),
-            "description": format!("описание скилла номер {i}"),
-            "channel_ranks": {"bm25": i, "embed": i + 1},
-        })).collect();
+        let cands: Vec<serde_json::Value> = (1..=12)
+            .map(|i| {
+                serde_json::json!({
+                    "name": format!("skill-{i:02}"),
+                    "description": format!("описание скилла номер {i}"),
+                    "channel_ranks": {"bm25": i, "embed": i + 1},
+                })
+            })
+            .collect();
         let v = serde_json::json!({
             "candidates": cands,
             "fused_ranking": ["skill-01"],
@@ -3500,14 +4241,25 @@ mod ui_helpers_tests {
         assert_eq!(lines.len(), 1 + 12 + 1 + 1, "строки: {lines:?}");
         assert!(lines[0].contains("кандидатов 12"));
         for i in 1..=12 {
-            assert!(lines[i].contains(&format!("skill-{i:02}")), "нет кандидата {i}: {lines:?}");
-            assert!(lines[i].contains("bm25#"), "нет рангов каналов: {}", lines[i]);
+            assert!(
+                lines[i].contains(&format!("skill-{i:02}")),
+                "нет кандидата {i}: {lines:?}"
+            );
+            assert!(
+                lines[i].contains("bm25#"),
+                "нет рангов каналов: {}",
+                lines[i]
+            );
         }
         assert!(lines[13].contains("fused топ: skill-01"));
         assert!(lines[14].contains("реранк"));
         // сквозная нумерация: start=10 → первый кандидат получает №10
         let lines2 = skill_search_lines(&v, "запрос", std::path::Path::new("/lib"), 10);
-        assert!(lines2[1].contains("10. skill-01"), "нумерация со start: {}", lines2[1]);
+        assert!(
+            lines2[1].contains("10. skill-01"),
+            "нумерация со start: {}",
+            lines2[1]
+        );
     }
 
     /// Заметка агенту после /skill-search: нумерация совпадает с экраном,
@@ -3528,10 +4280,18 @@ mod ui_helpers_tests {
     fn bg_panel_shows_only_running_with_timers() {
         use crate::background::BgTaskInfo;
         let mk = |id: u64, kind: &str, done: bool| BgTaskInfo {
-            id, kind: kind.to_string(), label: format!("lbl{id}"),
-            started: std::time::Instant::now(), done, tail: String::new(),
+            id,
+            kind: kind.to_string(),
+            label: format!("lbl{id}"),
+            started: std::time::Instant::now(),
+            done,
+            tail: String::new(),
         };
-        let items = vec![mk(1, "explore", false), mk(2, "peer kimi", false), mk(3, "bash", true)];
+        let items = vec![
+            mk(1, "explore", false),
+            mk(2, "peer kimi", false),
+            mk(3, "bash", true),
+        ];
         let panel = format_bg_panel(&items, 48);
         assert!(panel.contains("explore"), "{panel}");
         assert!(panel.contains("peer kimi"), "{panel}");
@@ -3562,24 +4322,49 @@ mod ui_helpers_tests {
         assert!(!jump_badge_hit(btn, 103, 40), "за правым краем бейджа");
         assert!(!jump_badge_hit(btn, 99, 40), "левее бейджа");
         assert!(!jump_badge_hit(btn, 101, 41), "строкой ниже");
-        assert!(!jump_badge_hit(None, 100, 40), "бейдж скрыт — кликать нечего");
+        assert!(
+            !jump_badge_hit(None, 100, 40),
+            "бейдж скрыт — кликать нечего"
+        );
     }
 
     /// Таблица /bg (v0.7): пустой снимок, строки задач со статусами.
     #[test]
     fn bg_table_lists_tasks() {
         use crate::background::BgTaskInfo;
-        assert_eq!(format_bg_table(&[]).len(), 1, "пусто — одна строка-подсказка");
+        assert_eq!(
+            format_bg_table(&[]).len(),
+            1,
+            "пусто — одна строка-подсказка"
+        );
         let items = vec![
-            BgTaskInfo { id: 7, kind: "explore".into(), label: "subagent explore — x".into(),
-                started: std::time::Instant::now(), done: false, tail: String::new() },
-            BgTaskInfo { id: 8, kind: "peer kimi".into(), label: "peer kimi — y".into(),
-                started: std::time::Instant::now(), done: true, tail: String::new() },
+            BgTaskInfo {
+                id: 7,
+                kind: "explore".into(),
+                label: "subagent explore — x".into(),
+                started: std::time::Instant::now(),
+                done: false,
+                tail: String::new(),
+            },
+            BgTaskInfo {
+                id: 8,
+                kind: "peer kimi".into(),
+                label: "peer kimi — y".into(),
+                started: std::time::Instant::now(),
+                done: true,
+                tail: String::new(),
+            },
         ];
         let lines = format_bg_table(&items);
         assert!(lines[0].contains("фоновые задачи (2)"), "{lines:?}");
-        assert!(lines[1].contains("bg 7") && lines[1].contains("работает"), "{lines:?}");
-        assert!(lines[2].contains("bg 8") && lines[2].contains("завершена"), "{lines:?}");
+        assert!(
+            lines[1].contains("bg 7") && lines[1].contains("работает"),
+            "{lines:?}"
+        );
+        assert!(
+            lines[2].contains("bg 8") && lines[2].contains("завершена"),
+            "{lines:?}"
+        );
         assert!(lines.last().unwrap().contains("task_output"), "{lines:?}");
     }
 
@@ -3588,14 +4373,27 @@ mod ui_helpers_tests {
     fn bg_table_shows_output_tail() {
         use crate::background::BgTaskInfo;
         let items = vec![
-            BgTaskInfo { id: 1, kind: "peer kimi".into(), label: "peer kimi — ресёрч".into(),
-                started: std::time::Instant::now(), done: false,
-                tail: "читаю документ 3 из 10".into() },
-            BgTaskInfo { id: 2, kind: "bash".into(), label: "sleep 30".into(),
-                started: std::time::Instant::now(), done: false, tail: String::new() },
+            BgTaskInfo {
+                id: 1,
+                kind: "peer kimi".into(),
+                label: "peer kimi — ресёрч".into(),
+                started: std::time::Instant::now(),
+                done: false,
+                tail: "читаю документ 3 из 10".into(),
+            },
+            BgTaskInfo {
+                id: 2,
+                kind: "bash".into(),
+                label: "sleep 30".into(),
+                started: std::time::Instant::now(),
+                done: false,
+                tail: String::new(),
+            },
         ];
         let lines = format_bg_table(&items);
-        let tail_line = lines.iter().find(|l| l.contains("читаю документ 3 из 10"))
+        let tail_line = lines
+            .iter()
+            .find(|l| l.contains("читаю документ 3 из 10"))
             .expect("хвост не показан");
         assert!(tail_line.contains("↳"), "маркер хвоста: {tail_line}");
         // у задачи без хвоста строки «↳» нет
@@ -3608,15 +4406,27 @@ mod ui_helpers_tests {
     #[test]
     fn bg_done_note_format() {
         use crate::background::BgTaskInfo;
-        let info = BgTaskInfo { id: 5, kind: "peer kimi".into(), label: "peer kimi — x".into(),
-            started: std::time::Instant::now(), done: true, tail: String::new() };
+        let info = BgTaskInfo {
+            id: 5,
+            kind: "peer kimi".into(),
+            label: "peer kimi — x".into(),
+            started: std::time::Instant::now(),
+            done: true,
+            tail: String::new(),
+        };
         let note = bg_done_note(&info);
         assert!(note.contains("bg 5"), "id: {note}");
         assert!(note.contains("peer kimi"), "тип: {note}");
         assert!(note.contains("swarm_wait"), "подсказка: {note}");
-        assert!(note.contains("task_output {\"id\": 5}"), "точечный сбор: {note}");
+        assert!(
+            note.contains("task_output {\"id\": 5}"),
+            "точечный сбор: {note}"
+        );
         assert!(note.starts_with("[context:"), "маркер контекста: {note}");
-        assert!(note.contains("Это контекст, а не задача."), "дисклеймер: {note}");
+        assert!(
+            note.contains("Это контекст, а не задача."),
+            "дисклеймер: {note}"
+        );
     }
 
     /// Формат времени HH:MM: полночь, минуты, пояс +03:00, заворот назад.
@@ -3650,17 +4460,27 @@ mod ui_helpers_tests {
         assert_eq!(role_color(&dark, ThemeRole::Error), Color::Red);
         assert_eq!(role_color(&dark, ThemeRole::Warn), Color::Yellow);
         assert_eq!(role_color(&dark, ThemeRole::Ok), Color::Rgb(137, 180, 250));
-        assert_eq!(role_color(&dark, ThemeRole::UserText), Color::Rgb(137, 180, 250));
+        assert_eq!(
+            role_color(&dark, ThemeRole::UserText),
+            Color::Rgb(137, 180, 250)
+        );
         assert_eq!(role_color(&dark, ThemeRole::AgentText), Color::White);
         assert_eq!(role_color(&dark, ThemeRole::ToolName), Color::Yellow);
         assert_eq!(role_color(&dark, ThemeRole::StatusBar), Color::Cyan);
 
         let mono = tui_theme("mono").expect("mono-тема обязана быть");
         for role in ThemeRole::ALL {
-            assert_eq!(role_color(&mono, role), Color::Reset, "роль {}", role.as_str());
+            assert_eq!(
+                role_color(&mono, role),
+                Color::Reset,
+                "роль {}",
+                role.as_str()
+            );
         }
         // mono: приглушённый текст различим атрибутом DIM
-        assert!(role_style(&mono, ThemeRole::Dim).add_modifier.contains(Modifier::DIM));
+        assert!(role_style(&mono, ThemeRole::Dim)
+            .add_modifier
+            .contains(Modifier::DIM));
 
         assert!(tui_theme("light").is_some());
         assert!(tui_theme("DARK").is_some(), "имя темы регистронезависимо");
@@ -3678,9 +4498,15 @@ mod ui_helpers_tests {
     /// Разбор context_limit_tokens из TOML-текста конфига.
     #[test]
     fn context_limit_toml_parsing() {
-        assert_eq!(parse_context_limit("model = \"m\"\ncontext_limit_tokens = 131072\n"), Some(131_072));
+        assert_eq!(
+            parse_context_limit("model = \"m\"\ncontext_limit_tokens = 131072\n"),
+            Some(131_072)
+        );
         assert_eq!(parse_context_limit("model = \"m\"\n"), None);
-        assert_eq!(parse_context_limit("context_limit_tokens = \"строка\"\n"), None);
+        assert_eq!(
+            parse_context_limit("context_limit_tokens = \"строка\"\n"),
+            None
+        );
         assert_eq!(parse_context_limit("это не = toml = синтаксис ==="), None);
         assert_eq!(parse_context_limit("context_limit_tokens = -5\n"), None);
     }
@@ -3705,10 +4531,18 @@ mod ui_helpers_tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(text.contains("T H E S E U S"), "нет заголовка:\n{text}");
-        assert!(text.contains("deepseek-chat @ https://api.deepseek.com"), "нет модели:\n{text}");
-        assert!(text.contains("ризонинг нет"), "нет уровня ризонинга:\n{text}");
-        assert!(text.contains(crate::onboarding::suggested_starter_prompts()[0]),
-            "нет первого стартового промпта:\n{text}");
+        assert!(
+            text.contains("deepseek-chat @ https://api.deepseek.com"),
+            "нет модели:\n{text}"
+        );
+        assert!(
+            text.contains("ризонинг нет"),
+            "нет уровня ризонинга:\n{text}"
+        );
+        assert!(
+            text.contains(crate::onboarding::suggested_starter_prompts()[0]),
+            "нет первого стартового промпта:\n{text}"
+        );
         assert!(text.contains("/help"), "нет подсказки клавиш:\n{text}");
     }
 
@@ -3744,7 +4578,9 @@ mod ui_helpers_tests {
         assert_eq!(controls.effort_slot.lock().unwrap().as_deref(), Some("max"));
         handle_slash("/think turbo", &mut app, &controls);
         assert_eq!(app.effort, "max", "мусорный токен не должен менять уровень");
-        let text: String = app.log.iter()
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("неизвестный уровень"), "нет ошибки: {text}");
@@ -3770,7 +4606,10 @@ mod ui_helpers_tests {
         app.on_event(AgentEvent::AgentText("строка1\nстрока2".into()));
         let last = &app.log[app.log.len() - 1].spans[0].content;
         assert!(last.contains('│'), "продолжение — желобок: {last:?}");
-        assert!(last.chars().nth(2) != Some(':'), "времени на продолжении нет: {last:?}");
+        assert!(
+            last.chars().nth(2) != Some(':'),
+            "времени на продолжении нет: {last:?}"
+        );
     }
 
     /// Автодополнение: единственный кандидат — полное имя с пробелом.
@@ -3803,8 +4642,14 @@ mod ui_helpers_tests {
         let (first, c1) = slash_complete("/c", None).unwrap();
         let (second, c2) = slash_complete(&first, c1).unwrap();
         let (third, _) = slash_complete(&second, c2).unwrap();
-        assert_ne!(first, second, "цикл обязан менять кандидата: {first} == {second}");
-        assert_eq!(third, first, "по кругу обязаны вернуться к первому: {third} != {first}");
+        assert_ne!(
+            first, second,
+            "цикл обязан менять кандидата: {first} == {second}"
+        );
+        assert_eq!(
+            third, first,
+            "по кругу обязаны вернуться к первому: {third} != {first}"
+        );
     }
 
     /// Алиас тоже дополняется (например «h» → help; «q» → quit через алиас q).
@@ -3852,7 +4697,11 @@ mod render_bug_tests {
         app.on_event(AgentEvent::UserMsg("глянь конфиг".into()));
         // ровно как в сессии: preview многострочного конфига с \n и табами
         let preview = "     1\t# theseus config\n     2\tmodel = \"deepseek-v4-pro\"\n     3\tweb_allowed_domains = [\"duckduckgo.com\", \"api.duckduckgo.com\", \"wikipedia.org\", \"ru.wiki";
-        app.on_event(AgentEvent::ToolResult { name: "read_file".into(), preview: preview.into(), ok: true });
+        app.on_event(AgentEvent::ToolResult {
+            name: "read_file".into(),
+            preview: preview.into(),
+            ok: true,
+        });
 
         let backend = TestBackend::new(120, 20);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -3866,7 +4715,10 @@ mod render_bug_tests {
         assert!(joined.contains('⏎'), "нет маркера ⏎:\n{joined}");
         // и главное: НЕТ слипшегося инлайна «…config     2	model…» —
         // именно он давал «висячие хвосты» при переносе
-        assert!(!joined.contains("config     2"), "строки слиплись без разделителя:\n{joined}");
+        assert!(
+            !joined.contains("config     2"),
+            "строки слиплись без разделителя:\n{joined}"
+        );
     }
 
     /// Регрессия (скриншот 16-42-57): preview bash-вывода pdftotext содержит
@@ -3881,21 +4733,31 @@ mod render_bug_tests {
         // путь 1: ToolCall→ToolResult (прямой допис спана в строку вызова);
         // preview — хвост реального из events-1784467287.jsonl:310, \x0c внутри окна take(90)
         app.on_event(AgentEvent::ToolCall {
-            name: "bash".into(), args: r#"{"command":"pdftotext paper.pdf -"}"#.into(),
+            name: "bash".into(),
+            args: r#"{"command":"pdftotext paper.pdf -"}"#.into(),
             decision: "Allow".into(),
         });
         let preview = "annotation di\u{c}6\n\nW. Gao et al.\n\nconditioned on its decision context x and triggered module k";
-        app.on_event(AgentEvent::ToolResult { name: "bash".into(), preview: preview.into(), ok: true });
+        app.on_event(AgentEvent::ToolResult {
+            name: "bash".into(),
+            preview: preview.into(),
+            ok: true,
+        });
         // путь 2: UserMsg через push()
-        app.on_event(AgentEvent::UserMsg("строка с \u{c} и \u{8} управляющими".into()));
+        app.on_event(AgentEvent::UserMsg(
+            "строка с \u{c} и \u{8} управляющими".into(),
+        ));
         // путь 3: стрим-дельта с управляющим символом (допис в last_mut, мимо push)
         app.on_event(AgentEvent::AgentTextDelta("начало \u{b}хвост".into()));
 
         // в логе не осталось ни одного управляющего символа
         for (i, line) in app.log.iter().enumerate() {
             for sp in &line.spans {
-                assert!(!sp.content.chars().any(char::is_control),
-                    "строка {i} содержит управляющий символ: {:?}", sp.content);
+                assert!(
+                    !sp.content.chars().any(char::is_control),
+                    "строка {i} содержит управляющий символ: {:?}",
+                    sp.content
+                );
             }
         }
         // и в отрисованном буфере их нет — терминал не получит курсорных команд
@@ -3903,10 +4765,14 @@ mod render_bug_tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
-        assert!(!joined.chars().any(|c| c.is_control() && c != '\n'),
-            "в буфере терминала управляющий символ:\n{joined:?}");
+        assert!(
+            !joined.chars().any(|c| c.is_control() && c != '\n'),
+            "в буфере терминала управляющий символ:\n{joined:?}"
+        );
         // содержимое не потеряно: \x0c стал пробелом, \n — маркером ⏎
-        let text: String = app.log.iter()
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("di 6"), "\\x0c должен стать пробелом: {text}");
@@ -3928,16 +4794,25 @@ mod render_bug_tests {
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
         for cmd in slash::builtin_commands() {
-            assert!(joined.contains(&format!("/{:<10}", cmd.name)),
-                "нет команды /{} в панели:\n{joined}", cmd.name);
+            assert!(
+                joined.contains(&format!("/{:<10}", cmd.name)),
+                "нет команды /{} в панели:\n{joined}",
+                cmd.name
+            );
         }
-        assert!(!joined.contains("…ещё"), "на 45 строках обрезки быть не должно:\n{joined}");
+        assert!(
+            !joined.contains("…ещё"),
+            "на 45 строках обрезки быть не должно:\n{joined}"
+        );
         // низкий терминал: панель обрезана, хвост — «…ещё N — продолжайте ввод»
         let backend = TestBackend::new(100, 18);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
-        assert!(joined.contains("…ещё"), "на 18 строках должна быть обрезка:\n{joined}");
+        assert!(
+            joined.contains("…ещё"),
+            "на 18 строках должна быть обрезка:\n{joined}"
+        );
     }
 
     /// Два режима вставки посреди хода (v0.6.1, запрос пользователя): пока агент
@@ -3951,9 +4826,18 @@ mod render_bug_tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
-        assert!(joined.contains("Enter — в очередь"), "нет подсказки очереди:\n{joined}");
-        assert!(joined.contains("Ctrl+S — вставить сразу"), "нет подсказки преемпции:\n{joined}");
-        assert!(joined.contains("Esc — прервать"), "Esc-подсказка не должна пропасть:\n{joined}");
+        assert!(
+            joined.contains("Enter — в очередь"),
+            "нет подсказки очереди:\n{joined}"
+        );
+        assert!(
+            joined.contains("Ctrl+S — вставить сразу"),
+            "нет подсказки преемпции:\n{joined}"
+        );
+        assert!(
+            joined.contains("Esc — прервать"),
+            "Esc-подсказка не должна пропасть:\n{joined}"
+        );
     }
 
     /// Автопрокрутка (замечание пользователя «сообщения уходят вниз, приходится
@@ -3974,10 +4858,14 @@ mod render_bug_tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
-        assert!(joined.contains("ПОСЛЕДНЯЯ_СТРОКА_МАРКЕР"),
-            "низ лога не виден — автопрокрутка не работает:\n{joined}");
-        assert!(!joined.contains("строка 1"),
-            "верх должен был уйти за край:\n{joined}");
+        assert!(
+            joined.contains("ПОСЛЕДНЯЯ_СТРОКА_МАРКЕР"),
+            "низ лога не виден — автопрокрутка не работает:\n{joined}"
+        );
+        assert!(
+            !joined.contains("строка 1"),
+            "верх должен был уйти за край:\n{joined}"
+        );
     }
 
     /// (строка, колонка) курсора по символьному индексу — вспомогательная
@@ -4060,7 +4948,10 @@ mod render_bug_tests {
             assert!(joined.contains(line), "нет строки «{line}»:\n{joined}");
         }
         // 10 строк: окно — последние MAX_INPUT_LINES (3..=10), начало скрыто
-        app.input = (1..=10).map(|i| format!("строка{i}")).collect::<Vec<_>>().join("\n");
+        app.input = (1..=10)
+            .map(|i| format!("строка{i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
         app.cursor = app.input.chars().count();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
@@ -4084,10 +4975,13 @@ mod render_bug_tests {
         let lines = buffer_lines(&terminal);
         // первая визуальная строка — сплошные «а» во всю ширину поля
         let rows_with_a = (0..lines.len())
-            .filter(|&y| lines[y].contains("аааааааааа")).count();
-        assert!(rows_with_a >= 2,
+            .filter(|&y| lines[y].contains("аааааааааа"))
+            .count();
+        assert!(
+            rows_with_a >= 2,
             "строка не перенеслась визуально (ожидалось >= 2 строк с «а»):\n{}",
-            lines.join("\n"));
+            lines.join("\n")
+        );
     }
 
     /// Курсор после хвостового пробела (баг «пробел не нажимается» 20.07):
@@ -4117,7 +5011,9 @@ mod render_bug_tests {
         app.on_event(AgentEvent::UserMsg("расскажи".into()));
         // заголовок приходит одной дельтой — сразу рендерится без «##»
         app.on_event(AgentEvent::AgentTextDelta("## Тайтл\n".into()));
-        let text: String = app.log.iter()
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("Тайтл"), "заголовок виден: {text}");
@@ -4125,21 +5021,28 @@ mod render_bug_tests {
         // маркер, разорванный между дельтами, закрывается — текст устаканивается
         app.on_event(AgentEvent::AgentTextDelta("текст **жир".into()));
         app.on_event(AgentEvent::AgentTextDelta("ный**".into()));
-        let text: String = app.log.iter()
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("жирный"), "собранный текст: {text}");
         assert!(!text.contains("**"), "незакрытый маркер заменён: {text}");
         // финал не дублирует: AgentText перерендеривает тот же блок
         app.on_event(AgentEvent::AgentText("## Тайтл\nтекст **жирный**".into()));
-        let text: String = app.log.iter()
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert_eq!(text.matches("Тайтл").count(), 1, "без дублей: {text}");
         assert_eq!(text.matches("жирный").count(), 1, "без дублей: {text}");
         // стрим-состояние сброшено
-        assert!(app.stream_line_idx.is_none() && app.stream_block_len == 0
-            && app.stream_text.is_empty());
+        assert!(
+            app.stream_line_idx.is_none()
+                && app.stream_block_len == 0
+                && app.stream_text.is_empty()
+        );
     }
 
     /// Хронология финала (баг 22.07): AgentText — ВСЕГДА в конец лога,
@@ -4152,13 +5055,20 @@ mod render_bug_tests {
         // промежуточная строка ПОСЛЕ начала стрима
         app.on_event(AgentEvent::Reasoning(42));
         app.on_event(AgentEvent::AgentText("финальный ответ полностью".into()));
-        let text: Vec<String> = app.log.iter()
+        let text: Vec<String> = app
+            .log
+            .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
         let pos_reasoning = text.iter().position(|t| t.contains("мышление")).unwrap();
-        let pos_final = text.iter().position(|t| t.contains("финальный ответ полностью")).unwrap();
-        assert!(pos_final > pos_reasoning,
-            "ответ не в конце лога (инверсия хронологии): {text:?}");
+        let pos_final = text
+            .iter()
+            .position(|t| t.contains("финальный ответ полностью"))
+            .unwrap();
+        assert!(
+            pos_final > pos_reasoning,
+            "ответ не в конце лога (инверсия хронологии): {text:?}"
+        );
         // частичный стрим-блок снят — дублей нет
         let partial = text.iter().filter(|t| t.contains("часть ответа")).count();
         assert_eq!(partial, 0, "частичный блок не снят: {text:?}");
@@ -4174,15 +5084,24 @@ mod render_bug_tests {
         app.on_event(AgentEvent::AgentTextDelta("42".into()));
         app.on_event(AgentEvent::Reasoning(10));
         app.on_event(AgentEvent::AgentText("Ответ: 42".into()));
-        let contents: Vec<String> = app.log.iter()
+        let contents: Vec<String> = app
+            .log
+            .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
-        let hits: Vec<usize> = contents.iter().enumerate()
+        let hits: Vec<usize> = contents
+            .iter()
+            .enumerate()
             .filter(|(_, c)| c.contains("Ответ: 42"))
-            .map(|(i, _)| i).collect();
+            .map(|(i, _)| i)
+            .collect();
         assert_eq!(hits.len(), 1, "ровно один рендер текста: {contents:?}");
         // текст — последней строкой (на месте стрима, без уезда/дубля)
-        assert_eq!(hits[0], contents.len() - 1, "текст не на месте: {contents:?}");
+        assert_eq!(
+            hits[0],
+            contents.len() - 1,
+            "текст не на месте: {contents:?}"
+        );
         assert_eq!(contents.len(), 2, "строки: индикатор + текст: {contents:?}");
         // индикатор мышления — выше текста (порядок как в живых скриншотах)
         assert!(contents[0].contains("(мышление:"), "{contents:?}");
@@ -4196,24 +5115,46 @@ mod render_bug_tests {
         let mut app = TuiApp::new();
         app.on_event(AgentEvent::UserMsg("вопрос".into()));
         app.on_event(AgentEvent::AgentTextDelta("первая часть".into()));
-        let g1: String = app.stream_gutter.as_ref().expect("желобок сохранён")
-            .iter().map(|s| s.content.to_string()).collect();
+        let g1: String = app
+            .stream_gutter
+            .as_ref()
+            .expect("желобок сохранён")
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         // первая строка блока открывается именно этим желобком
         let idx = app.stream_line_idx.expect("блок есть");
-        let head: String = app.log[idx].spans.iter()
-            .map(|s| s.content.to_string()).collect();
-        assert!(head.starts_with(&g1), "блок открыт замороженным желобком: {head}");
+        let head: String = app.log[idx]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
+        assert!(
+            head.starts_with(&g1),
+            "блок открыт замороженным желобком: {head}"
+        );
         // ещё дельта — желобок тот же объект, не перегенерирован
         app.on_event(AgentEvent::AgentTextDelta("вторая часть".into()));
-        let g2: String = app.stream_gutter.as_ref().expect("желобок на месте")
-            .iter().map(|s| s.content.to_string()).collect();
+        let g2: String = app
+            .stream_gutter
+            .as_ref()
+            .expect("желобок на месте")
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert_eq!(g1, g2, "желобок «переехал» на новое время");
-        let head2: String = app.log[idx].spans.iter()
-            .map(|s| s.content.to_string()).collect();
+        let head2: String = app.log[idx]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(head2.starts_with(&g1), "перерендер сменил желобок: {head2}");
         // финал — желобок сброшен
         app.on_event(AgentEvent::AgentText("финал".into()));
-        assert!(app.stream_gutter.is_none(), "после финала желобок не сброшен");
+        assert!(
+            app.stream_gutter.is_none(),
+            "после финала желобок не сброшен"
+        );
     }
 
     /// Преемпция стрима (баг «перемешивания времени» 20.07): прерванный
@@ -4228,16 +5169,31 @@ mod render_bug_tests {
         app.on_event(AgentEvent::UserMsg("(вставка посреди хода) стоп".into()));
         // следующая дельта — ответ на вставку — НЕ должна уйти в старую позицию
         app.on_event(AgentEvent::AgentTextDelta("вторая часть ответа".into()));
-        let text: Vec<String> = app.log.iter()
+        let text: Vec<String> = app
+            .log
+            .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
-        let pos_first = text.iter().position(|t| t.contains("часть ответа первая")).unwrap();
-        let pos_interject = text.iter().position(|t| t.contains("вставка посреди хода")).unwrap();
-        let pos_second = text.iter().position(|t| t.contains("вторая часть ответа")).unwrap();
-        assert!(pos_first < pos_interject,
-            "старая часть должна остаться выше вставки: {text:?}");
-        assert!(pos_second > pos_interject,
-            "продолжение ушло ВЫШЕ вставки — перемешивание времени: {text:?}");
+        let pos_first = text
+            .iter()
+            .position(|t| t.contains("часть ответа первая"))
+            .unwrap();
+        let pos_interject = text
+            .iter()
+            .position(|t| t.contains("вставка посреди хода"))
+            .unwrap();
+        let pos_second = text
+            .iter()
+            .position(|t| t.contains("вторая часть ответа"))
+            .unwrap();
+        assert!(
+            pos_first < pos_interject,
+            "старая часть должна остаться выше вставки: {text:?}"
+        );
+        assert!(
+            pos_second > pos_interject,
+            "продолжение ушло ВЫШЕ вставки — перемешивание времени: {text:?}"
+        );
     }
 
     /// «Осиротевший» стрим (баг 26.07): tool-only ход со stray-дельтой
@@ -4253,31 +5209,54 @@ mod render_bug_tests {
         app.on_event(AgentEvent::AgentTextDelta(String::new()));
         app.on_event(AgentEvent::Reasoning(100));
         app.on_event(AgentEvent::ToolCall {
-            name: "read_file".into(), args: "{\"path\":\"a.txt\"}".into(),
-            decision: "Allow".into() });
+            name: "read_file".into(),
+            args: "{\"path\":\"a.txt\"}".into(),
+            decision: "Allow".into(),
+        });
         // ToolCall обязан сбросить осиротевший стрим
-        assert!(app.stream_line_idx.is_none(), "осиротевший стрим не сброшен");
+        assert!(
+            app.stream_line_idx.is_none(),
+            "осиротевший стрим не сброшен"
+        );
         assert!(app.stream_text.is_empty() && app.stream_block_len == 0);
         // ход 2: нормальный текстовый — блок стартует ПОСЛЕ строки инструмента
         app.on_event(AgentEvent::AgentTextDelta("текст ответа".into()));
-        let text: Vec<String> = app.log.iter()
+        let text: Vec<String> = app
+            .log
+            .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
         let pos_tool = text.iter().position(|t| t.contains("read_file")).unwrap();
-        let pos_answer = text.iter().position(|t| t.contains("текст ответа")).unwrap();
-        assert!(pos_answer > pos_tool,
-            "стрим-блок встал ВЫШЕ инструмента (инверсия хронологии): {text:?}");
+        let pos_answer = text
+            .iter()
+            .position(|t| t.contains("текст ответа"))
+            .unwrap();
+        assert!(
+            pos_answer > pos_tool,
+            "стрим-блок встал ВЫШЕ инструмента (инверсия хронологии): {text:?}"
+        );
         // финал — один рендер, на месте стрима в конце лога (без телепорта/дубля)
         app.on_event(AgentEvent::Reasoning(50));
         app.on_event(AgentEvent::AgentText("текст ответа".into()));
-        let text: Vec<String> = app.log.iter()
+        let text: Vec<String> = app
+            .log
+            .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
-        assert_eq!(text.iter().filter(|t| t.contains("текст ответа")).count(), 1,
-            "двойной рендер: {text:?}");
+        assert_eq!(
+            text.iter().filter(|t| t.contains("текст ответа")).count(),
+            1,
+            "двойной рендер: {text:?}"
+        );
         let pos_tool = text.iter().position(|t| t.contains("read_file")).unwrap();
-        let pos_answer = text.iter().rposition(|t| t.contains("текст ответа")).unwrap();
-        assert!(pos_answer > pos_tool, "финал уехал выше инструмента: {text:?}");
+        let pos_answer = text
+            .iter()
+            .rposition(|t| t.contains("текст ответа"))
+            .unwrap();
+        assert!(
+            pos_answer > pos_tool,
+            "финал уехал выше инструмента: {text:?}"
+        );
     }
 
     /// Peer-стриминг (фазы 1-2): дельты одного пира копятся в одном блоке с
@@ -4286,20 +5265,37 @@ mod render_bug_tests {
     #[test]
     fn peer_delta_block_and_finalize_on_tool_result() {
         let mut app = TuiApp::new();
-        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "часть ".into() });
-        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "ответа".into() });
-        let text: String = app.log.iter()
+        app.on_event(AgentEvent::PeerDelta {
+            peer: "claude".into(),
+            text: "часть ".into(),
+        });
+        app.on_event(AgentEvent::PeerDelta {
+            peer: "claude".into(),
+            text: "ответа".into(),
+        });
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("◈ claude"), "желобок пира: {text}");
         assert!(text.contains("часть ответа"), "текст блока: {text}");
-        let gutters = |app: &TuiApp| app.log.iter()
-            .filter(|l| l.spans.iter().any(|s| s.content.contains("◈ claude")))
-            .count();
+        let gutters = |app: &TuiApp| {
+            app.log
+                .iter()
+                .filter(|l| l.spans.iter().any(|s| s.content.contains("◈ claude")))
+                .count()
+        };
         assert_eq!(gutters(&app), 1, "один желобок на блок");
-        app.on_event(AgentEvent::ToolResult { name: "peer_ask".into(),
-            preview: "готово".into(), ok: true });
-        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "второй заход".into() });
+        app.on_event(AgentEvent::ToolResult {
+            name: "peer_ask".into(),
+            preview: "готово".into(),
+            ok: true,
+        });
+        app.on_event(AgentEvent::PeerDelta {
+            peer: "claude".into(),
+            text: "второй заход".into(),
+        });
         assert_eq!(gutters(&app), 2, "после финализации — новый блок");
     }
 
@@ -4308,33 +5304,64 @@ mod render_bug_tests {
     #[test]
     fn peer_switch_and_user_insert_start_fresh_block() {
         let mut app = TuiApp::new();
-        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "текст claude".into() });
-        app.on_event(AgentEvent::PeerDelta { peer: "kimi".into(), text: "текст kimi".into() });
+        app.on_event(AgentEvent::PeerDelta {
+            peer: "claude".into(),
+            text: "текст claude".into(),
+        });
+        app.on_event(AgentEvent::PeerDelta {
+            peer: "kimi".into(),
+            text: "текст kimi".into(),
+        });
         app.on_event(AgentEvent::UserMsg("пользовательская вставка".into()));
-        app.on_event(AgentEvent::PeerDelta { peer: "claude".into(), text: "после вставки".into() });
-        let gutter_of = |needle: &str, app: &TuiApp| app.log.iter()
-            .filter(|l| l.spans.iter().any(|s| s.content.contains(needle)))
-            .count();
-        assert_eq!(gutter_of("◈ claude", &app), 2, "два блока claude (до/после вставки)");
+        app.on_event(AgentEvent::PeerDelta {
+            peer: "claude".into(),
+            text: "после вставки".into(),
+        });
+        let gutter_of = |needle: &str, app: &TuiApp| {
+            app.log
+                .iter()
+                .filter(|l| l.spans.iter().any(|s| s.content.contains(needle)))
+                .count()
+        };
+        assert_eq!(
+            gutter_of("◈ claude", &app),
+            2,
+            "два блока claude (до/после вставки)"
+        );
         assert_eq!(gutter_of("◈ kimi", &app), 1, "один блок kimi");
         // хронология: блок kimi выше вставки, блок «после вставки» — ниже
-        let texts: Vec<String> = app.log.iter()
+        let texts: Vec<String> = app
+            .log
+            .iter()
             .map(|l| l.spans.iter().map(|s| s.content.to_string()).collect())
             .collect();
         let pos_kimi = texts.iter().position(|t| t.contains("текст kimi")).unwrap();
-        let pos_user = texts.iter().position(|t| t.contains("пользовательская вставка")).unwrap();
-        let pos_after = texts.iter().position(|t| t.contains("после вставки")).unwrap();
-        assert!(pos_kimi < pos_user && pos_user < pos_after,
-            "хронология нарушена: {texts:?}");
+        let pos_user = texts
+            .iter()
+            .position(|t| t.contains("пользовательская вставка"))
+            .unwrap();
+        let pos_after = texts
+            .iter()
+            .position(|t| t.contains("после вставки"))
+            .unwrap();
+        assert!(
+            pos_kimi < pos_user && pos_user < pos_after,
+            "хронология нарушена: {texts:?}"
+        );
     }
 
     /// PeerToolUse — компактная строка вызова инструмента пира.
     #[test]
     fn peer_tool_use_renders_line() {
         let mut app = TuiApp::new();
-        app.on_event(AgentEvent::PeerToolUse { peer: "kimi".into(),
-            name: "Bash".into(), args: "{\"cmd\":\"ls\"}".into() });
-        let text: String = app.log.iter()
+        app.on_event(AgentEvent::PeerToolUse {
+            peer: "kimi".into(),
+            name: "Bash".into(),
+            args: "{\"cmd\":\"ls\"}".into(),
+        });
+        let text: String = app
+            .log
+            .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.content.to_string()))
             .collect();
         assert!(text.contains("◈ kimi"), "{text}");
@@ -4355,14 +5382,20 @@ mod render_bug_tests {
         // 🧠 занимает 2 ячейки терминала — в дампе буфера после него 2 пробела,
         // поэтому проверяем id и уровень без привязки к пробелу у эмодзи
         assert!(joined.contains("🧠"), "нет иконки бейджа:\n{joined}");
-        assert!(joined.contains("deepseek-v4-pro"), "нет бейджа модели:\n{joined}");
+        assert!(
+            joined.contains("deepseek-v4-pro"),
+            "нет бейджа модели:\n{joined}"
+        );
         assert!(joined.contains("· max"), "нет уровня ризонинга:\n{joined}");
         // k3: ризонинг встроенный — так и пишем
         app.model_id = "k3".into();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
         assert!(joined.contains("k3"), "нет бейджа k3:\n{joined}");
-        assert!(joined.contains("· встроенный"), "k3 — встроенный ризонинг:\n{joined}");
+        assert!(
+            joined.contains("· встроенный"),
+            "k3 — встроенный ризонинг:\n{joined}"
+        );
     }
 
     /// Индикатор фоновых агентов (v0.6.6): в шапке виден «фон: N» с пульсом,
@@ -4379,7 +5412,10 @@ mod render_bug_tests {
         app.bg_running = 0;
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined2 = buffer_lines(&terminal).join("\n");
-        assert!(!joined2.contains("фон:"), "индикатор не скрылся:\n{joined2}");
+        assert!(
+            !joined2.contains("фон:"),
+            "индикатор не скрылся:\n{joined2}"
+        );
     }
 
     /// Ручной скролл колесом (баг пользователя 20.07 «проваливается в пустой
@@ -4399,7 +5435,10 @@ mod render_bug_tests {
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
         assert!(joined.contains("строка 13"), "окно отсюда:\n{joined}");
-        assert!(joined.contains("строка 18"), "и досюда (6 полных строк):\n{joined}");
+        assert!(
+            joined.contains("строка 18"),
+            "и досюда (6 полных строк):\n{joined}"
+        );
         assert!(!joined.contains("строка 19"), "за окном:\n{joined}");
         // scroll далеко за max_top (= 20-6 = 14): показывается ПОЛНОЕ нижнее
         // окно (строки 15..20), а не «1 строка текста + пустой экран»
@@ -4407,7 +5446,10 @@ mod render_bug_tests {
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
         assert!(joined.contains("строка 20"), "низ лога виден:\n{joined}");
-        assert!(joined.contains("строка 15"), "окно полное сверху:\n{joined}");
+        assert!(
+            joined.contains("строка 15"),
+            "окно полное сверху:\n{joined}"
+        );
         assert!(!joined.contains("строка 14"), "выше окна:\n{joined}");
     }
 
@@ -4423,13 +5465,22 @@ mod render_bug_tests {
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
         assert!(joined.contains("думаю…"), "нет «думаю…» в логе:\n{joined}");
-        assert!(joined.contains("агент думает"), "нет «агент думает…» в заголовке ввода:\n{joined}");
+        assert!(
+            joined.contains("агент думает"),
+            "нет «агент думает…» в заголовке ввода:\n{joined}"
+        );
         // когда агент закончил — индикатор исчезает
         app.agent_running = false;
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined2 = buffer_lines(&terminal).join("\n");
-        assert!(!joined2.contains("думаю…"), "индикатор не исчез:\n{joined2}");
-        assert!(!joined2.contains("агент думает"), "индикатор не исчез из заголовка:\n{joined2}");
+        assert!(
+            !joined2.contains("думаю…"),
+            "индикатор не исчез:\n{joined2}"
+        );
+        assert!(
+            !joined2.contains("агент думает"),
+            "индикатор не исчез из заголовка:\n{joined2}"
+        );
     }
 
     /// Компактный трейс инструментов (v0.6.0): вызов и результат — одна строка,
@@ -4438,23 +5489,45 @@ mod render_bug_tests {
     fn tool_call_and_result_share_one_line() {
         let mut app = TuiApp::new();
         app.on_event(AgentEvent::ToolCall {
-            name: "read_file".into(), args: r#"{"path":"a.txt"}"#.into(), decision: "Allow".into(),
+            name: "read_file".into(),
+            args: r#"{"path":"a.txt"}"#.into(),
+            decision: "Allow".into(),
         });
         app.on_event(AgentEvent::ToolResult {
-            name: "read_file".into(), preview: "содержимое файла".into(), ok: true,
+            name: "read_file".into(),
+            preview: "содержимое файла".into(),
+            ok: true,
         });
-        assert_eq!(app.log.len(), 1, "вызов+результат обязаны быть одной строкой: {}", app.log.len());
-        let text: String = app.log[0].spans.iter().map(|s| s.content.to_string()).collect();
+        assert_eq!(
+            app.log.len(),
+            1,
+            "вызов+результат обязаны быть одной строкой: {}",
+            app.log.len()
+        );
+        let text: String = app.log[0]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert!(text.contains("read_file"), "{text}");
         assert!(text.contains("→ содержимое файла"), "{text}");
         // два инструмента подряд — две строки, без разделителя
         app.on_event(AgentEvent::ToolCall {
-            name: "grep".into(), args: r#"{"pattern":"x"}"#.into(), decision: "Allow".into(),
+            name: "grep".into(),
+            args: r#"{"pattern":"x"}"#.into(),
+            decision: "Allow".into(),
         });
         app.on_event(AgentEvent::ToolResult {
-            name: "grep".into(), preview: "a.txt:1:x".into(), ok: true,
+            name: "grep".into(),
+            preview: "a.txt:1:x".into(),
+            ok: true,
         });
-        assert_eq!(app.log.len(), 2, "два инструмента — две строки: {}", app.log.len());
+        assert_eq!(
+            app.log.len(),
+            2,
+            "два инструмента — две строки: {}",
+            app.log.len()
+        );
     }
 
     /// Регрессия (скриншот 12-15-53): длинная команда в запросе разрешения
@@ -4471,8 +5544,14 @@ mod render_bug_tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, Some(&long_q))).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
-        assert!(joined.contains("[y] разрешить"), "строка ответа не видна:\n{joined}");
-        assert!(joined.contains("[n] отклонить"), "строка отказа не видна:\n{joined}");
+        assert!(
+            joined.contains("[y] разрешить"),
+            "строка ответа не видна:\n{joined}"
+        );
+        assert!(
+            joined.contains("[n] отклонить"),
+            "строка отказа не видна:\n{joined}"
+        );
     }
 
     /// Индикатор режима в заголовке ввода (v0.5.8): бейдж режима слева.
@@ -4484,11 +5563,17 @@ mod render_bug_tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined = buffer_lines(&terminal).join("\n");
-        assert!(joined.contains("Авто-правки"), "нет бейджа полуавтомата:\n{joined}");
+        assert!(
+            joined.contains("Авто-правки"),
+            "нет бейджа полуавтомата:\n{joined}"
+        );
         app.mode_code = crate::permissions::MODE_YOLO;
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined2 = buffer_lines(&terminal).join("\n");
-        assert!(joined2.contains("Автомат"), "нет бейджа автомата:\n{joined2}");
+        assert!(
+            joined2.contains("Автомат"),
+            "нет бейджа автомата:\n{joined2}"
+        );
         app.mode_code = crate::permissions::MODE_ASK;
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let joined3 = buffer_lines(&terminal).join("\n");
@@ -4526,7 +5611,10 @@ mod selection_tests {
             spans: vec![
                 Span::styled("12:00 ".to_string(), Style::default().fg(Color::Red)),
                 Span::raw("❯ "),
-                Span::styled("привет".to_string(), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "привет".to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
             ],
         };
         assert_eq!(line_plain(&line), "12:00 ❯ привет");
@@ -4538,7 +5626,10 @@ mod selection_tests {
         let mut app = app_with(&["0123456789"]);
         app.log_area = area(1);
         // экранные колонки 3..7 → символы 2..6 (минус рамка x=1)
-        let sel = Sel { anchor: (3, 0), current: (7, 0) };
+        let sel = Sel {
+            anchor: (3, 0),
+            current: (7, 0),
+        };
         assert_eq!(extract_selection(&app, sel), "2345");
     }
 
@@ -4547,7 +5638,10 @@ mod selection_tests {
     fn extract_line_range_trims_edges() {
         let mut app = app_with(&["aaa", "bbb", "ccc"]);
         app.log_area = area(3);
-        let sel = Sel { anchor: (2, 0), current: (3, 2) };
+        let sel = Sel {
+            anchor: (2, 0),
+            current: (3, 2),
+        };
         assert_eq!(extract_selection(&app, sel), "aa\nbbb\ncc");
     }
 
@@ -4556,9 +5650,18 @@ mod selection_tests {
     fn extract_reverse_drag_normalized() {
         let mut app = app_with(&["aaa", "bbb", "ccc"]);
         app.log_area = area(3);
-        let forward = Sel { anchor: (2, 0), current: (3, 2) };
-        let reverse = Sel { anchor: (3, 2), current: (2, 0) };
-        assert_eq!(extract_selection(&app, forward), extract_selection(&app, reverse));
+        let forward = Sel {
+            anchor: (2, 0),
+            current: (3, 2),
+        };
+        let reverse = Sel {
+            anchor: (3, 2),
+            current: (2, 0),
+        };
+        assert_eq!(
+            extract_selection(&app, forward),
+            extract_selection(&app, reverse)
+        );
     }
 
     /// Точки за пределами области зажимаются к краям (драг за рамкой и за экраном).
@@ -4566,7 +5669,10 @@ mod selection_tests {
     fn extract_clips_out_of_area_points() {
         let mut app = app_with(&["hello", "world"]);
         app.log_area = Rect::new(1, 1, 10, 2);
-        let sel = Sel { anchor: (0, 0), current: (200, 200) };
+        let sel = Sel {
+            anchor: (0, 0),
+            current: (200, 200),
+        };
         assert_eq!(extract_selection(&app, sel), "hello\nworld");
     }
 
@@ -4575,7 +5681,10 @@ mod selection_tests {
     fn extract_click_without_drag_is_empty() {
         let mut app = app_with(&["строка"]);
         app.log_area = area(1);
-        let sel = Sel { anchor: (3, 0), current: (3, 0) };
+        let sel = Sel {
+            anchor: (3, 0),
+            current: (3, 0),
+        };
         assert_eq!(extract_selection(&app, sel), "");
     }
 
@@ -4589,7 +5698,10 @@ mod selection_tests {
             app.push(vec![Span::raw(format!("l{i}"))]);
         }
         app.log_area = area(3);
-        let sel = Sel { anchor: (1, 0), current: (60, 2) };
+        let sel = Sel {
+            anchor: (1, 0),
+            current: (60, 2),
+        };
         // follow: виден хвост из 3 строк — l7..l9
         assert_eq!(extract_selection(&app, sel), "l7\nl8\nl9");
         // ручной скролл: окно от scroll=4 — l4..l6
@@ -4608,18 +5720,28 @@ mod selection_tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let la = app.log_area;
-        assert!(la.width > 0 && la.height > 0, "log_area заполнена draw: {la:?}");
+        assert!(
+            la.width > 0 && la.height > 0,
+            "log_area заполнена draw: {la:?}"
+        );
         // выделяем вторую видимую строку лога целиком
-        app.sel = Some(Sel { anchor: (la.x, la.y + 1), current: (la.x + la.width - 1, la.y + 1) });
+        app.sel = Some(Sel {
+            anchor: (la.x, la.y + 1),
+            current: (la.x + la.width - 1, la.y + 1),
+        });
         terminal.draw(|f| draw(f, &mut app, None)).unwrap();
         let buf = terminal.backend().buffer();
         let row = la.y + 1;
         let cell = buf.get(la.x, row);
-        assert!(cell.modifier.contains(Modifier::REVERSED),
-            "строка {row} без REVERSED: {cell:?}");
+        assert!(
+            cell.modifier.contains(Modifier::REVERSED),
+            "строка {row} без REVERSED: {cell:?}"
+        );
         let above = buf.get(la.x, row - 1);
-        assert!(!above.modifier.contains(Modifier::REVERSED),
-            "соседняя строка инвертирована: {above:?}");
+        assert!(
+            !above.modifier.contains(Modifier::REVERSED),
+            "соседняя строка инвертирована: {above:?}"
+        );
     }
 }
 
@@ -4654,14 +5776,18 @@ mod clipboard_tests {
         }
         let text = "theseus x11 roundtrip ✓ 42";
         let backend = copy_to_clipboard(text).unwrap();
-        assert!(backend == "python-xlib" || NATIVE_CLIP_BACKENDS.contains(&backend.as_str()),
-            "неожиданный бэкенд: {backend}");
+        assert!(
+            backend == "python-xlib" || NATIVE_CLIP_BACKENDS.contains(&backend.as_str()),
+            "неожиданный бэкенд: {backend}"
+        );
         let reader = std::env::temp_dir().join("theseus_clip_reader_test.py");
         std::fs::write(&reader, PYTHON_CLIP_READER).unwrap();
         let out = Command::new("python3").arg(&reader).output().unwrap();
-        assert!(out.status.success(), "reader: {}", String::from_utf8_lossy(&out.stderr));
+        assert!(
+            out.status.success(),
+            "reader: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
         assert_eq!(String::from_utf8(out.stdout).unwrap(), text);
     }
 }
-
-

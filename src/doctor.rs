@@ -36,14 +36,23 @@ pub fn run(cfg: &Config, workspace: &Path, fix: bool) -> Result<i32> {
         Ok(_) => checks.push(("api_key".into(), Verdict::Ok("задан (env/конфиг)".into()))),
         Err(_) => {
             let names = crate::models::api_key_env_names(&cfg.model).join(" / ");
-            checks.push(("api_key".into(), Verdict::Fail(format!("нет: задайте {names}"))));
+            checks.push((
+                "api_key".into(),
+                Verdict::Fail(format!("нет: задайте {names}")),
+            ));
             fails += 1;
         }
     }
 
     // 2. Доступность API (GET /models — бесплатный запрос)
     match check_api(cfg) {
-        Ok(n) => checks.push(("api".into(), Verdict::Ok(format!("{} доступен, моделей: {n}", cfg.base_url.as_deref().unwrap_or("?"))))),
+        Ok(n) => checks.push((
+            "api".into(),
+            Verdict::Ok(format!(
+                "{} доступен, моделей: {n}",
+                cfg.base_url.as_deref().unwrap_or("?")
+            )),
+        )),
         Err(e) => {
             checks.push(("api".into(), Verdict::Fail(format!("недоступен: {e}"))));
             fails += 1;
@@ -52,10 +61,17 @@ pub fn run(cfg: &Config, workspace: &Path, fix: bool) -> Result<i32> {
 
     // 3. Ядерный sandbox
     let st = sandbox::status();
-    checks.push(("sandbox".into(), match st {
-        sandbox::SandboxStatus::Available => Verdict::Ok("landlock доступен и применяется".into()),
-        sandbox::SandboxStatus::Unavailable => Verdict::Warn("landlock недоступен — bash без ядерной изоляции".into()),
-    }));
+    checks.push((
+        "sandbox".into(),
+        match st {
+            sandbox::SandboxStatus::Available => {
+                Verdict::Ok("landlock доступен и применяется".into())
+            }
+            sandbox::SandboxStatus::Unavailable => {
+                Verdict::Warn("landlock недоступен — bash без ядерной изоляции".into())
+            }
+        },
+    ));
 
     // 4. Workspace
     match check_workspace(workspace, fix) {
@@ -68,62 +84,111 @@ pub fn run(cfg: &Config, workspace: &Path, fix: bool) -> Result<i32> {
 
     // 5. Sandbox-флаг
     if cfg.sandbox {
-        checks.push(("sandbox flag".into(), Verdict::Ok("sandbox=true в конфиге".into())));
+        checks.push((
+            "sandbox flag".into(),
+            Verdict::Ok("sandbox=true в конфиге".into()),
+        ));
     } else {
-        checks.push(("sandbox flag".into(), Verdict::Warn("sandbox=false — ядерная изоляция выключена".into())));
+        checks.push((
+            "sandbox flag".into(),
+            Verdict::Warn("sandbox=false — ядерная изоляция выключена".into()),
+        ));
     }
 
     // 6. Правила разрешений компилируются
     match check_rules(cfg) {
-        Ok(n) => checks.push(("permission rules".into(), Verdict::Ok(format!("deny-паттернов: {n}, все regex валидны")))),
+        Ok(n) => checks.push((
+            "permission rules".into(),
+            Verdict::Ok(format!("deny-паттернов: {n}, все regex валидны")),
+        )),
         Err(e) => {
-            checks.push(("permission rules".into(), Verdict::Fail(format!("битый regex: {e}"))));
+            checks.push((
+                "permission rules".into(),
+                Verdict::Fail(format!("битый regex: {e}")),
+            ));
             fails += 1;
         }
     }
 
     // 7. Web
     if cfg.web_allowed_domains.is_empty() {
-        checks.push(("web".into(), Verdict::Warn("web_allowed_domains пуст — web_fetch/web_search выключены".into())));
+        checks.push((
+            "web".into(),
+            Verdict::Warn("web_allowed_domains пуст — web_fetch/web_search выключены".into()),
+        ));
     } else {
-        checks.push(("web".into(), Verdict::Ok(format!("доменов в allow-list: {}", cfg.web_allowed_domains.len()))));
+        checks.push((
+            "web".into(),
+            Verdict::Ok(format!(
+                "доменов в allow-list: {}",
+                cfg.web_allowed_domains.len()
+            )),
+        ));
     }
 
     // 8. MCP-серверы
     if cfg.mcp_servers.is_empty() {
-        checks.push(("mcp".into(), Verdict::Warn("MCP-серверы не настроены".into())));
+        checks.push((
+            "mcp".into(),
+            Verdict::Warn("MCP-серверы не настроены".into()),
+        ));
     } else {
         let reg = crate::mcp::McpRegistry::connect_all(&cfg.mcp_servers, &mut |_| {});
-        checks.push(("mcp".into(), if reg.is_empty() {
-            Verdict::Fail(format!("{} серверов в конфиге, ни один не поднялся", cfg.mcp_servers.len()))
-        } else {
-            Verdict::Ok(format!("поднято инструментов: {}", reg.tools.len()))
-        }));
+        checks.push((
+            "mcp".into(),
+            if reg.is_empty() {
+                Verdict::Fail(format!(
+                    "{} серверов в конфиге, ни один не поднялся",
+                    cfg.mcp_servers.len()
+                ))
+            } else {
+                Verdict::Ok(format!("поднято инструментов: {}", reg.tools.len()))
+            },
+        ));
     }
 
     // 9. Скиллы
     let skills = crate::skills::discover(&skill_dirs(workspace, cfg));
-    checks.push(("skills".into(), Verdict::Ok(format!("обнаружено: {}", skills.len()))));
+    checks.push((
+        "skills".into(),
+        Verdict::Ok(format!("обнаружено: {}", skills.len())),
+    ));
 
     // 10. Память
     match std::env::var("HOME").ok().map(std::path::PathBuf::from) {
         Some(h) => {
             let mem = crate::memory::Memory::open(&h.join(".theseus"));
-            checks.push(("memory".into(), Verdict::Ok(format!("MEMORY.md, фактов: {}", mem.fact_count()))));
+            checks.push((
+                "memory".into(),
+                Verdict::Ok(format!("MEMORY.md, фактов: {}", mem.fact_count())),
+            ));
         }
-        None => checks.push(("memory".into(), Verdict::Warn("HOME не задан — память недоступна".into()))),
+        None => checks.push((
+            "memory".into(),
+            Verdict::Warn("HOME не задан — память недоступна".into()),
+        )),
     }
 
     // 11. Пороги компактификации
-    if cfg.compact_mask_pct >= cfg.compact_prune_pct || cfg.compact_prune_pct >= cfg.compact_summary_pct {
-        checks.push(("compaction".into(), Verdict::Fail(format!(
-            "пороги не по возрастанию: {}% / {}% / {}%",
-            cfg.compact_mask_pct, cfg.compact_prune_pct, cfg.compact_summary_pct))));
+    if cfg.compact_mask_pct >= cfg.compact_prune_pct
+        || cfg.compact_prune_pct >= cfg.compact_summary_pct
+    {
+        checks.push((
+            "compaction".into(),
+            Verdict::Fail(format!(
+                "пороги не по возрастанию: {}% / {}% / {}%",
+                cfg.compact_mask_pct, cfg.compact_prune_pct, cfg.compact_summary_pct
+            )),
+        ));
         fails += 1;
     } else {
-        checks.push(("compaction".into(), Verdict::Ok(format!(
-            "уровни: {}% маск / {}% прунинг / {}% саммари",
-            cfg.compact_mask_pct, cfg.compact_prune_pct, cfg.compact_summary_pct))));
+        checks.push((
+            "compaction".into(),
+            Verdict::Ok(format!(
+                "уровни: {}% маск / {}% прунинг / {}% саммари",
+                cfg.compact_mask_pct, cfg.compact_prune_pct, cfg.compact_summary_pct
+            )),
+        ));
     }
 
     // Вывод
@@ -145,8 +210,12 @@ fn check_api(cfg: &Config) -> Result<usize> {
     let client = reqwest::blocking::Client::builder()
         .timeout(std::time::Duration::from_secs(30))
         .build()?;
-    let url = format!("{}/models", cfg.base_url.as_deref().unwrap_or("").trim_end_matches('/'));
-    let resp = client.get(&url)
+    let url = format!(
+        "{}/models",
+        cfg.base_url.as_deref().unwrap_or("").trim_end_matches('/')
+    );
+    let resp = client
+        .get(&url)
         .header("Authorization", format!("Bearer {}", cfg.api_key()?))
         .send()?;
     if !resp.status().is_success() {
@@ -181,14 +250,22 @@ fn check_rules(cfg: &Config) -> Result<usize> {
     }
     for r in &cfg.permission_rules {
         if !matches!(r.decision.as_str(), "allow" | "ask" | "deny") {
-            anyhow::bail!("неизвестный decision «{}» в правиле «{}»", r.decision, r.pattern);
+            anyhow::bail!(
+                "неизвестный decision «{}» в правиле «{}»",
+                r.decision,
+                r.pattern
+            );
         }
     }
     Ok(cfg.permission.bash_deny_patterns.len() + cfg.permission_rules.len())
 }
 
 fn skill_dirs(workspace: &Path, cfg: &Config) -> Vec<std::path::PathBuf> {
-    let mut dirs: Vec<std::path::PathBuf> = cfg.skill_dirs.iter().map(std::path::PathBuf::from).collect();
+    let mut dirs: Vec<std::path::PathBuf> = cfg
+        .skill_dirs
+        .iter()
+        .map(std::path::PathBuf::from)
+        .collect();
     dirs.push(workspace.join(".theseus/skills"));
     if let Some(h) = std::env::var("HOME").ok().map(std::path::PathBuf::from) {
         dirs.push(h.join(".theseus/skills"));

@@ -32,18 +32,31 @@ impl McpServer {
             for line in reader.lines() {
                 match line {
                     Ok(l) => {
-                        if tx.send(l).is_err() { break; }
+                        if tx.send(l).is_err() {
+                            break;
+                        }
                     }
                     Err(_) => break,
                 }
             }
         });
-        let mut s = McpServer { name: name.into(), child, stdin, rx, next_id: 0 };
+        let mut s = McpServer {
+            name: name.into(),
+            child,
+            stdin,
+            rx,
+            next_id: 0,
+        };
         s.initialize()?;
         Ok(s)
     }
 
-    fn call_rpc(&mut self, method: &str, params: serde_json::Value, timeout: Duration) -> Result<serde_json::Value> {
+    fn call_rpc(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value> {
         self.next_id += 1;
         let id = self.next_id;
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -52,7 +65,9 @@ impl McpServer {
         let deadline = std::time::Instant::now() + timeout;
         loop {
             let left = deadline.saturating_duration_since(std::time::Instant::now());
-            if left.is_zero() { return Err(anyhow!("таймаут {method}")); }
+            if left.is_zero() {
+                return Err(anyhow!("таймаут {method}"));
+            }
             match self.rx.recv_timeout(left) {
                 Ok(line) => {
                     let v: serde_json::Value = serde_json::from_str(&line)
@@ -77,11 +92,15 @@ impl McpServer {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        self.call_rpc("initialize", json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "theseus", "version": "0.2.0"}
-        }), Duration::from_secs(10))?;
+        self.call_rpc(
+            "initialize",
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "theseus", "version": "0.2.0"}
+            }),
+            Duration::from_secs(10),
+        )?;
         self.notify("notifications/initialized")?;
         Ok(())
     }
@@ -98,13 +117,18 @@ impl McpServer {
     }
 
     pub fn call_tool(&mut self, tool: &str, args: serde_json::Value) -> Result<String> {
-        let res = self.call_rpc("tools/call", json!({"name": tool, "arguments": args}),
-                                Duration::from_secs(60))?;
+        let res = self.call_rpc(
+            "tools/call",
+            json!({"name": tool, "arguments": args}),
+            Duration::from_secs(60),
+        )?;
         let mut texts = vec![];
         if let Some(content) = res["content"].as_array() {
             for c in content {
                 if c["type"].as_str() == Some("text") {
-                    if let Some(t) = c["text"].as_str() { texts.push(t.to_string()); }
+                    if let Some(t) = c["text"].as_str() {
+                        texts.push(t.to_string());
+                    }
                 }
             }
         }
@@ -133,7 +157,12 @@ pub struct McpHttp {
 }
 
 impl McpHttp {
-    pub fn connect(name: &str, url: &str, auth: Option<String>, elicit: Option<String>) -> Result<Self> {
+    pub fn connect(
+        name: &str,
+        url: &str,
+        auth: Option<String>,
+        elicit: Option<String>,
+    ) -> Result<Self> {
         let http = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(70))
             .user_agent("theseus/0.3.1")
@@ -171,7 +200,12 @@ impl McpHttp {
         Ok(())
     }
 
-    fn call_rpc(&mut self, method: &str, params: serde_json::Value, _t: Duration) -> Result<serde_json::Value> {
+    fn call_rpc(
+        &mut self,
+        method: &str,
+        params: serde_json::Value,
+        _t: Duration,
+    ) -> Result<serde_json::Value> {
         self.next_id += 1;
         let id = self.next_id;
         let req = json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params});
@@ -204,11 +238,15 @@ impl McpHttp {
     }
 
     fn initialize(&mut self) -> Result<()> {
-        self.call_rpc("initialize", json!({
-            "protocolVersion": "2024-11-05",
-            "capabilities": {},
-            "clientInfo": {"name": "theseus", "version": "0.3.1"}
-        }), Duration::from_secs(15))?;
+        self.call_rpc(
+            "initialize",
+            json!({
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "theseus", "version": "0.3.1"}
+            }),
+            Duration::from_secs(15),
+        )?;
         // notifications/initialized — без ожидания ответа
         let _ = self.post(&json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
         Ok(())
@@ -226,13 +264,18 @@ impl McpHttp {
     }
 
     pub fn call_tool(&mut self, tool: &str, args: serde_json::Value) -> Result<String> {
-        let res = self.call_rpc("tools/call", json!({"name": tool, "arguments": args}),
-                                Duration::from_secs(60))?;
+        let res = self.call_rpc(
+            "tools/call",
+            json!({"name": tool, "arguments": args}),
+            Duration::from_secs(60),
+        )?;
         let mut texts = vec![];
         if let Some(content) = res["content"].as_array() {
             for c in content {
                 if c["type"].as_str() == Some("text") {
-                    if let Some(t) = c["text"].as_str() { texts.push(t.to_string()); }
+                    if let Some(t) = c["text"].as_str() {
+                        texts.push(t.to_string());
+                    }
                 }
             }
         }
@@ -258,7 +301,10 @@ pub struct McpRegistry {
 
 impl McpRegistry {
     pub fn connect_all(cfgs: &[crate::config::McpServerConfig], log: &mut dyn FnMut(&str)) -> Self {
-        let mut reg = McpRegistry { servers: vec![], tools: vec![] };
+        let mut reg = McpRegistry {
+            servers: vec![],
+            tools: vec![],
+        };
         for c in cfgs {
             // v0.3.1: HTTP-транспорт при наличии url, иначе stdio
             if let Some(url) = &c.url {
@@ -266,9 +312,18 @@ impl McpRegistry {
                 match McpHttp::connect(&c.name, url, auth, c.elicit.clone()) {
                     Ok(mut srv) => match srv.list_tools() {
                         Ok(tools) => {
-                            log(&format!("MCP {} (http): подключён, инструментов: {}", c.name, tools.len()));
+                            log(&format!(
+                                "MCP {} (http): подключён, инструментов: {}",
+                                c.name,
+                                tools.len()
+                            ));
                             for (tname, schema) in tools {
-                                reg.tools.push((format!("mcp__{}__{}", c.name, tname), c.name.clone(), tname, schema));
+                                reg.tools.push((
+                                    format!("mcp__{}__{}", c.name, tname),
+                                    c.name.clone(),
+                                    tname,
+                                    schema,
+                                ));
                             }
                             reg.servers.push(ServerKind::Http(srv));
                         }
@@ -285,9 +340,18 @@ impl McpRegistry {
             match McpServer::spawn(&c.name, &c.command, &c.args) {
                 Ok(mut srv) => match srv.list_tools() {
                     Ok(tools) => {
-                        log(&format!("MCP {}: подключён, инструментов: {}", c.name, tools.len()));
+                        log(&format!(
+                            "MCP {}: подключён, инструментов: {}",
+                            c.name,
+                            tools.len()
+                        ));
                         for (tname, schema) in tools {
-                            reg.tools.push((format!("mcp__{}__{}", c.name, tname), c.name.clone(), tname, schema));
+                            reg.tools.push((
+                                format!("mcp__{}__{}", c.name, tname),
+                                c.name.clone(),
+                                tname,
+                                schema,
+                            ));
                         }
                         reg.servers.push(ServerKind::Stdio(srv));
                     }
@@ -299,7 +363,9 @@ impl McpRegistry {
         reg
     }
 
-    pub fn is_empty(&self) -> bool { self.tools.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.tools.is_empty()
+    }
 
     pub fn call(&mut self, server: &str, tool: &str, args: serde_json::Value) -> Result<String> {
         for s in &mut self.servers {

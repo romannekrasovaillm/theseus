@@ -167,7 +167,11 @@ impl DedupPlanner {
     /// Добавить сообщение с индексом `idx`: вычисляет simhash текста и
     /// запоминает его размер в байтах.
     pub fn add(&mut self, idx: usize, text: &str) {
-        self.sigs.push(MsgSig { id: idx, hash: simhash64(text), bytes: text.len() });
+        self.sigs.push(MsgSig {
+            id: idx,
+            hash: simhash64(text),
+            bytes: text.len(),
+        });
     }
 
     /// Число накопленных сигнатур.
@@ -212,7 +216,9 @@ impl DedupPlanner {
             if members.len() < 2 {
                 continue;
             }
-            let Some(&keep) = members.iter().max_by_key(|&&m| (self.sigs[m].bytes, self.sigs[m].id))
+            let Some(&keep) = members
+                .iter()
+                .max_by_key(|&&m| (self.sigs[m].bytes, self.sigs[m].id))
             else {
                 continue;
             };
@@ -253,7 +259,11 @@ impl DedupPlanner {
                 continue;
             }
             let dist = 64 - sim;
-            let prefix = if kind == MsgKind::ToolResult { "дубликат tool_result" } else { "дубликат" };
+            let prefix = if kind == MsgKind::ToolResult {
+                "дубликат tool_result"
+            } else {
+                "дубликат"
+            };
             let reason =
                 format!("{prefix} #{keep_idx}: hamming {dist} ≤ {DEFAULT_HAMMING_THRESHOLD}, схожесть {sim}/64 бит");
             if kind == MsgKind::ToolResult {
@@ -266,16 +276,24 @@ impl DedupPlanner {
         other_drops.sort_by_key(|(i, _)| *i);
         let mut drop_with_reason = tool_drops;
         drop_with_reason.append(&mut other_drops);
-        let keep = (0..n).filter(|i| !drop_with_reason.iter().any(|(d, _)| d == i)).collect();
-        DedupPlan { keep, drop_with_reason }
+        let keep = (0..n)
+            .filter(|i| !drop_with_reason.iter().any(|(d, _)| d == i))
+            .collect();
+        DedupPlan {
+            keep,
+            drop_with_reason,
+        }
     }
 }
 
 /// Грубая оценка экономии в байтах: сумма размеров выбрасываемых сообщений.
 /// `sizes[i]` — размер i-го сообщения истории; индекс вне диапазона даёт 0.
-/// Заглушки-замены («[dedup] …») не вычитаются — это оценка сверху.
+/// Заглушки-замены («`[dedup]` …») не вычитаются — это оценка сверху.
 pub fn estimate_savings(plan: &DedupPlan, sizes: &[usize]) -> usize {
-    plan.drop_with_reason.iter().map(|(i, _)| sizes.get(*i).copied().unwrap_or(0)).sum()
+    plan.drop_with_reason
+        .iter()
+        .map(|(i, _)| sizes.get(*i).copied().unwrap_or(0))
+        .sum()
 }
 
 /// Нормализация текста: нижний регистр, только буквы/цифры и одиночные
@@ -413,7 +431,10 @@ mod tests {
         // пунктуация срезается нормализацией → полное совпадение
         assert_eq!(hamming(simhash64("ok"), simhash64("ok!")), 0);
         // короткие, но разные по смыслу строки должны различаться заметно
-        let d = hamming(simhash64("да, конечно сделаю"), simhash64("нет, никогда не буду"));
+        let d = hamming(
+            simhash64("да, конечно сделаю"),
+            simhash64("нет, никогда не буду"),
+        );
         assert!(d > 10, "короткие разные тексты: {d}");
     }
 
@@ -500,7 +521,11 @@ mod tests {
         p.add(1, SERVER_TEXT_EDIT); // близкий, но не идентичный
         p.add(2, SERVER_TEXT);
         let rows = p.duplicates(0);
-        assert_eq!(rows.len(), 1, "при пороге 0 клеятся только точные совпадения");
+        assert_eq!(
+            rows.len(),
+            1,
+            "при пороге 0 клеятся только точные совпадения"
+        );
         assert_eq!(rows[0], (2, 0, 64));
     }
 
@@ -509,7 +534,10 @@ mod tests {
         let msgs = [
             (MsgKind::System, SERVER_TEXT),
             (MsgKind::User, SERVER_TEXT), // точный дубль системного
-            (MsgKind::User, "первый вопрос пользователя про настройку сети"),
+            (
+                MsgKind::User,
+                "первый вопрос пользователя про настройку сети",
+            ),
             (MsgKind::Assistant, "ответ ассистента с пояснениями"),
             (MsgKind::User, "уточняющий вопрос"),
             (MsgKind::Assistant, "финальный ответ"),
@@ -544,8 +572,8 @@ mod tests {
         let msgs = [
             (MsgKind::ToolResult, SERVER_TEXT), // 0: дубль #1 (tool)
             (MsgKind::User, SERVER_TEXT),       // 1: выживает (свежее, та же длина)
-            (MsgKind::User, JAZZ_TEXT),       // 2: дубль #3 (user)
-            (MsgKind::ToolResult, JAZZ_TEXT), // 3: выживает (свежее)
+            (MsgKind::User, JAZZ_TEXT),         // 2: дубль #3 (user)
+            (MsgKind::ToolResult, JAZZ_TEXT),   // 3: выживает (свежее)
             (MsgKind::User, "хвост один"),
             (MsgKind::Assistant, "хвост два"),
             (MsgKind::User, "хвост три"),
@@ -568,8 +596,11 @@ mod tests {
         assert!(empty.keep.is_empty());
         assert_eq!(empty.dropped_len(), 0);
         // вся история короче защищённого хвоста → даже точные дубли не трогаем
-        let msgs =
-            [(MsgKind::User, SERVER_TEXT), (MsgKind::User, SERVER_TEXT), (MsgKind::Assistant, "ответ")];
+        let msgs = [
+            (MsgKind::User, SERVER_TEXT),
+            (MsgKind::User, SERVER_TEXT),
+            (MsgKind::Assistant, "ответ"),
+        ];
         let plan = p.plan(&msgs);
         assert_eq!(plan.dropped_len(), 0);
         assert_eq!(plan.keep.len(), 3);
@@ -586,8 +617,10 @@ mod tests {
         // пустой план → нулевая экономия
         assert_eq!(estimate_savings(&DedupPlan::default(), &sizes), 0);
         // индекс вне диапазона sizes — ноль, а не паника
-        let out_of_range =
-            DedupPlan { keep: BTreeSet::new(), drop_with_reason: vec![(9, "x".to_string())] };
+        let out_of_range = DedupPlan {
+            keep: BTreeSet::new(),
+            drop_with_reason: vec![(9, "x".to_string())],
+        };
         assert_eq!(estimate_savings(&out_of_range, &sizes), 0);
     }
 }

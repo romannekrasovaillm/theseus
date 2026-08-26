@@ -308,7 +308,11 @@ impl<'a> Tokenizer<'a> {
     }
 
     /// Тело `'`...`'`: всё литерально до ближайшей закрывающей кавычки.
-    fn read_single_quoted(&mut self, quote_pos: usize, out: &mut String) -> Result<(), EscapeError> {
+    fn read_single_quoted(
+        &mut self,
+        quote_pos: usize,
+        out: &mut String,
+    ) -> Result<(), EscapeError> {
         while let Some(ch) = self.bump() {
             if ch == '\'' {
                 return Ok(());
@@ -323,7 +327,11 @@ impl<'a> Tokenizer<'a> {
 
     /// Тело `"`...`"`: `\` экранирует только `"`, `\`, `$`, `` ` `` и
     /// перевод строки; остальные `\x` сохраняются как есть.
-    fn read_double_quoted(&mut self, quote_pos: usize, out: &mut String) -> Result<(), EscapeError> {
+    fn read_double_quoted(
+        &mut self,
+        quote_pos: usize,
+        out: &mut String,
+    ) -> Result<(), EscapeError> {
         while let Some(ch) = self.bump() {
             match ch {
                 '"' => return Ok(()),
@@ -497,7 +505,16 @@ mod tests {
         // Точность безопасного набора: ни один «тихий» символ не должен
         // заставлять брать слово в кавычки.
         for safe in [
-            "abc", "A_B-9", "a/b/c.txt", "user@host", "a=b", "a:b,c+d%e", "-x", "/", ".", "..",
+            "abc",
+            "A_B-9",
+            "a/b/c.txt",
+            "user@host",
+            "a=b",
+            "a:b,c+d%e",
+            "-x",
+            "/",
+            ".",
+            "..",
             "x86_64",
         ] {
             assert!(!needs_quoting(safe), "должно оставаться голым: {safe:?}");
@@ -507,10 +524,34 @@ mod tests {
     #[test]
     fn needs_quoting_metachars_and_unicode_require_quotes() {
         for unsafe_ in [
-            "", "a b", "a'b", "a\"b", "$x", "`x`", "a;b", "a&b", "a|b", "a<b", "a>b", "a(b",
-            "a)b", "a*b", "a?b", "a#b", "a!b", "a~b", "a\nb", "a\tb", "a\\b", "юникод", "a🚀b",
+            "",
+            "a b",
+            "a'b",
+            "a\"b",
+            "$x",
+            "`x`",
+            "a;b",
+            "a&b",
+            "a|b",
+            "a<b",
+            "a>b",
+            "a(b",
+            "a)b",
+            "a*b",
+            "a?b",
+            "a#b",
+            "a!b",
+            "a~b",
+            "a\nb",
+            "a\tb",
+            "a\\b",
+            "юникод",
+            "a🚀b",
         ] {
-            assert!(needs_quoting(unsafe_), "должно требовать кавычек: {unsafe_:?}");
+            assert!(
+                needs_quoting(unsafe_),
+                "должно требовать кавычек: {unsafe_:?}"
+            );
         }
     }
 
@@ -615,9 +656,15 @@ mod tests {
 
     #[test]
     fn split_quoted_double_quotes_and_escapes() {
-        assert_eq!(split_quoted("say \"it's fine\"").unwrap(), ["say", "it's fine"]);
+        assert_eq!(
+            split_quoted("say \"it's fine\"").unwrap(),
+            ["say", "it's fine"]
+        );
         // Внутри двойных кавычек слэш экранирует ", \, $ и `.
-        assert_eq!(split_quoted("\"a\\\"b\\\\c\\$d\\`e\"").unwrap(), ["a\"b\\c$d`e"]);
+        assert_eq!(
+            split_quoted("\"a\\\"b\\\\c\\$d\\`e\"").unwrap(),
+            ["a\"b\\c$d`e"]
+        );
         // Прочий слэш в двойных кавычках остаётся литеральным.
         assert_eq!(split_quoted("\"a\\nb\"").unwrap(), ["a\\nb"]);
     }
@@ -643,7 +690,13 @@ mod tests {
     fn split_quoted_unterminated_quotes_report_position() {
         // Позиция — байтовое смещение ОТКРЫВАЮЩЕЙ кавычки.
         let err = split_quoted("echo 'abc").unwrap_err();
-        assert_eq!(err, EscapeError::UnterminatedQuote { quote: '\'', pos: 5 });
+        assert_eq!(
+            err,
+            EscapeError::UnterminatedQuote {
+                quote: '\'',
+                pos: 5
+            }
+        );
         let err = split_quoted("x \"ab").unwrap_err();
         assert_eq!(err, EscapeError::UnterminatedQuote { quote: '"', pos: 2 });
         // Слэш в конце внутри двойных кавычек — та же незакрытая кавычка.
@@ -673,15 +726,24 @@ mod tests {
 
     #[test]
     fn unquote_rejects_trailing_words_with_position() {
-        assert_eq!(unquote("a b").unwrap_err(), EscapeError::TrailingInput { pos: 2 });
-        assert_eq!(unquote("'a'  'b'").unwrap_err(), EscapeError::TrailingInput { pos: 5 });
+        assert_eq!(
+            unquote("a b").unwrap_err(),
+            EscapeError::TrailingInput { pos: 2 }
+        );
+        assert_eq!(
+            unquote("'a'  'b'").unwrap_err(),
+            EscapeError::TrailingInput { pos: 5 }
+        );
     }
 
     #[test]
     fn unquote_propagates_unterminated_quote() {
         assert_eq!(
             unquote("'abc").unwrap_err(),
-            EscapeError::UnterminatedQuote { quote: '\'', pos: 0 }
+            EscapeError::UnterminatedQuote {
+                quote: '\'',
+                pos: 0
+            }
         );
     }
 
@@ -689,7 +751,10 @@ mod tests {
 
     #[test]
     fn escape_error_display_is_russian_and_error_impl() {
-        let e = EscapeError::UnterminatedQuote { quote: '\'', pos: 5 };
+        let e = EscapeError::UnterminatedQuote {
+            quote: '\'',
+            pos: 5,
+        };
         let text = e.to_string();
         assert!(text.contains("незакрытая кавычка"), "текст: {text}");
         assert!(text.contains('5'), "текст: {text}");
@@ -728,14 +793,26 @@ mod tests {
     #[test]
     fn extract_assignments_basic_prefix() {
         let (pairs, rest) = extract_assignments("A=1 B=two echo hi");
-        assert_eq!(pairs, [("A".to_string(), "1".to_string()), ("B".to_string(), "two".to_string())]);
+        assert_eq!(
+            pairs,
+            [
+                ("A".to_string(), "1".to_string()),
+                ("B".to_string(), "two".to_string())
+            ]
+        );
         assert_eq!(rest, "echo hi");
     }
 
     #[test]
     fn extract_assignments_decodes_quoted_values() {
         let (pairs, rest) = extract_assignments("A='x y' B=\"$v\" run");
-        assert_eq!(pairs, [("A".to_string(), "x y".to_string()), ("B".to_string(), "$v".to_string())]);
+        assert_eq!(
+            pairs,
+            [
+                ("A".to_string(), "x y".to_string()),
+                ("B".to_string(), "$v".to_string())
+            ]
+        );
         assert_eq!(rest, "run");
     }
 
@@ -775,7 +852,13 @@ mod tests {
     #[test]
     fn extract_assignments_empty_and_equals_values() {
         let (pairs, rest) = extract_assignments("A= B==x c");
-        assert_eq!(pairs, [("A".to_string(), String::new()), ("B".to_string(), "=x".to_string())]);
+        assert_eq!(
+            pairs,
+            [
+                ("A".to_string(), String::new()),
+                ("B".to_string(), "=x".to_string())
+            ]
+        );
         assert_eq!(rest, "c");
     }
 

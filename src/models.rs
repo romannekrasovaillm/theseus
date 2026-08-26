@@ -280,7 +280,10 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             32_768,
             true,
             true,
-            Some(CostHint { input_usd_per_mtok: 0.60, output_usd_per_mtok: 1.80 }),
+            Some(CostHint {
+                input_usd_per_mtok: 0.60,
+                output_usd_per_mtok: 1.80,
+            }),
         ),
         model(
             "deepseek-v4-flash",
@@ -300,7 +303,10 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             8_192,
             false,
             true,
-            Some(CostHint { input_usd_per_mtok: 0.28, output_usd_per_mtok: 0.42 }),
+            Some(CostHint {
+                input_usd_per_mtok: 0.28,
+                output_usd_per_mtok: 0.42,
+            }),
         ),
         model(
             "deepseek-reasoner",
@@ -309,7 +315,10 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             65_536,
             true,
             true,
-            Some(CostHint { input_usd_per_mtok: 0.55, output_usd_per_mtok: 2.19 }),
+            Some(CostHint {
+                input_usd_per_mtok: 0.55,
+                output_usd_per_mtok: 2.19,
+            }),
         ),
         // --- Kimi (api.kimi.com/coding — официальная coding-поверхность) ---
         model(
@@ -319,7 +328,10 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             16_384,
             false,
             true,
-            Some(CostHint { input_usd_per_mtok: 0.60, output_usd_per_mtok: 2.50 }),
+            Some(CostHint {
+                input_usd_per_mtok: 0.60,
+                output_usd_per_mtok: 2.50,
+            }),
         ),
         model(
             "kimi-k3",
@@ -328,30 +340,19 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             32_768,
             true,
             true,
-            Some(CostHint { input_usd_per_mtok: 1.20, output_usd_per_mtok: 6.00 }),
+            Some(CostHint {
+                input_usd_per_mtok: 1.20,
+                output_usd_per_mtok: 6.00,
+            }),
         ),
         // канонические id по докам Kimi Code (08.08): k3 и k3-256k;
         // K3 принимает только temperature=1 (400 «only 1 is allowed»)
         model(
-            "k3",
-            kimi,
-            262_144,
-            32_768,
-            true,
-            true,
+            "k3", kimi, 262_144, 32_768, true, true,
             None, // подписка Kimi Code (Moderato+), не помегабайтная цена
         )
         .with_temperature(1.0),
-        model(
-            "k3-256k",
-            kimi,
-            262_144,
-            32_768,
-            true,
-            true,
-            None,
-        )
-        .with_temperature(1.0),
+        model("k3-256k", kimi, 262_144, 32_768, true, true, None).with_temperature(1.0),
         // --- Moonshot (api.moonshot.ai, DPI-риск) ---
         model(
             "moonshot-v1-8k",
@@ -360,7 +361,10 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             4_096,
             false,
             true,
-            Some(CostHint { input_usd_per_mtok: 1.70, output_usd_per_mtok: 1.70 }),
+            Some(CostHint {
+                input_usd_per_mtok: 1.70,
+                output_usd_per_mtok: 1.70,
+            }),
         ),
         model(
             "moonshot-v1-32k",
@@ -369,7 +373,10 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             8_192,
             false,
             true,
-            Some(CostHint { input_usd_per_mtok: 3.40, output_usd_per_mtok: 3.40 }),
+            Some(CostHint {
+                input_usd_per_mtok: 3.40,
+                output_usd_per_mtok: 3.40,
+            }),
         ),
         model(
             "moonshot-v1-128k",
@@ -378,31 +385,21 @@ pub fn builtin_models() -> Vec<ModelInfo> {
             8_192,
             false,
             true,
-            Some(CostHint { input_usd_per_mtok: 8.40, output_usd_per_mtok: 8.40 }),
+            Some(CostHint {
+                input_usd_per_mtok: 8.40,
+                output_usd_per_mtok: 8.40,
+            }),
         ),
         // --- Zhipu (api.z.ai, GLM) ---
         model(
-            "glm-5.2",
-            "zhipu",
-            131_072,
-            32_768,
-            true,
-            true,
+            "glm-5.2", "zhipu", 131_072, 32_768, true, true,
             // ценовая подсказка уточняется — смотрите тарифы z.ai
             None,
         ),
         // GLM-5.3: контекст 1M; thinking НЕ отключается (HTTP 1210 на
         // thinking.type=disabled) — вместо off слать reasoning_effort low,
         // допустимы low|high|max (см. apply_effort)
-        model(
-            "glm-5.3",
-            "zhipu",
-            1_000_000,
-            32_768,
-            true,
-            true,
-            None,
-        ),
+        model("glm-5.3", "zhipu", 1_000_000, 32_768, true, true, None),
         // --- OpenRouter (openrouter.ai, агрегатор) ---
         // stealth-модель: ризонинг скрытый; thinking включаем нативным
         // для OpenRouter параметром reasoning.effort (см. apply_effort)
@@ -503,7 +500,9 @@ pub fn reasoning_label(model_id: &str, effort: &str) -> &'static str {
 ///   округляет до high), Zhipu GLM-5.2 — только max (в оф. примерах лишь он),
 ///   Zhipu GLM-5.3 — high|max (полный диапазон low|high|max).
 pub fn apply_effort(model_id: &str, base: serde_json::Value, effort: &str) -> serde_json::Value {
-    let Some(m) = find_model(model_id) else { return base };
+    let Some(m) = find_model(model_id) else {
+        return base;
+    };
     let mut obj = base.as_object().cloned().unwrap_or_default();
     if m.provider == "kimi" || !m.supports_thinking {
         obj.remove("thinking");
@@ -541,7 +540,9 @@ pub fn apply_effort(model_id: &str, base: serde_json::Value, effort: &str) -> se
         }
         e => {
             obj.insert("thinking".into(), serde_json::json!({"type": "enabled"}));
-            if m.provider == "deepseek" || (m.provider == "zhipu" && (e == "max" || m.id == "glm-5.3")) {
+            if m.provider == "deepseek"
+                || (m.provider == "zhipu" && (e == "max" || m.id == "glm-5.3"))
+            {
                 obj.insert("reasoning_effort".into(), serde_json::json!(e));
             } else {
                 obj.remove("reasoning_effort");
@@ -615,7 +616,10 @@ pub fn api_key_env_names(model_id: &str) -> Vec<String> {
 /// конфига (явный `api_key` в конфиге всегда приоритетнее).
 pub fn api_key_from_env(model_id: &str) -> Option<String> {
     let from_env = |name: &str| {
-        env::var(name).ok().map(|v| v.trim().to_string()).filter(|v| !v.is_empty())
+        env::var(name)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
     };
     let provider = find_model(model_id).and_then(|m| find_provider(&m.provider));
     if let Some(p) = &provider {
@@ -633,7 +637,9 @@ pub fn api_key_from_env(model_id: &str) -> Option<String> {
             }
         }
     }
-    ["DEEPSEEK_API_KEY", "THESEUS_API_KEY"].into_iter().find_map(from_env)
+    ["DEEPSEEK_API_KEY", "THESEUS_API_KEY"]
+        .into_iter()
+        .find_map(from_env)
 }
 
 /// Подсказка про запасной файл ключа для текстов ошибок
@@ -653,7 +659,8 @@ fn read_key_file(path: &str) -> Option<String> {
         Some(rest) => format!("{}/{rest}", env::var("HOME").ok()?),
         None => path.to_string(),
     };
-    std::fs::read_to_string(expanded).ok()
+    std::fs::read_to_string(expanded)
+        .ok()
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty())
 }
@@ -674,12 +681,20 @@ fn registry_provider(model: &ModelInfo) -> Result<ProviderInfo> {
 /// (`env_key_aliases` — GLM_API_KEY/ZAI_API_KEY для zhipu и т.п.), затем
 /// запасной файл ключа (`key_file`, напр. ~/.kimi_api_key); в тексте
 /// ошибки — все принятые имена и подсказка про окружение процесса.
-fn resolve_parts(model: &ModelInfo, provider: &ProviderInfo, api_key_env: &str) -> Result<Credentials> {
+fn resolve_parts(
+    model: &ModelInfo,
+    provider: &ProviderInfo,
+    api_key_env: &str,
+) -> Result<Credentials> {
     let mut tried = vec![api_key_env.to_string()];
     let mut raw = env::var(api_key_env).ok();
     for alias in &provider.env_key_aliases {
-        if raw.is_some() { break; }
-        if alias == api_key_env { continue; }
+        if raw.is_some() {
+            break;
+        }
+        if alias == api_key_env {
+            continue;
+        }
         tried.push(alias.clone());
         raw = env::var(alias).ok();
     }
@@ -692,14 +707,21 @@ fn resolve_parts(model: &ModelInfo, provider: &ProviderInfo, api_key_env: &str) 
             raw = read_key_file(f);
         }
     }
-    let raw = raw.with_context(|| format!(
-        "нет API-ключа: задайте env-переменную {}{}. Если переменная выставлена \
+    let raw = raw.with_context(|| {
+        format!(
+            "нет API-ключа: задайте env-переменную {}{}. Если переменная выставлена \
          ПОСЛЕ запуска Тесея — перезапустите его: окружение захватывается при \
          старте процесса и позже не пополняется",
-        tried.join(" или "), file_note))?;
+            tried.join(" или "),
+            file_note
+        )
+    })?;
     let key = raw.trim();
-    ensure!(!key.is_empty(), "env-переменная {} задана, но пустая",
-        tried.last().map(String::as_str).unwrap_or(api_key_env));
+    ensure!(
+        !key.is_empty(),
+        "env-переменная {} задана, но пустая",
+        tried.last().map(String::as_str).unwrap_or(api_key_env)
+    );
     Ok(Credentials {
         url: provider.effective_base_url(),
         key: key.to_string(),
@@ -856,8 +878,10 @@ mod tests {
     /// затем вернуть прежние значения. Держит глобальную блокировку.
     fn with_env_vars<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
         let _guard = ENV_LOCK.lock().unwrap();
-        let saved: Vec<(&str, Option<String>)> =
-            vars.iter().map(|(name, _)| (*name, env::var(name).ok())).collect();
+        let saved: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(name, _)| (*name, env::var(name).ok()))
+            .collect();
         for &(name, value) in vars {
             match value {
                 Some(v) => env::set_var(name, v),
@@ -876,7 +900,10 @@ mod tests {
 
     /// f64 сравниваем через эпсилон (clippy::float_cmp).
     fn assert_near(got: f64, want: f64) {
-        assert!((got - want).abs() < 1e-9, "ожидалось {want}, получено {got}");
+        assert!(
+            (got - want).abs() < 1e-9,
+            "ожидалось {want}, получено {got}"
+        );
     }
 
     #[test]
@@ -895,14 +922,24 @@ mod tests {
     fn registry_is_internally_consistent() {
         let providers = builtin_providers();
         let names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
-        for expected in ["deepseek", "kimi", "moonshot", "zhipu", "openrouter", "openai-compatible"] {
+        for expected in [
+            "deepseek",
+            "kimi",
+            "moonshot",
+            "zhipu",
+            "openrouter",
+            "openai-compatible",
+        ] {
             assert!(names.contains(&expected), "нет провайдера {expected}");
         }
         for p in &providers {
             assert!(p.base_url.starts_with("http"), "{}: base_url", p.name);
             // версия API в хвосте пути: /v1 у большинства, /v4 у zhipu (z.ai)
-            assert!(p.base_url.ends_with("/v1") || p.base_url.ends_with("/v4"),
-                "{}: base_url без версии API в хвосте", p.name);
+            assert!(
+                p.base_url.ends_with("/v1") || p.base_url.ends_with("/v4"),
+                "{}: base_url без версии API в хвосте",
+                p.name
+            );
             assert!(p.requires_key(), "{}: ожидался env_key", p.name);
         }
         let models = builtin_models();
@@ -942,7 +979,10 @@ mod tests {
         let or = find_provider("openrouter").unwrap();
         assert_eq!(or.proxy.as_deref(), Some("http://127.0.0.1:12080"));
         for name in ["deepseek", "kimi", "moonshot", "zhipu", "openai-compatible"] {
-            assert!(find_provider(name).unwrap().proxy.is_none(), "{name}: прокси не ожидался");
+            assert!(
+                find_provider(name).unwrap().proxy.is_none(),
+                "{name}: прокси не ожидался"
+            );
         }
     }
 
@@ -1014,13 +1054,18 @@ mod tests {
         assert_eq!(serde_json::to_string(&WireApi::Chat).unwrap(), "\"chat\"");
         let parsed: WireApi = serde_json::from_str("\"responses\"").unwrap();
         assert_eq!(parsed, WireApi::Responses);
-        assert!(builtin_providers().iter().all(|p| p.wire_api == WireApi::Chat));
+        assert!(builtin_providers()
+            .iter()
+            .all(|p| p.wire_api == WireApi::Chat));
     }
 
     #[test]
     fn resolve_ok_reads_key_from_env() {
         with_env_vars(
-            &[("THESEUS_TEST_MODELS_KEY", Some("  sk-test-123  ")), ("DEEPSEEK_BASE_URL", None)],
+            &[
+                ("THESEUS_TEST_MODELS_KEY", Some("  sk-test-123  ")),
+                ("DEEPSEEK_BASE_URL", None),
+            ],
             || {
                 let creds = resolve_with_env("deepseek-chat", "THESEUS_TEST_MODELS_KEY").unwrap();
                 assert_eq!(creds.url, "https://api.deepseek.com/v1");
@@ -1033,8 +1078,7 @@ mod tests {
     #[test]
     fn resolve_errors_when_env_missing() {
         with_env_vars(&[("THESEUS_TEST_MODELS_MISSING", None)], || {
-            let err =
-                resolve_with_env("deepseek-chat", "THESEUS_TEST_MODELS_MISSING").unwrap_err();
+            let err = resolve_with_env("deepseek-chat", "THESEUS_TEST_MODELS_MISSING").unwrap_err();
             let msg = format!("{err:#}");
             assert!(msg.contains("THESEUS_TEST_MODELS_MISSING"), "msg: {msg}");
         });
@@ -1053,7 +1097,11 @@ mod tests {
     #[test]
     fn resolve_falls_back_to_env_key_aliases() {
         with_env_vars(
-            &[("ZHIPU_API_KEY", None), ("GLM_API_KEY", Some(" glm-key ")), ("ZAI_API_KEY", None)],
+            &[
+                ("ZHIPU_API_KEY", None),
+                ("GLM_API_KEY", Some(" glm-key ")),
+                ("ZAI_API_KEY", None),
+            ],
             || {
                 let creds = resolve("glm-5.2").unwrap();
                 assert_eq!(creds.key, "glm-key"); // пробелы обрезаны
@@ -1062,7 +1110,10 @@ mod tests {
         );
         // основное имя сильнее алиаса
         with_env_vars(
-            &[("ZHIPU_API_KEY", Some("main-key")), ("GLM_API_KEY", Some("alias-key"))],
+            &[
+                ("ZHIPU_API_KEY", Some("main-key")),
+                ("GLM_API_KEY", Some("alias-key")),
+            ],
             || {
                 let creds = resolve("glm-5.2").unwrap();
                 assert_eq!(creds.key, "main-key");
@@ -1075,14 +1126,21 @@ mod tests {
     #[test]
     fn resolve_error_lists_all_key_names_and_restart_hint() {
         with_env_vars(
-            &[("ZHIPU_API_KEY", None), ("GLM_API_KEY", None), ("ZAI_API_KEY", None)],
+            &[
+                ("ZHIPU_API_KEY", None),
+                ("GLM_API_KEY", None),
+                ("ZAI_API_KEY", None),
+            ],
             || {
                 let err = resolve("glm-5.2").unwrap_err();
                 let msg = format!("{err:#}");
                 assert!(msg.contains("ZHIPU_API_KEY"), "msg: {msg}");
                 assert!(msg.contains("GLM_API_KEY"), "msg: {msg}");
                 assert!(msg.contains("ZAI_API_KEY"), "msg: {msg}");
-                assert!(msg.contains("перезапустите"), "подсказка про перезапуск: {msg}");
+                assert!(
+                    msg.contains("перезапустите"),
+                    "подсказка про перезапуск: {msg}"
+                );
             },
         );
     }
@@ -1106,7 +1164,10 @@ mod tests {
     #[test]
     fn resolve_uses_provider_default_env() {
         with_env_vars(
-            &[("DEEPSEEK_API_KEY", Some("sk-from-default-env")), ("DEEPSEEK_BASE_URL", None)],
+            &[
+                ("DEEPSEEK_API_KEY", Some("sk-from-default-env")),
+                ("DEEPSEEK_BASE_URL", None),
+            ],
             || {
                 let creds = resolve("deepseek-v4-pro").unwrap();
                 assert_eq!(creds.key, "sk-from-default-env");
@@ -1122,10 +1183,13 @@ mod tests {
         with_env_vars(&[("OPENAI_BASE_URL", None)], || {
             assert_eq!(provider.effective_base_url(), "http://localhost:8000/v1");
         });
-        with_env_vars(&[("OPENAI_BASE_URL", Some("http://127.0.0.1:8765/v1/"))], || {
-            // завершающий слеш срезается
-            assert_eq!(provider.effective_base_url(), "http://127.0.0.1:8765/v1");
-        });
+        with_env_vars(
+            &[("OPENAI_BASE_URL", Some("http://127.0.0.1:8765/v1/"))],
+            || {
+                // завершающий слеш срезается
+                assert_eq!(provider.effective_base_url(), "http://127.0.0.1:8765/v1");
+            },
+        );
         with_env_vars(&[("OPENAI_BASE_URL", Some("   "))], || {
             // пустое после trim значение игнорируется
             assert_eq!(provider.effective_base_url(), "http://localhost:8000/v1");
@@ -1224,21 +1288,25 @@ mod tests {
     fn api_key_from_env_alias_generic_fallback_and_empty() {
         // алиас провайдера (GLM_API_KEY) работает и через мягкий резолвер
         with_env_vars(
-            &[("ZHIPU_API_KEY", None), ("GLM_API_KEY", Some("glm")), ("ZAI_API_KEY", None)],
+            &[
+                ("ZHIPU_API_KEY", None),
+                ("GLM_API_KEY", Some("glm")),
+                ("ZAI_API_KEY", None),
+            ],
             || assert_eq!(api_key_from_env("glm-5.2").as_deref(), Some("glm")),
         );
         // неизвестная модель — только общие исторические имена
         with_env_vars(&[("DEEPSEEK_API_KEY", Some("ds"))], || {
-            assert_eq!(api_key_from_env("custom-local-model").as_deref(), Some("ds"));
+            assert_eq!(
+                api_key_from_env("custom-local-model").as_deref(),
+                Some("ds")
+            );
         });
         // пустая/пробельная переменная не считается; ничего нет — None.
         // Модель без провайдера в реестре: у k3 запасной файл ~/.kimi_api_key
         // существует на боевой машине и сделал бы тест зависимым от окружения.
         with_env_vars(
-            &[
-                ("DEEPSEEK_API_KEY", Some("   ")),
-                ("THESEUS_API_KEY", None),
-            ],
+            &[("DEEPSEEK_API_KEY", Some("   ")), ("THESEUS_API_KEY", None)],
             || assert_eq!(api_key_from_env("no-such-model"), None),
         );
     }
@@ -1295,11 +1363,20 @@ mod tests {
         assert_eq!(unique.len(), names.len(), "дубли: {names:?}");
         // у deepseek общие имена совпадают с провайдерскими — дублей быть не должно
         let ds = api_key_env_names("deepseek-v4-pro");
-        assert_eq!(ds, vec!["DEEPSEEK_API_KEY".to_string(), "THESEUS_API_KEY".to_string()]);
+        assert_eq!(
+            ds,
+            vec![
+                "DEEPSEEK_API_KEY".to_string(),
+                "THESEUS_API_KEY".to_string()
+            ]
+        );
         // неизвестная модель — только общие
         assert_eq!(
             api_key_env_names("no-such-model"),
-            vec!["DEEPSEEK_API_KEY".to_string(), "THESEUS_API_KEY".to_string()]
+            vec![
+                "DEEPSEEK_API_KEY".to_string(),
+                "THESEUS_API_KEY".to_string()
+            ]
         );
     }
 
@@ -1370,13 +1447,20 @@ mod tests {
     /// thinking/reasoning_effort срезаются; «off» убирает ключ, «max» → high.
     #[test]
     fn apply_effort_openrouter_native_reasoning() {
-        let with_keys = serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"});
+        let with_keys =
+            serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high"});
         let v = apply_effort("stealth/ox-alpha", with_keys.clone(), "high");
         assert_eq!(v["reasoning"], serde_json::json!({"effort": "high"}));
-        assert!(v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
-            "deepseek-ключи срезаны: {v}");
+        assert!(
+            v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
+            "deepseek-ключи срезаны: {v}"
+        );
         let v = apply_effort("stealth/ox-alpha", with_keys.clone(), "max");
-        assert_eq!(v["reasoning"], serde_json::json!({"effort": "high"}), "max → high");
+        assert_eq!(
+            v["reasoning"],
+            serde_json::json!({"effort": "high"}),
+            "max → high"
+        );
         let v = apply_effort("stealth/ox-alpha", with_keys, "off");
         assert!(v.get("reasoning").is_none(), "off — ключ убран: {v}");
     }
@@ -1387,12 +1471,16 @@ mod tests {
     fn apply_effort_strips_or_preserves_by_model() {
         let with_keys = serde_json::json!({"thinking": {"type": "enabled"}, "reasoning_effort": "high", "x": 1});
         let v = apply_effort("k3", with_keys.clone(), "high");
-        assert!(v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
-            "kimi срезан: {v}");
+        assert!(
+            v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
+            "kimi срезан: {v}"
+        );
         assert_eq!(v["x"], serde_json::json!(1), "прочие ключи целы");
         let v = apply_effort("deepseek-chat", with_keys.clone(), "max");
-        assert!(v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
-            "без thinking: {v}");
+        assert!(
+            v.get("thinking").is_none() && v.get("reasoning_effort").is_none(),
+            "без thinking: {v}"
+        );
         let v = apply_effort("custom-local-model", with_keys.clone(), "off");
         assert_eq!(v, with_keys, "неизвестную модель не трогаем");
         // null-база (конфиг без extra_body) → чистый объект, без мусора

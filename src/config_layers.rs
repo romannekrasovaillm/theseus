@@ -60,8 +60,7 @@ const SANDBOX_KEYS: &[&str] = &["enabled", "allow_network", "writable_paths"];
 const MIN_CONTEXT_LIMIT: i64 = 4096;
 
 /// Шаблон допустимого домена (с опциональным префиксом `*.`).
-const DOMAIN_RE: &str =
-    r"^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$";
+const DOMAIN_RE: &str = r"^(\*\.)?[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?(\.[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$";
 
 /// Один слой конфигурации: имя (для диагностики) + TOML-таблица.
 #[derive(Debug, Clone)]
@@ -282,8 +281,10 @@ fn read_optional_layer(name: &str, path: &Path) -> Result<ConfigLayer> {
     match fs::read_to_string(path) {
         Ok(text) => ConfigLayer::parse(name, &text),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(ConfigLayer::empty(name)),
-        Err(e) => Err(anyhow::Error::new(e)
-            .context(format!("слой «{name}»: не удалось прочитать {}", path.display()))),
+        Err(e) => Err(anyhow::Error::new(e).context(format!(
+            "слой «{name}»: не удалось прочитать {}",
+            path.display()
+        ))),
     }
 }
 
@@ -351,7 +352,10 @@ fn type_name(v: &Value) -> &'static str {
 
 /// Замечание «неверный тип» в едином формате.
 fn type_err(path: impl Into<String>, expected: &str, got: &Value) -> ConfigIssue {
-    ConfigIssue::error(path, format!("ожидался тип {expected}, получено: {}", type_name(got)))
+    ConfigIssue::error(
+        path,
+        format!("ожидался тип {expected}, получено: {}", type_name(got)),
+    )
 }
 
 /// `model`: непустая строка.
@@ -359,14 +363,19 @@ fn validate_model(table: &Table, issues: &mut Vec<ConfigIssue>) {
     let Some(v) = table.get("model") else { return };
     match v.as_str() {
         Some(s) if !s.trim().is_empty() => {}
-        Some(_) => issues.push(ConfigIssue::error("model", "имя модели не должно быть пустым")),
+        Some(_) => issues.push(ConfigIssue::error(
+            "model",
+            "имя модели не должно быть пустым",
+        )),
         None => issues.push(type_err("model", "строка", v)),
     }
 }
 
 /// `base_url`: строка со схемой http/https (иначе — предупреждение).
 fn validate_base_url(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("base_url") else { return };
+    let Some(v) = table.get("base_url") else {
+        return;
+    };
     match v.as_str() {
         Some(u) if u.starts_with("https://") || u.starts_with("http://") => {}
         Some(_) => issues.push(ConfigIssue::warn(
@@ -379,7 +388,9 @@ fn validate_base_url(table: &Table, issues: &mut Vec<ConfigIssue>) {
 
 /// `context_limit_tokens`: целое >= [`MIN_CONTEXT_LIMIT`].
 fn validate_context_limit(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("context_limit_tokens") else { return };
+    let Some(v) = table.get("context_limit_tokens") else {
+        return;
+    };
     match v.as_integer() {
         Some(n) if n < MIN_CONTEXT_LIMIT => issues.push(ConfigIssue::error(
             "context_limit_tokens",
@@ -420,7 +431,9 @@ fn validate_compact(table: &Table, issues: &mut Vec<ConfigIssue>) {
 
 /// `sandbox`: таблица с известными подключами корректных типов.
 fn validate_sandbox(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("sandbox") else { return };
+    let Some(v) = table.get("sandbox") else {
+        return;
+    };
     let Some(t) = v.as_table() else {
         issues.push(type_err("sandbox", "таблица", v));
         return;
@@ -443,7 +456,10 @@ fn validate_sandbox(table: &Table, issues: &mut Vec<ConfigIssue>) {
             }
             _ => issues.push(ConfigIssue::warn(
                 path,
-                format!("неизвестный ключ sandbox «{key}»; известные: {}", SANDBOX_KEYS.join(", ")),
+                format!(
+                    "неизвестный ключ sandbox «{key}»; известные: {}",
+                    SANDBOX_KEYS.join(", ")
+                ),
             )),
         }
     }
@@ -451,7 +467,9 @@ fn validate_sandbox(table: &Table, issues: &mut Vec<ConfigIssue>) {
 
 /// `permission.mode`: один из [`PERMISSION_MODES`].
 fn validate_permission(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("permission") else { return };
+    let Some(v) = table.get("permission") else {
+        return;
+    };
     let Some(t) = v.as_table() else {
         issues.push(type_err("permission", "таблица", v));
         return;
@@ -469,7 +487,10 @@ fn validate_permission(table: &Table, issues: &mut Vec<ConfigIssue>) {
             Some(m) if PERMISSION_MODES.contains(&m) => {}
             Some(m) => issues.push(ConfigIssue::error(
                 "permission.mode",
-                format!("неизвестный режим «{m}»; допустимы: {}", PERMISSION_MODES.join(", ")),
+                format!(
+                    "неизвестный режим «{m}»; допустимы: {}",
+                    PERMISSION_MODES.join(", ")
+                ),
             )),
             None => issues.push(type_err("permission.mode", "строка", mode)),
         }
@@ -478,7 +499,9 @@ fn validate_permission(table: &Table, issues: &mut Vec<ConfigIssue>) {
 
 /// `permission_rules`: массив таблиц `{decision, pattern}`.
 fn validate_permission_rules(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("permission_rules") else { return };
+    let Some(v) = table.get("permission_rules") else {
+        return;
+    };
     let Some(arr) = v.as_array() else {
         issues.push(type_err("permission_rules", "массив таблиц", v));
         return;
@@ -493,7 +516,10 @@ fn validate_permission_rules(table: &Table, issues: &mut Vec<ConfigIssue>) {
             Some(d) if RULE_DECISIONS.contains(&d) => {}
             Some(d) => issues.push(ConfigIssue::error(
                 format!("{base}.decision"),
-                format!("недопустимое решение «{d}»; допустимы: {}", RULE_DECISIONS.join(", ")),
+                format!(
+                    "недопустимое решение «{d}»; допустимы: {}",
+                    RULE_DECISIONS.join(", ")
+                ),
             )),
             None => issues.push(ConfigIssue::error(
                 format!("{base}.decision"),
@@ -512,7 +538,9 @@ fn validate_permission_rules(table: &Table, issues: &mut Vec<ConfigIssue>) {
 
 /// `mcp_servers`: таблица таблиц; каждому серверу нужен `command` или `url`.
 fn validate_mcp_servers(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("mcp_servers") else { return };
+    let Some(v) = table.get("mcp_servers") else {
+        return;
+    };
     let Some(t) = v.as_table() else {
         issues.push(type_err("mcp_servers", "таблица", v));
         return;
@@ -556,7 +584,10 @@ fn validate_hooks(table: &Table, issues: &mut Vec<ConfigIssue>) {
         match ht.get("event").and_then(Value::as_str) {
             Some(ev) if !HOOK_EVENTS.contains(&ev) => issues.push(ConfigIssue::warn(
                 format!("{base}.event"),
-                format!("нестандартное событие «{ev}»; известные: {}", HOOK_EVENTS.join(", ")),
+                format!(
+                    "нестандартное событие «{ev}»; известные: {}",
+                    HOOK_EVENTS.join(", ")
+                ),
             )),
             Some(_) => {}
             None => issues.push(ConfigIssue::error(
@@ -576,13 +607,17 @@ fn validate_hooks(table: &Table, issues: &mut Vec<ConfigIssue>) {
 
 /// `web_allowed_domains`: массив строк, похожих на домены (Warn при сомнении).
 fn validate_web_domains(table: &Table, issues: &mut Vec<ConfigIssue>) {
-    let Some(v) = table.get("web_allowed_domains") else { return };
+    let Some(v) = table.get("web_allowed_domains") else {
+        return;
+    };
     let Some(arr) = v.as_array() else {
         issues.push(type_err("web_allowed_domains", "массив строк", v));
         return;
     };
     // Паттерн — константа, проверенная тестом domain_regex_compiles; ошибка недостижима.
-    let Ok(re) = Regex::new(DOMAIN_RE) else { return };
+    let Ok(re) = Regex::new(DOMAIN_RE) else {
+        return;
+    };
     for (i, item) in arr.iter().enumerate() {
         let path = format!("web_allowed_domains[{i}]");
         match item.as_str() {
@@ -634,8 +669,11 @@ mod tests {
 
     /// Временный каталог для файловых тестов.
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("theseus_config_layers_{}_{}", std::process::id(), tag));
+        let dir = std::env::temp_dir().join(format!(
+            "theseus_config_layers_{}_{}",
+            std::process::id(),
+            tag
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -649,19 +687,34 @@ mod tests {
             layer("cli", "model = \"cli-model\""),
         ];
         let merged = merge(&layers);
-        assert_eq!(get(&merged, "model").and_then(Value::as_str), Some("cli-model"));
+        assert_eq!(
+            get(&merged, "model").and_then(Value::as_str),
+            Some("cli-model")
+        );
         // Ключ, не тронутый верхними слоями, доезжает из нижнего.
-        assert_eq!(get(&merged, "context_limit_tokens").and_then(Value::as_integer), Some(4096));
+        assert_eq!(
+            get(&merged, "context_limit_tokens").and_then(Value::as_integer),
+            Some(4096)
+        );
     }
 
     #[test]
     fn merge_tables_recursively() {
-        let a = layer("a", "[mcp_servers.fs]\ncommand = \"fsd\"\n[mcp_servers.web]\ncommand = \"webd\"");
+        let a = layer(
+            "a",
+            "[mcp_servers.fs]\ncommand = \"fsd\"\n[mcp_servers.web]\ncommand = \"webd\"",
+        );
         let b = layer("b", "[mcp_servers.fs]\nurl = \"http://localhost\"");
         let merged = merge(&[a, b]);
         // command сохранился из нижнего слоя, url добавился сверху.
-        assert_eq!(get(&merged, "mcp_servers.fs.command").and_then(Value::as_str), Some("fsd"));
-        assert_eq!(get(&merged, "mcp_servers.fs.url").and_then(Value::as_str), Some("http://localhost"));
+        assert_eq!(
+            get(&merged, "mcp_servers.fs.command").and_then(Value::as_str),
+            Some("fsd")
+        );
+        assert_eq!(
+            get(&merged, "mcp_servers.fs.url").and_then(Value::as_str),
+            Some("http://localhost")
+        );
         assert!(get(&merged, "mcp_servers.web").is_some());
     }
 
@@ -670,7 +723,9 @@ mod tests {
         let a = layer("a", "web_allowed_domains = [\"a.com\", \"b.com\"]");
         let b = layer("b", "web_allowed_domains = [\"c.com\"]");
         let merged = merge(&[a, b]);
-        let arr = get(&merged, "web_allowed_domains").and_then(Value::as_array).unwrap();
+        let arr = get(&merged, "web_allowed_domains")
+            .and_then(Value::as_array)
+            .unwrap();
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0].as_str(), Some("c.com"));
     }
@@ -680,7 +735,10 @@ mod tests {
         let a = layer("a", "[sandbox]\nenabled = true");
         let b = layer("b", "sandbox = false");
         let merged = merge(&[a, b]);
-        assert_eq!(get(&merged, "sandbox").and_then(Value::as_bool), Some(false));
+        assert_eq!(
+            get(&merged, "sandbox").and_then(Value::as_bool),
+            Some(false)
+        );
     }
 
     #[test]
@@ -736,7 +794,10 @@ mod tests {
     fn permission_mode_whitelist() {
         for mode in PERMISSION_MODES {
             let cfg = layer("t", &format!("[permission]\nmode = \"{mode}\"")).toml_table;
-            assert!(validate(&cfg).is_empty(), "режим {mode} должен быть валиден");
+            assert!(
+                validate(&cfg).is_empty(),
+                "режим {mode} должен быть валиден"
+            );
         }
         let bad = layer("t", "[permission]\nmode = \"yoloooo\"").toml_table;
         assert!(has(&validate(&bad), "permission.mode", Severity::Error));
@@ -745,7 +806,11 @@ mod tests {
     #[test]
     fn context_limit_minimum() {
         let small = layer("t", "context_limit_tokens = 2048").toml_table;
-        assert!(has(&validate(&small), "context_limit_tokens", Severity::Error));
+        assert!(has(
+            &validate(&small),
+            "context_limit_tokens",
+            Severity::Error
+        ));
         // Граничное значение — валидно.
         let border = layer("t", "context_limit_tokens = 4096").toml_table;
         assert!(validate(&border).is_empty());
@@ -760,18 +825,36 @@ mod tests {
         )
         .toml_table;
         let issues = validate(&bad);
-        assert!(has(&issues, "permission_rules[0].decision", Severity::Error));
-        assert!(has(&issues, "permission_rules[1].decision", Severity::Error));
-        let good = layer("t", "[[permission_rules]]\ndecision = \"allow\"\npattern = \"Bash(cargo *)\"").toml_table;
+        assert!(has(
+            &issues,
+            "permission_rules[0].decision",
+            Severity::Error
+        ));
+        assert!(has(
+            &issues,
+            "permission_rules[1].decision",
+            Severity::Error
+        ));
+        let good = layer(
+            "t",
+            "[[permission_rules]]\ndecision = \"allow\"\npattern = \"Bash(cargo *)\"",
+        )
+        .toml_table;
         assert!(validate(&good).is_empty());
     }
 
     #[test]
     fn mcp_and_hooks_checked() {
-        let cfg = layer("t", "[mcp_servers.broken]\n[[hooks]]\nevent = \"OnMoon\"\ncommand = \"\"").toml_table;
+        let cfg = layer(
+            "t",
+            "[mcp_servers.broken]\n[[hooks]]\nevent = \"OnMoon\"\ncommand = \"\"",
+        )
+        .toml_table;
         let issues = validate(&cfg);
         // Сервер без command/url — ошибка.
-        assert!(issues.iter().any(|i| i.path.starts_with("mcp_servers.broken") && i.severity == Severity::Error));
+        assert!(issues
+            .iter()
+            .any(|i| i.path.starts_with("mcp_servers.broken") && i.severity == Severity::Error));
         // Нестандартное событие — предупреждение, пустая команда — ошибка.
         assert!(has(&issues, "hooks[0].event", Severity::Warn));
         assert!(has(&issues, "hooks[0].command", Severity::Error));
@@ -780,7 +863,11 @@ mod tests {
     #[test]
     fn web_domains_shape() {
         assert!(Regex::new(DOMAIN_RE).is_ok());
-        let cfg = layer("t", "web_allowed_domains = [\"example.com\", \"*.ok.org\", \"bad domain!\"]").toml_table;
+        let cfg = layer(
+            "t",
+            "web_allowed_domains = [\"example.com\", \"*.ok.org\", \"bad domain!\"]",
+        )
+        .toml_table;
         let issues = validate(&cfg);
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0].severity, Severity::Warn);
@@ -807,7 +894,10 @@ mod tests {
         std::fs::write(&path, "model = \"from-file\"").unwrap();
         let l = ConfigLayer::from_file("test", &path).unwrap();
         assert_eq!(l.name, "test");
-        assert_eq!(get(&l.toml_table, "model").and_then(Value::as_str), Some("from-file"));
+        assert_eq!(
+            get(&l.toml_table, "model").and_then(Value::as_str),
+            Some("from-file")
+        );
         // Отсутствующий файл — ошибка для from_file (в отличие от load_layered).
         assert!(ConfigLayer::from_file("x", &dir.join("absent.toml")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
@@ -820,7 +910,10 @@ mod tests {
         // Умолчания валидны и доступны.
         assert!(issues.is_empty());
         assert!(get(&cfg, "model").is_some());
-        assert_eq!(get(&cfg, "permission.mode").and_then(Value::as_str), Some("ask"));
+        assert_eq!(
+            get(&cfg, "permission.mode").and_then(Value::as_str),
+            Some("ask")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -829,18 +922,41 @@ mod tests {
         let dir = temp_dir("chain");
         let global = dir.join("global.toml");
         let ws = dir.join("workspace.toml");
-        std::fs::write(&global, "model = \"gm\"\nbase_url = \"http://g\"\n[mcp_servers.a]\ncommand = \"a-cmd\"").unwrap();
+        std::fs::write(
+            &global,
+            "model = \"gm\"\nbase_url = \"http://g\"\n[mcp_servers.a]\ncommand = \"a-cmd\"",
+        )
+        .unwrap();
         std::fs::write(&ws, "model = \"wm\"\n[mcp_servers.a]\nurl = \"http://a\"").unwrap();
-        let (cfg, issues) =
-            load_layered(&global, &ws, &[("model", "cli-model"), ("context_limit_tokens", "65536")]).unwrap();
+        let (cfg, issues) = load_layered(
+            &global,
+            &ws,
+            &[("model", "cli-model"), ("context_limit_tokens", "65536")],
+        )
+        .unwrap();
         assert!(issues.is_empty());
         // CLI > workspace > global > defaults.
-        assert_eq!(get(&cfg, "model").and_then(Value::as_str), Some("cli-model"));
-        assert_eq!(get(&cfg, "base_url").and_then(Value::as_str), Some("http://g"));
-        assert_eq!(get(&cfg, "context_limit_tokens").and_then(Value::as_integer), Some(65536));
+        assert_eq!(
+            get(&cfg, "model").and_then(Value::as_str),
+            Some("cli-model")
+        );
+        assert_eq!(
+            get(&cfg, "base_url").and_then(Value::as_str),
+            Some("http://g")
+        );
+        assert_eq!(
+            get(&cfg, "context_limit_tokens").and_then(Value::as_integer),
+            Some(65536)
+        );
         // Глубокий мердж mcp_servers.a: command из global + url из workspace.
-        assert_eq!(get(&cfg, "mcp_servers.a.command").and_then(Value::as_str), Some("a-cmd"));
-        assert_eq!(get(&cfg, "mcp_servers.a.url").and_then(Value::as_str), Some("http://a"));
+        assert_eq!(
+            get(&cfg, "mcp_servers.a.command").and_then(Value::as_str),
+            Some("a-cmd")
+        );
+        assert_eq!(
+            get(&cfg, "mcp_servers.a.url").and_then(Value::as_str),
+            Some("http://a")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -860,12 +976,21 @@ mod tests {
         let (cfg, issues) = load_layered(
             &dir.join("g.toml"),
             &dir.join("w.toml"),
-            &[("permission.mode", "yolo"), ("compact_l1", "0.55"), ("sandbox.enabled", "true")],
+            &[
+                ("permission.mode", "yolo"),
+                ("compact_l1", "0.55"),
+                ("sandbox.enabled", "true"),
+            ],
         )
         .unwrap();
         assert!(issues.is_empty());
-        assert_eq!(get(&cfg, "permission.mode").and_then(Value::as_str), Some("yolo"));
-        assert!(get(&cfg, "sandbox.enabled").and_then(Value::as_bool).unwrap());
+        assert_eq!(
+            get(&cfg, "permission.mode").and_then(Value::as_str),
+            Some("yolo")
+        );
+        assert!(get(&cfg, "sandbox.enabled")
+            .and_then(Value::as_bool)
+            .unwrap());
         let f = get(&cfg, "compact_l1").and_then(Value::as_float).unwrap();
         assert!((f - 0.55).abs() < f64::EPSILON);
         // Пустой путь оверрайда — ошибка.

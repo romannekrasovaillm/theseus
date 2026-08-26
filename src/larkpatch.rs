@@ -153,10 +153,15 @@ pub fn validate_strict(patch_text: &str) -> Vec<GrammarIssue> {
         if lines[0].trim() == BEGIN_MARKER {
             issues.push(issue(
                 1,
-                format!("маркер '{BEGIN_MARKER}' должен занимать строку целиком, без пробелов по краям"),
+                format!(
+                    "маркер '{BEGIN_MARKER}' должен занимать строку целиком, без пробелов по краям"
+                ),
             ));
         } else {
-            issues.push(issue(1, format!("первая строка патча должна быть '{BEGIN_MARKER}'")));
+            issues.push(issue(
+                1,
+                format!("первая строка патча должна быть '{BEGIN_MARKER}'"),
+            ));
         }
     }
     // Маркер конца: последняя непустая строка (хвостовые пустые строки допустимы).
@@ -169,7 +174,9 @@ pub fn validate_strict(patch_text: &str) -> Vec<GrammarIssue> {
         if lines[last].trim() == END_MARKER {
             issues.push(issue(
                 last + 1,
-                format!("маркер '{END_MARKER}' должен занимать строку целиком, без пробелов по краям"),
+                format!(
+                    "маркер '{END_MARKER}' должен занимать строку целиком, без пробелов по краям"
+                ),
             ));
         } else {
             issues.push(issue(
@@ -195,13 +202,19 @@ pub fn validate_strict(patch_text: &str) -> Vec<GrammarIssue> {
             ScanState::Add { path, body_lines } => {
                 if line.starts_with(OP_PREFIX) {
                     if body_lines == 0 {
-                        issues.push(issue(n, format!("секция Add File '{path}' не содержит строк с '+'")));
+                        issues.push(issue(
+                            n,
+                            format!("секция Add File '{path}' не содержит строк с '+'"),
+                        ));
                     }
                     state = ScanState::TopLevel;
                     continue; // маркер обработаем в TopLevel на следующей итерации
                 }
                 if line.starts_with('+') {
-                    state = ScanState::Add { path, body_lines: body_lines + 1 };
+                    state = ScanState::Add {
+                        path,
+                        body_lines: body_lines + 1,
+                    };
                 } else {
                     issues.push(issue(n, add_line_message(&path, line)));
                     state = ScanState::Add { path, body_lines };
@@ -241,7 +254,10 @@ pub fn validate_strict(patch_text: &str) -> Vec<GrammarIssue> {
         ScanState::TopLevel => {}
         ScanState::Add { path, body_lines } => {
             if body_lines == 0 {
-                issues.push(issue(term_line, format!("секция Add File '{path}' не содержит строк с '+'")));
+                issues.push(issue(
+                    term_line,
+                    format!("секция Add File '{path}' не содержит строк с '+'"),
+                ));
             }
         }
         ScanState::Update(scan) => scan.finish(term_line, &mut issues),
@@ -267,7 +283,11 @@ pub fn validate_strict(patch_text: &str) -> Vec<GrammarIssue> {
 pub fn to_patch_ops(patch_text: &str) -> Result<Vec<PatchOp>> {
     let issues = validate_strict(patch_text);
     if !issues.is_empty() {
-        let report = issues.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n");
+        let report = issues
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
         let count = issues.len();
         bail!("патч отклонён строгой проверкой грамматики ({count} проблем):\n{report}");
     }
@@ -277,7 +297,10 @@ pub fn to_patch_ops(patch_text: &str) -> Result<Vec<PatchOp>> {
 
 /// Сформировать нарушение с номером строки.
 fn issue(line: usize, message: impl Into<String>) -> GrammarIssue {
-    GrammarIssue { line, message: message.into() }
+    GrammarIssue {
+        line,
+        message: message.into(),
+    }
 }
 
 /// Обработать строку на верхнем уровне (между операциями), вернуть новое состояние.
@@ -288,7 +311,10 @@ fn scan_top_level(line: &str, n: usize, issues: &mut Vec<GrammarIssue>) -> ScanS
     }
     if let Some(rest) = line.strip_prefix(ADD_PREFIX) {
         check_path(rest, n, issues);
-        return ScanState::Add { path: rest.to_string(), body_lines: 0 };
+        return ScanState::Add {
+            path: rest.to_string(),
+            body_lines: 0,
+        };
     }
     if let Some(rest) = line.strip_prefix(UPDATE_PREFIX) {
         check_path(rest, n, issues);
@@ -299,7 +325,10 @@ fn scan_top_level(line: &str, n: usize, issues: &mut Vec<GrammarIssue>) -> ScanS
         return ScanState::TopLevel;
     }
     if line == BEGIN_MARKER || line == END_MARKER {
-        issues.push(issue(n, format!("маркер '{line}' допустим только в обрамлении патча")));
+        issues.push(issue(
+            n,
+            format!("маркер '{line}' допустим только в обрамлении патча"),
+        ));
     } else if line.starts_with("***") {
         issues.push(issue(
             n,
@@ -389,7 +418,13 @@ struct UpdateScan {
 
 impl UpdateScan {
     fn new(path: &str) -> Self {
-        Self { path: path.to_string(), chunk_line: 0, chunk_lines: 0, chunk_has_pm: false, total_lines: 0 }
+        Self {
+            path: path.to_string(),
+            chunk_line: 0,
+            chunk_lines: 0,
+            chunk_has_pm: false,
+            total_lines: 0,
+        }
     }
 
     /// Начать новый чанк (встретилась строка `@@`).
@@ -434,7 +469,10 @@ impl UpdateScan {
     /// Завершить секцию Update целиком (маркер следующей операции или конца патча).
     fn finish(mut self, term_line: usize, issues: &mut Vec<GrammarIssue>) {
         if self.total_lines == 0 && self.chunk_line == 0 {
-            issues.push(issue(term_line, format!("секция Update File '{}' не содержит изменений", self.path)));
+            issues.push(issue(
+                term_line,
+                format!("секция Update File '{}' не содержит изменений", self.path),
+            ));
         } else {
             self.finish_chunk(issues);
         }
@@ -492,7 +530,14 @@ mod tests {
         ] {
             assert!(g.contains(rule), "в грамматике нет правила '{rule}'");
         }
-        for marker in [BEGIN_MARKER, END_MARKER, ADD_PREFIX, UPDATE_PREFIX, DELETE_PREFIX, "@@"] {
+        for marker in [
+            BEGIN_MARKER,
+            END_MARKER,
+            ADD_PREFIX,
+            UPDATE_PREFIX,
+            DELETE_PREFIX,
+            "@@",
+        ] {
             assert!(g.contains(marker), "в грамматике нет маркера '{marker}'");
         }
         // Грамматика — многострочный документ контракта, не однострочник.
@@ -505,17 +550,36 @@ mod tests {
     fn digest_is_compact_and_covers_format() {
         let d = grammar_digest();
         // Компактность: влезает в несколько строк и заметно короче грамматики.
-        assert!(d.lines().count() <= 9, "дайджест распух: {} строк", d.lines().count());
+        assert!(
+            d.lines().count() <= 9,
+            "дайджест распух: {} строк",
+            d.lines().count()
+        );
         assert!(d.len() <= 700, "дайджест распух: {} байт", d.len());
-        assert!(d.len() < render_grammar().len(), "дайджест должен быть короче грамматики");
-        for token in [BEGIN_MARKER, END_MARKER, "Add File", "Update File", "Delete File", "@@", "+", "-"] {
+        assert!(
+            d.len() < render_grammar().len(),
+            "дайджест должен быть короче грамматики"
+        );
+        for token in [
+            BEGIN_MARKER,
+            END_MARKER,
+            "Add File",
+            "Update File",
+            "Delete File",
+            "@@",
+            "+",
+            "-",
+        ] {
             assert!(d.contains(token), "в дайджесте нет '{token}'");
         }
     }
 
     #[test]
     fn issue_display_has_line_prefix() {
-        let it = GrammarIssue { line: 7, message: "бум".to_string() };
+        let it = GrammarIssue {
+            line: 7,
+            message: "бум".to_string(),
+        };
         assert_eq!(it.to_string(), "строка 7: бум");
     }
 
@@ -552,11 +616,19 @@ mod tests {
     #[test]
     fn strict_flags_missing_or_indented_begin() {
         let issues = validate_strict("*** Add File: f\n+x\n*** End Patch");
-        assert!(issues.iter().any(|it| it.line == 1 && it.message.contains(BEGIN_MARKER)), "{issues:?}");
+        assert!(
+            issues
+                .iter()
+                .any(|it| it.line == 1 && it.message.contains(BEGIN_MARKER)),
+            "{issues:?}"
+        );
         // Маркер начала с отступом — отдельная диагностика.
         let issues = validate_strict("  *** Begin Patch\n*** End Patch");
         assert_eq!(lines_of(&issues), vec![1]);
-        assert!(issues[0].message.contains("без пробелов по краям"), "{issues:?}");
+        assert!(
+            issues[0].message.contains("без пробелов по краям"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -574,7 +646,10 @@ mod tests {
         // Маркер из диалекта codex, которого у нас нет.
         let issues = validate_strict("*** Begin Patch\n*** Move to: x\n*** End Patch");
         assert_eq!(lines_of(&issues), vec![2]);
-        assert!(issues[0].message.contains("неизвестный маркер"), "{issues:?}");
+        assert!(
+            issues[0].message.contains("неизвестный маркер"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -619,8 +694,16 @@ mod tests {
         let p = "*** Begin Patch\n*** Add File: f\n-removed\n context\n\n*** End Patch";
         let issues = validate_strict(p);
         assert_eq!(lines_of(&issues), vec![3, 4, 5, 6]);
-        assert!(issues[..3].iter().all(|it| it.message.contains("должна начинаться с '+'")), "{issues:?}");
-        assert!(issues[3].message.contains("не содержит строк"), "{issues:?}");
+        assert!(
+            issues[..3]
+                .iter()
+                .all(|it| it.message.contains("должна начинаться с '+'")),
+            "{issues:?}"
+        );
+        assert!(
+            issues[3].message.contains("не содержит строк"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -629,7 +712,10 @@ mod tests {
         let p = "*** Begin Patch\n*** Add File: f\n*** Delete File: g\n*** End Patch";
         let issues = validate_strict(p);
         assert_eq!(lines_of(&issues), vec![3]);
-        assert!(issues[0].message.contains("не содержит строк"), "{issues:?}");
+        assert!(
+            issues[0].message.contains("не содержит строк"),
+            "{issues:?}"
+        );
         // Пустая секция Add перед концом патча — ошибка на строке маркера конца.
         let p = "*** Begin Patch\n*** Add File: f\n*** End Patch";
         let issues = validate_strict(p);
@@ -655,7 +741,10 @@ mod tests {
         let p = "*** Begin Patch\n*** Update File: u\n@@ a\n@@ b\n+x\n*** End Patch";
         let issues = validate_strict(p);
         assert_eq!(lines_of(&issues), vec![3]);
-        assert!(issues[0].message.contains("пустая секция '@@'"), "{issues:?}");
+        assert!(
+            issues[0].message.contains("пустая секция '@@'"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -663,7 +752,10 @@ mod tests {
         let p = "*** Begin Patch\n*** Update File: u\n?what\n-x\n*** End Patch";
         let issues = validate_strict(p);
         assert_eq!(lines_of(&issues), vec![3]);
-        assert!(issues[0].message.contains("должна начинаться с"), "{issues:?}");
+        assert!(
+            issues[0].message.contains("должна начинаться с"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -671,7 +763,10 @@ mod tests {
         let p = "*** Begin Patch\n*** Update File: u\n*** End Patch";
         let issues = validate_strict(p);
         assert_eq!(lines_of(&issues), vec![3]);
-        assert!(issues[0].message.contains("не содержит изменений"), "{issues:?}");
+        assert!(
+            issues[0].message.contains("не содержит изменений"),
+            "{issues:?}"
+        );
     }
 
     #[test]
@@ -688,10 +783,16 @@ mod tests {
         let issues = validate_strict(p);
         assert_eq!(lines_of(&issues), vec![3, 4, 4, 6, 6]);
         assert!(issues[0].message.contains("начинаться с '+'"), "{issues:?}");
-        assert!(issues[1].message.contains("не содержит строк"), "{issues:?}");
+        assert!(
+            issues[1].message.contains("не содержит строк"),
+            "{issues:?}"
+        );
         assert!(issues[2].message.contains("пробел"), "{issues:?}");
         assert!(issues[3].message.contains(END_MARKER), "{issues:?}");
-        assert!(issues[4].message.contains("неизвестный маркер"), "{issues:?}");
+        assert!(
+            issues[4].message.contains("неизвестный маркер"),
+            "{issues:?}"
+        );
     }
 
     // ---------- конвертация в PatchOp ----------
@@ -736,9 +837,16 @@ mod tests {
             }
             other => panic!("ожидался Update, получено {other:?}"),
         }
-        assert_eq!(ops[3], PatchOp::Delete { path: PathBuf::from("tmp/old.txt") });
+        assert_eq!(
+            ops[3],
+            PatchOp::Delete {
+                path: PathBuf::from("tmp/old.txt")
+            }
+        );
         // Пустой патч конвертируется в пустой список операций.
-        assert!(to_patch_ops("*** Begin Patch\n*** End Patch").unwrap().is_empty());
+        assert!(to_patch_ops("*** Begin Patch\n*** End Patch")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -746,7 +854,10 @@ mod tests {
         // Чанк из одного контекста ленивый парсер принимает (old == new),
         // а to_patch_ops обязан отклонить его до вызова парсера.
         let bad = "*** Begin Patch\n*** Update File: u\n only\n*** End Patch";
-        assert!(parse_patch(bad).is_ok(), "контраст: ленивый парсер принимает");
+        assert!(
+            parse_patch(bad).is_ok(),
+            "контраст: ленивый парсер принимает"
+        );
         let err = to_patch_ops(bad).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("строка 3"), "{msg}");

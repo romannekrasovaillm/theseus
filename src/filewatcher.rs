@@ -25,8 +25,8 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Read};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime};
 
@@ -122,7 +122,11 @@ pub fn sign_file(path: &Path) -> io::Result<Option<FileSig>> {
         return Ok(None);
     }
     let hash64 = fnv1a_prefix(&file)?;
-    Ok(Some(FileSig { mtime: md.modified()?, len: md.len(), hash64 }))
+    Ok(Some(FileSig {
+        mtime: md.modified()?,
+        len: md.len(),
+        hash64,
+    }))
 }
 
 /// Проверка пути (относительного) против списка игноров.
@@ -173,7 +177,13 @@ impl Diff {
 impl fmt::Display for Diff {
     /// Компактный вид для логов: `+added ~modified -deleted`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "+{} ~{} -{}", self.added.len(), self.modified.len(), self.deleted.len())
+        write!(
+            f,
+            "+{} ~{} -{}",
+            self.added.len(),
+            self.modified.len(),
+            self.deleted.len()
+        )
     }
 }
 
@@ -191,11 +201,14 @@ pub struct Watcher {
 impl Watcher {
     /// Создать наблюдателя за каталогом `root` с интервалом опроса `interval`.
     ///
-    /// Интервал клампится снизу до 1 мс (см. [`MIN_INTERVAL`]): нулевой
+    /// Интервал клампится снизу до 1 мс (см. `MIN_INTERVAL`): нулевой
     /// превратил бы цикл наблюдения в busy-loop.
     #[must_use]
     pub fn new(root: impl Into<PathBuf>, interval: Duration) -> Self {
-        Self { root: root.into(), interval: interval.max(MIN_INTERVAL) }
+        Self {
+            root: root.into(),
+            interval: interval.max(MIN_INTERVAL),
+        }
     }
 
     /// Корень наблюдения.
@@ -364,7 +377,10 @@ impl WatchHandle {
         let stop = Arc::new(AtomicBool::new(false));
         let flag = Arc::clone(&stop);
         let thread = thread::spawn(move || watch_loop(&watcher, &flag, on_change));
-        Self { stop, thread: Some(thread) }
+        Self {
+            stop,
+            thread: Some(thread),
+        }
     }
 
     /// `true`, если поток наблюдателя жив (запущен и ещё не завершился).
@@ -375,7 +391,7 @@ impl WatchHandle {
 
     /// Остановить наблюдение и присоединить поток.
     ///
-    /// Идемпотентно. Завершается не дольше чем за [`STOP_POLL_SLICE`] +
+    /// Идемпотентно. Завершается не дольше чем за `STOP_POLL_SLICE` +
     /// время одного `scan`. Паника потока при остановке проглатывается.
     pub fn stop(&mut self) {
         self.stop.store(true, Ordering::Relaxed);
@@ -496,12 +512,16 @@ impl EditGuard {
     /// [`EditConflict::ModifiedExternally`] при расхождении сигнатур,
     /// [`EditConflict::Io`] при сбое чтения.
     pub fn check(&self) -> Result<(), EditConflict> {
-        let now = sign_file(&self.path)
-            .map_err(|source| EditConflict::Io { path: self.path.clone(), source })?;
+        let now = sign_file(&self.path).map_err(|source| EditConflict::Io {
+            path: self.path.clone(),
+            source,
+        })?;
         if now == self.before {
             Ok(())
         } else {
-            Err(EditConflict::ModifiedExternally { path: self.path.clone() })
+            Err(EditConflict::ModifiedExternally {
+                path: self.path.clone(),
+            })
         }
     }
 
@@ -516,8 +536,10 @@ impl EditGuard {
         F: FnOnce(&Path) -> io::Result<T>,
     {
         self.check()?;
-        write(&self.path)
-            .map_err(|source| EditConflict::Io { path: self.path.clone(), source })
+        write(&self.path).map_err(|source| EditConflict::Io {
+            path: self.path.clone(),
+            source,
+        })
     }
 
     /// Перефиксировать сигнатуру после собственной успешной записи.
@@ -548,8 +570,10 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .map(|d| d.as_nanos())
                 .unwrap_or(0);
-            let dir = std::env::temp_dir()
-                .join(format!("theseus-filewatcher-{}-{n}-{nanos}", std::process::id()));
+            let dir = std::env::temp_dir().join(format!(
+                "theseus-filewatcher-{}-{n}-{nanos}",
+                std::process::id()
+            ));
             fs::create_dir_all(&dir).unwrap();
             Self(dir)
         }
@@ -698,7 +722,11 @@ mod tests {
         // diff_snapshots не ходит на диск: собираем снимки руками.
         let mut base = Snapshot::new();
         let mut cur = Snapshot::new();
-        let sig = FileSig { mtime: SystemTime::UNIX_EPOCH, len: 1, hash64: 7 };
+        let sig = FileSig {
+            mtime: SystemTime::UNIX_EPOCH,
+            len: 1,
+            hash64: 7,
+        };
         base.insert(PathBuf::from("a"), sig);
         cur.insert(PathBuf::from("b"), sig);
         let diff = Watcher::diff_snapshots(&base, &cur);
@@ -738,7 +766,8 @@ mod tests {
         let baseline = w.scan().unwrap();
         let before = baseline[Path::new("t.txt")];
         let f = fs::File::options().write(true).open(&file).unwrap();
-        f.set_modified(before.mtime + Duration::from_secs(1)).unwrap();
+        f.set_modified(before.mtime + Duration::from_secs(1))
+            .unwrap();
         let diff = w.watch_since(&baseline).unwrap();
         assert_eq!(diff.modified, vec![PathBuf::from("t.txt")]);
         assert!(diff.added.is_empty() && diff.deleted.is_empty());
@@ -747,7 +776,10 @@ mod tests {
     #[test]
     fn watcher_clamps_zero_interval() {
         let tmp = TempDir::new();
-        assert_eq!(Watcher::new(tmp.path(), Duration::ZERO).interval(), MIN_INTERVAL);
+        assert_eq!(
+            Watcher::new(tmp.path(), Duration::ZERO).interval(),
+            MIN_INTERVAL
+        );
         let d = Duration::from_millis(30);
         assert_eq!(Watcher::new(tmp.path(), d).interval(), d);
         assert_eq!(Watcher::new(tmp.path(), d).root(), tmp.path());
@@ -815,7 +847,9 @@ mod tests {
         write_file(&file, "original");
         let guard = EditGuard::capture(&file).unwrap();
         write_file(&file, "user rewrote");
-        let err = guard.write_if_unchanged(|p| fs::write(p, "model version")).unwrap_err();
+        let err = guard
+            .write_if_unchanged(|p| fs::write(p, "model version"))
+            .unwrap_err();
         assert!(err.is_conflict());
         // Запись НЕ выполнилась — правка пользователя не потеряна.
         assert_eq!(fs::read_to_string(&file).unwrap(), "user rewrote");

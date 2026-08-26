@@ -53,8 +53,12 @@ pub struct HookConfig {
     pub timeout_secs: u64,
 }
 
-fn star() -> String { "*".into() }
-fn default_hook_timeout() -> u64 { 10 }
+fn star() -> String {
+    "*".into()
+}
+fn default_hook_timeout() -> u64 {
+    10
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -111,10 +115,18 @@ pub struct Config {
     pub compact_summary_pct: usize,
 }
 
-fn default_true() -> bool { true }
-fn pct70() -> usize { 70 }
-fn pct80() -> usize { 80 }
-fn pct95() -> usize { 95 }
+fn default_true() -> bool {
+    true
+}
+fn pct70() -> usize {
+    70
+}
+fn pct80() -> usize {
+    80
+}
+fn pct95() -> usize {
+    95
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionConfig {
@@ -135,11 +147,21 @@ impl Default for PermissionConfig {
     }
 }
 
-fn default_model() -> String { "deepseek-v4-flash".into() }
-fn default_effort() -> String { "high".into() }
-fn default_context_limit() -> usize { 120_000 }
-fn default_max_output() -> usize { 8_192 }
-fn default_timeout() -> u64 { 600 }
+fn default_model() -> String {
+    "deepseek-v4-flash".into()
+}
+fn default_effort() -> String {
+    "high".into()
+}
+fn default_context_limit() -> usize {
+    120_000
+}
+fn default_max_output() -> usize {
+    8_192
+}
+fn default_timeout() -> u64 {
+    600
+}
 fn default_deny_patterns() -> Vec<String> {
     vec![
         r"rm\s+-[a-z]*r[a-z]*f[a-z]*\s+(/(\s|$|\*)|~|\$HOME)".into(),
@@ -178,8 +200,12 @@ impl Config {
     ) -> Result<Self> {
         // CLI-оверрайды — самый приоритетный слой.
         let mut cli: Vec<(&str, &str)> = Vec::new();
-        if let Some(u) = cli_base_url { cli.push(("base_url", u)); }
-        if let Some(m) = cli_model { cli.push(("model", m)); }
+        if let Some(u) = cli_base_url {
+            cli.push(("base_url", u));
+        }
+        if let Some(m) = cli_model {
+            cli.push(("model", m));
+        }
 
         let files_existed = global_path.exists() || workspace_path.exists();
         let (merged, issues) = config_layers::load_layered(global_path, workspace_path, &cli)
@@ -190,7 +216,9 @@ impl Config {
         // Config) пропускаем: их корректность обеспечивает маппинг ниже.
         let mut errors: Vec<String> = Vec::new();
         for issue in &issues {
-            if is_legacy_artifact(issue) { continue; }
+            if is_legacy_artifact(issue) {
+                continue;
+            }
             match issue.severity {
                 Severity::Warn => eprintln!("config: {issue}"),
                 Severity::Error => errors.push(format!("{issue}")),
@@ -205,7 +233,10 @@ impl Config {
         // compact_l*, sandbox-таблица): вычитаем его значения, чтобы дефолты
         // theseus задали serde-дефолты полей Config.
         let mut effective = merged;
-        strip_foreign_defaults(&mut effective, &config_layers::ConfigLayer::defaults().toml_table);
+        strip_foreign_defaults(
+            &mut effective,
+            &config_layers::ConfigLayer::defaults().toml_table,
+        );
 
         // Обе схемы (legacy и codex-стиль) → форма структуры Config.
         normalize_sandbox(&mut effective);
@@ -213,8 +244,8 @@ impl Config {
         normalize_compact_levels(&mut effective);
         let explicit_context_limit = effective.get("context_limit_tokens").is_some();
 
-        let mut cfg: Config = Config::deserialize(effective)
-            .context("маппинг смердженной конфигурации в Config")?;
+        let mut cfg: Config =
+            Config::deserialize(effective).context("маппинг смердженной конфигурации в Config")?;
         if !files_existed && cfg.extra_body.is_null() {
             // Прежнее поведение ветки «конфига нет»: thinking включён.
             cfg.extra_body = default_extra_body();
@@ -235,10 +266,11 @@ impl Config {
         // Реестр моделей: без явного base_url URL и лимит контекста берутся
         // из models; неизвестная модель — ошибка с подсказкой ближайших.
         if cfg.base_url.is_none() {
-            let info = models::find_model(&cfg.model)
-                .ok_or_else(|| unknown_model_err(&cfg.model))?;
-            let provider = models::find_provider(&info.provider)
-                .with_context(|| format!("нет провайдера «{}» для модели {}", info.provider, info.id))?;
+            let info =
+                models::find_model(&cfg.model).ok_or_else(|| unknown_model_err(&cfg.model))?;
+            let provider = models::find_provider(&info.provider).with_context(|| {
+                format!("нет провайдера «{}» для модели {}", info.provider, info.id)
+            })?;
             if let Some(note) = &provider.risk_note {
                 eprintln!("config: {note}");
             }
@@ -251,7 +283,9 @@ impl Config {
     }
 
     fn config_path() -> Option<PathBuf> {
-        std::env::var("HOME").ok().map(PathBuf::from)
+        std::env::var("HOME")
+            .ok()
+            .map(PathBuf::from)
             .map(|h| h.join(".config/theseus/config.toml"))
     }
 
@@ -291,8 +325,14 @@ fn unknown_model_err(id: &str) -> anyhow::Error {
 fn is_legacy_artifact(issue: &ConfigIssue) -> bool {
     // Поля Config, отсутствующие в KNOWN_KEYS валидатора, — не «неизвестные».
     const CONFIG_ONLY_KEYS: &[&str] = &[
-        "api_key", "max_output_tokens", "api_timeout_secs", "extra_body",
-        "skill_dirs", "compact_mask_pct", "compact_prune_pct", "compact_summary_pct",
+        "api_key",
+        "max_output_tokens",
+        "api_timeout_secs",
+        "extra_body",
+        "skill_dirs",
+        "compact_mask_pct",
+        "compact_prune_pct",
+        "compact_summary_pct",
     ];
     match issue.path.as_str() {
         "mcp_servers" | "sandbox" => true,
@@ -308,9 +348,13 @@ fn is_legacy_artifact(issue: &ConfigIssue) -> bool {
 /// сохраняется (известная оговорка: значение, совпадающее с чужим defaults,
 /// например `model = "qwen3-coder"`, будет трактовано как незаданное).
 fn strip_foreign_defaults(v: &mut Value, defaults: &Value) {
-    let (Some(table), Some(defs)) = (v.as_table_mut(), defaults.as_table()) else { return };
+    let (Some(table), Some(defs)) = (v.as_table_mut(), defaults.as_table()) else {
+        return;
+    };
     for (key, dv) in defs {
-        let Some(mut existing) = table.get(key).cloned() else { continue };
+        let Some(mut existing) = table.get(key).cloned() else {
+            continue;
+        };
         if existing == *dv {
             table.remove(key);
         } else if existing.is_table() && dv.is_table() {
@@ -328,8 +372,12 @@ fn strip_foreign_defaults(v: &mut Value, defaults: &Value) {
 /// табличная ([sandbox] enabled = ...) сводится к полю `enabled`. Прочие
 /// типы оставляем десериализации — она честно упадёт с ошибкой типа.
 fn normalize_sandbox(v: &mut Value) {
-    let Some(table) = v.as_table_mut() else { return };
-    let Some(Value::Table(t)) = table.get("sandbox").cloned() else { return };
+    let Some(table) = v.as_table_mut() else {
+        return;
+    };
+    let Some(Value::Table(t)) = table.get("sandbox").cloned() else {
+        return;
+    };
     if let Some(Value::Boolean(b)) = t.get("enabled") {
         table.insert("sandbox".into(), Value::Boolean(*b));
     }
@@ -340,9 +388,15 @@ fn normalize_sandbox(v: &mut Value) {
 /// name (порядок — по имени, детерминированно). Нетабличные записи оставляем
 /// как есть: десериализация в Vec<McpServerConfig> честно упадёт.
 fn normalize_mcp_servers(v: &mut Value) {
-    let Some(table) = v.as_table_mut() else { return };
-    let Some(Value::Table(t)) = table.get("mcp_servers").cloned() else { return };
-    if t.values().any(|s| !s.is_table()) { return; }
+    let Some(table) = v.as_table_mut() else {
+        return;
+    };
+    let Some(Value::Table(t)) = table.get("mcp_servers").cloned() else {
+        return;
+    };
+    if t.values().any(|s| !s.is_table()) {
+        return;
+    }
     let mut entries: Vec<(String, toml::Table)> = t
         .iter()
         .filter_map(|(name, val)| val.as_table().map(|tb| (name.clone(), tb.clone())))
@@ -367,25 +421,35 @@ fn as_f64(v: &Value) -> Option<f64> {
 /// (compact_*_pct, проценты). Legacy-поля compact_*_pct, заданные явно,
 /// приоритетнее. Диапазон (0.0, 1.0) уже гарантирован валидатором.
 fn normalize_compact_levels(v: &mut Value) {
-    let Some(table) = v.as_table_mut() else { return };
+    let Some(table) = v.as_table_mut() else {
+        return;
+    };
     for (level, pct) in [
         ("compact_l1", "compact_mask_pct"),
         ("compact_l2", "compact_prune_pct"),
         ("compact_l3", "compact_summary_pct"),
     ] {
-        let Some(f) = table.get(level).and_then(as_f64) else { continue };
-        if table.contains_key(pct) { continue; }
+        let Some(f) = table.get(level).and_then(as_f64) else {
+            continue;
+        };
+        if table.contains_key(pct) {
+            continue;
+        }
         table.insert(pct.into(), Value::Integer((f * 100.0).round() as i64));
     }
 }
 
 /// Пример генерации дефолтного конфига для пользователя
 pub fn write_example_config() -> Result<PathBuf> {
-    let dir = std::env::var("HOME").map(PathBuf::from)?.join(".config/theseus");
+    let dir = std::env::var("HOME")
+        .map(PathBuf::from)?
+        .join(".config/theseus");
     std::fs::create_dir_all(&dir)?;
     let p = dir.join("config.toml");
     if !p.exists() {
-        std::fs::write(&p, r#"# theseus config
+        std::fs::write(
+            &p,
+            r#"# theseus config
 model = "deepseek-v4-flash"
 # base_url = "https://api.deepseek.com/v1"
 # api_key задаётся через env провайдера: DEEPSEEK_API_KEY / KIMI_API_KEY / ZHIPU_API_KEY
@@ -398,7 +462,8 @@ extra_body = { thinking = { type = "enabled" } }
 
 [permission]
 # bash_allow_prefixes = ["make", "docker ps"]
-"#)?;
+"#,
+        )?;
     }
     Ok(p)
 }
@@ -411,8 +476,8 @@ mod tests {
 
     /// Временный каталог для файловых тестов.
     fn temp_dir(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir()
-            .join(format!("theseus_config_{}_{}", std::process::id(), tag));
+        let dir =
+            std::env::temp_dir().join(format!("theseus_config_{}_{}", std::process::id(), tag));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -420,7 +485,9 @@ mod tests {
     /// Ожидаемый base_url провайдера с учётом env-переопределений (зеркало кода).
     fn expected_url(provider: &str) -> String {
         std::env::var("THESEUS_BASE_URL").ok().unwrap_or_else(|| {
-            models::find_provider(provider).unwrap().effective_base_url()
+            models::find_provider(provider)
+                .unwrap()
+                .effective_base_url()
         })
     }
 
@@ -428,8 +495,10 @@ mod tests {
     /// затем вернуть прежние значения. Держит глобальную блокировку.
     fn with_env_vars<R>(vars: &[(&str, Option<&str>)], f: impl FnOnce() -> R) -> R {
         let _guard = ENV_LOCK.lock().unwrap();
-        let saved: Vec<(&str, Option<String>)> =
-            vars.iter().map(|(name, _)| (*name, std::env::var(name).ok())).collect();
+        let saved: Vec<(&str, Option<String>)> = vars
+            .iter()
+            .map(|(name, _)| (*name, std::env::var(name).ok()))
+            .collect();
         for &(name, value) in vars {
             match value {
                 Some(v) => std::env::set_var(name, v),
@@ -459,7 +528,10 @@ mod tests {
         // ...а нетронутый ключ доезжает из global
         assert_eq!(cfg.max_output_tokens, 4096);
         // без явного base_url — резолюция через реестр (провайдер deepseek)
-        assert_eq!(cfg.base_url.as_deref(), Some(expected_url("deepseek").as_str()));
+        assert_eq!(
+            cfg.base_url.as_deref(),
+            Some(expected_url("deepseek").as_str())
+        );
         assert_eq!(cfg.context_limit_tokens, 131_072);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -469,8 +541,16 @@ mod tests {
         let dir = temp_dir("cli_wins");
         let global = dir.join("global.toml");
         let workspace = dir.join("workspace.toml");
-        std::fs::write(&global, "model = \"kimi-k2\"\nbase_url = \"https://g.example/v1\"\n").unwrap();
-        std::fs::write(&workspace, "model = \"deepseek-chat\"\nbase_url = \"https://w.example/v1\"\n").unwrap();
+        std::fs::write(
+            &global,
+            "model = \"kimi-k2\"\nbase_url = \"https://g.example/v1\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            &workspace,
+            "model = \"deepseek-chat\"\nbase_url = \"https://w.example/v1\"\n",
+        )
+        .unwrap();
         let cfg = Config::load_from_paths(
             &global,
             &workspace,
@@ -500,7 +580,9 @@ mod tests {
             None,
             Some("deepseek-chatt"),
         );
-        if let Some(v) = saved { std::env::set_var("THESEUS_BASE_URL", v); }
+        if let Some(v) = saved {
+            std::env::set_var("THESEUS_BASE_URL", v);
+        }
         let err = res.unwrap_err();
         let msg = format!("{err:#}");
         assert!(msg.contains("неизвестная модель"), "msg: {msg}");
@@ -534,7 +616,11 @@ mod tests {
         assert_eq!(cfg.base_url.as_deref(), Some(expected_url("kimi").as_str()));
         assert_eq!(cfg.context_limit_tokens, 131_072);
         // Явно заданный лимит контекста реестр не перекрывает.
-        std::fs::write(&global, "model = \"kimi-k2\"\ncontext_limit_tokens = 120000\n").unwrap();
+        std::fs::write(
+            &global,
+            "model = \"kimi-k2\"\ncontext_limit_tokens = 120000\n",
+        )
+        .unwrap();
         let cfg = Config::load_from_paths(&global, &dir.join("w.toml"), None, None).unwrap();
         assert_eq!(cfg.context_limit_tokens, 120_000);
         let _ = std::fs::remove_dir_all(&dir);
@@ -543,7 +629,8 @@ mod tests {
     #[test]
     fn defaults_preserved_without_files() {
         let dir = temp_dir("defaults");
-        let cfg = Config::load_from_paths(&dir.join("g.toml"), &dir.join("w.toml"), None, None).unwrap();
+        let cfg =
+            Config::load_from_paths(&dir.join("g.toml"), &dir.join("w.toml"), None, None).unwrap();
         assert_eq!(cfg.model, "deepseek-v4-flash");
         assert_eq!(cfg.max_output_tokens, 8_192);
         assert_eq!(cfg.api_timeout_secs, 600);
@@ -555,7 +642,10 @@ mod tests {
         // thinking по умолчанию (режим «вообще без конфига», как раньше)
         assert!(cfg.extra_body.is_object());
         // реестр: deepseek-v4-flash → URL провайдера и лимит 131_072
-        assert_eq!(cfg.base_url.as_deref(), Some(expected_url("deepseek").as_str()));
+        assert_eq!(
+            cfg.base_url.as_deref(),
+            Some(expected_url("deepseek").as_str())
+        );
         assert_eq!(cfg.context_limit_tokens, 131_072);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -566,7 +656,9 @@ mod tests {
         let global = dir.join("global.toml");
         // Форма боевого конфига: [[permission_rules]], [[hooks]], [[mcp_servers]],
         // web_allowed_domains и прочие поля текущей схемы верхнего уровня.
-        std::fs::write(&global, r#"
+        std::fs::write(
+            &global,
+            r#"
 model = "deepseek-v4-pro"
 web_allowed_domains = ["duckduckgo.com", "api.duckduckgo.com", "wikipedia.org", "ru.wikipedia.org"]
 context_limit_tokens = 120000
@@ -599,7 +691,9 @@ args = ["mock_mcp.py"]
 name = "httpmock"
 url = "http://127.0.0.1:8901/mcp"
 elicit = "accept"
-"#).unwrap();
+"#,
+        )
+        .unwrap();
         let cfg = Config::load_from_paths(&global, &dir.join("w.toml"), None, None).unwrap();
         assert_eq!(cfg.model, "deepseek-v4-pro");
         assert_eq!(cfg.web_allowed_domains.len(), 4);
@@ -620,7 +714,10 @@ elicit = "accept"
         assert_eq!(cfg.mcp_servers[0].command, "python3");
         assert_eq!(cfg.mcp_servers[0].args, vec!["mock_mcp.py"]);
         assert_eq!(cfg.mcp_servers[1].name, "httpmock");
-        assert_eq!(cfg.mcp_servers[1].url.as_deref(), Some("http://127.0.0.1:8901/mcp"));
+        assert_eq!(
+            cfg.mcp_servers[1].url.as_deref(),
+            Some("http://127.0.0.1:8901/mcp")
+        );
         assert_eq!(cfg.mcp_servers[1].elicit.as_deref(), Some("accept"));
         assert!(cfg.extra_body.is_object());
         // Явный лимит контекста сохраняется (реестр его не перекрывает).
@@ -657,7 +754,10 @@ elicit = "accept"
     #[test]
     fn api_key_priority_explicit_then_provider_then_generic() {
         with_env_vars(
-            &[("KIMI_API_KEY", Some("kimi-env")), ("DEEPSEEK_API_KEY", Some("ds-env"))],
+            &[
+                ("KIMI_API_KEY", Some("kimi-env")),
+                ("DEEPSEEK_API_KEY", Some("ds-env")),
+            ],
             || {
                 let dir = temp_dir("env_key_priority");
                 let global = dir.join("global.toml");
@@ -681,16 +781,15 @@ elicit = "accept"
     #[test]
     fn api_key_deepseek_legacy_env_preserved() {
         with_env_vars(
-            &[("DEEPSEEK_API_KEY", Some("sk-ds")), ("THESEUS_API_KEY", None)],
+            &[
+                ("DEEPSEEK_API_KEY", Some("sk-ds")),
+                ("THESEUS_API_KEY", None),
+            ],
             || {
                 let dir = temp_dir("env_key_deepseek");
-                let cfg = Config::load_from_paths(
-                    &dir.join("g.toml"),
-                    &dir.join("w.toml"),
-                    None,
-                    None,
-                )
-                .unwrap();
+                let cfg =
+                    Config::load_from_paths(&dir.join("g.toml"), &dir.join("w.toml"), None, None)
+                        .unwrap();
                 assert_eq!(cfg.api_key.as_deref(), Some("sk-ds"));
                 let _ = std::fs::remove_dir_all(&dir);
             },

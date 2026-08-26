@@ -69,7 +69,9 @@ fn main() -> Result<()> {
     let workspace = args.workspace.canonicalize().unwrap_or(args.workspace);
     if args.sessions {
         let dir = workspace.join(".theseus");
-        let mut files: Vec<_> = std::fs::read_dir(&dir).into_iter().flatten()
+        let mut files: Vec<_> = std::fs::read_dir(&dir)
+            .into_iter()
+            .flatten()
             .flatten()
             .filter(|e| e.file_name().to_string_lossy().starts_with("session-"))
             .map(|e| e.path())
@@ -84,7 +86,9 @@ fn main() -> Result<()> {
         return Ok(());
     }
     let mut cfg = Config::load(args.base_url.as_deref(), args.model.as_deref())?;
-    if let Some(l) = args.context_limit { cfg.context_limit_tokens = l; }
+    if let Some(l) = args.context_limit {
+        cfg.context_limit_tokens = l;
+    }
 
     // doctor — диагностика до запуска агента (ключ API, sandbox, MCP, web, пороги)
     if args.doctor {
@@ -92,21 +96,31 @@ fn main() -> Result<()> {
         std::process::exit(code);
     }
 
-    let mode = if args.max { Mode::Max }
-               else if args.yolo { Mode::Yolo }
-               else if args.prompt.is_some() { Mode::DontAsk }  // headless без yolo — авто-запреты
-               else { Mode::Ask };
+    let mode = if args.max {
+        Mode::Max
+    } else if args.yolo {
+        Mode::Yolo
+    } else if args.prompt.is_some() {
+        Mode::DontAsk
+    }
+    // headless без yolo — авто-запреты
+    else {
+        Mode::Ask
+    };
     // общий атомик режима: /mode в TUI переключает его в рантайме (и посреди хода);
     // стартует с реального режима запуска — индикатор виден сразу
     let controls = Controls::default();
-    controls.mode_atomic.store(mode_code(mode), std::sync::atomic::Ordering::Relaxed);
+    controls
+        .mode_atomic
+        .store(mode_code(mode), std::sync::atomic::Ordering::Relaxed);
     let perms = PermissionEngine::new(mode, cfg.permission.clone(), &workspace)
         .with_rules(cfg.permission_rules.clone())
         .with_mode_override(controls.mode_atomic.clone());
     let mut agent = Agent::new(cfg.clone(), perms, &workspace, args.max_turns, None)?;
     // MCP stdio/HTTP-серверы из конфига
     if !cfg.mcp_servers.is_empty() {
-        let reg = mcp::McpRegistry::connect_all(&cfg.mcp_servers, &mut |msg| eprintln!("[mcp] {msg}"));
+        let reg =
+            mcp::McpRegistry::connect_all(&cfg.mcp_servers, &mut |msg| eprintln!("[mcp] {msg}"));
         if !reg.is_empty() {
             agent.mcp = Some(reg);
         }
@@ -115,12 +129,18 @@ fn main() -> Result<()> {
     // resume
     if let Some(path) = &args.resume {
         let messages = Agent::load_session(path)?;
-        let prompt = args.prompt.clone()
+        let prompt = args
+            .prompt
+            .clone()
             .unwrap_or_else(|| "Продолжи с того места, где остановились.".into());
         return run_headless_resume(agent, messages, &prompt);
     }
 
-    let model_info = format!("{} @ {}", cfg.model, cfg.base_url.clone().unwrap_or_default());
+    let model_info = format!(
+        "{} @ {}",
+        cfg.model,
+        cfg.base_url.clone().unwrap_or_default()
+    );
     agent.controls = controls.clone();
 
     // тестовая вставка в prompt_slot (проверка преемпции стрима: Immediate, как Ctrl+S)
@@ -130,9 +150,13 @@ fn main() -> Result<()> {
         let sec = args.inject_after_sec;
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_secs(sec));
-            slot.lock().unwrap().push(theseus::scheduler::QueuedPrompt::new(
-                text, theseus::scheduler::Priority::Immediate,
-                theseus::scheduler::PromptSource::User));
+            slot.lock()
+                .unwrap()
+                .push(theseus::scheduler::QueuedPrompt::new(
+                    text,
+                    theseus::scheduler::Priority::Immediate,
+                    theseus::scheduler::PromptSource::User,
+                ));
         });
     }
 
@@ -140,15 +164,29 @@ fn main() -> Result<()> {
         None => {
             // интерактивный TUI без стартовой задачи
             let broker = tui::PermBroker::new();
-            tui::run_tui(agent, broker, None, controls, model_info,
-                         cfg.model, cfg.reasoning_effort)?;
+            tui::run_tui(
+                agent,
+                broker,
+                None,
+                controls,
+                model_info,
+                cfg.model,
+                cfg.reasoning_effort,
+            )?;
         }
         Some(p) => {
             if atty::is_terminal() {
                 // есть терминал и задача → TUI с первой задачей
                 let broker = tui::PermBroker::new();
-                tui::run_tui(agent, broker, Some(p), controls, model_info,
-                             cfg.model, cfg.reasoning_effort)?;
+                tui::run_tui(
+                    agent,
+                    broker,
+                    Some(p),
+                    controls,
+                    model_info,
+                    cfg.model,
+                    cfg.reasoning_effort,
+                )?;
             } else {
                 run_headless(agent, &p)?;
             }
@@ -177,7 +215,14 @@ mod tests {
     /// описаны только в расширенной справке argparse).
     #[test]
     fn usage_lists_all_public_flags() {
-        for flag in ["--context-limit", "--resume", "--sessions", "--max-turns", "--yolo", "--max"] {
+        for flag in [
+            "--context-limit",
+            "--resume",
+            "--sessions",
+            "--max-turns",
+            "--yolo",
+            "--max",
+        ] {
             assert!(USAGE.contains(flag), "в USAGE нет флага {flag}");
         }
     }

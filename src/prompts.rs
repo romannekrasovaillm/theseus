@@ -153,7 +153,10 @@ pub struct SkillDigest {
 impl SkillDigest {
     /// Создать дайджест из имени и описания.
     pub fn new(name: impl Into<String>, desc: impl Into<String>) -> Self {
-        SkillDigest { name: name.into(), desc: desc.into() }
+        SkillDigest {
+            name: name.into(),
+            desc: desc.into(),
+        }
     }
 }
 
@@ -209,7 +212,10 @@ impl PromptBuilder {
 
     /// Полностью пустой сборщик: даже базовые инструкции отключены.
     pub fn empty() -> Self {
-        PromptBuilder { base: String::new(), ..Self::new() }
+        PromptBuilder {
+            base: String::new(),
+            ..Self::new()
+        }
     }
 
     /// Заменить базовые инструкции. Пустая (после trim) строка — секция пропускается.
@@ -270,7 +276,11 @@ impl PromptBuilder {
         if let Some(s) = self.env.as_ref().and_then(EnvContext::render) {
             sections.push(s);
         }
-        if let Some(s) = render_agents_md(&self.agents_global, &self.agents_workspace, self.agents_md_limit) {
+        if let Some(s) = render_agents_md(
+            &self.agents_global,
+            &self.agents_workspace,
+            self.agents_md_limit,
+        ) {
             sections.push(s);
         }
         if let Some(s) = render_skills(&self.skills) {
@@ -419,7 +429,8 @@ fn git_branch_near(start: &Path) -> Option<String> {
                 return None;
             }
             let bytes = text.as_bytes();
-            let is_hash = (7..=64).contains(&bytes.len()) && bytes.iter().all(u8::is_ascii_hexdigit);
+            let is_hash =
+                (7..=64).contains(&bytes.len()) && bytes.iter().all(u8::is_ascii_hexdigit);
             return if is_hash {
                 Some(text.chars().take(7).collect())
             } else {
@@ -438,7 +449,11 @@ mod tests {
 
     /// Уникальный временный каталог для теста (тесты бегут параллельно).
     fn temp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("theseus_prompts_test_{}_{}", std::process::id(), tag));
+        let dir = std::env::temp_dir().join(format!(
+            "theseus_prompts_test_{}_{}",
+            std::process::id(),
+            tag
+        ));
         fs::create_dir_all(&dir).unwrap();
         dir
     }
@@ -467,7 +482,10 @@ mod tests {
     #[test]
     fn section_order_is_fixed() {
         let out = PromptBuilder::new()
-            .env(EnvContext { os: "linux".into(), ..Default::default() })
+            .env(EnvContext {
+                os: "linux".into(),
+                ..Default::default()
+            })
             .agents_md("global rules", "workspace rules")
             .skills(&[skill("demo", "desc")])
             .plan_mode(true)
@@ -481,7 +499,10 @@ mod tests {
             out.find("## Plan mode").unwrap(),
             out.find("## Goal").unwrap(),
         ];
-        assert!(order.windows(2).all(|w| w[0] < w[1]), "порядок секций нарушен: {order:?}");
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "порядок секций нарушен: {order:?}"
+        );
     }
 
     #[test]
@@ -506,8 +527,14 @@ mod tests {
 
     #[test]
     fn sections_separated_by_blank_line() {
-        let out = PromptBuilder::empty().base("AAA").goal(Some("BBB".to_string())).build();
-        assert!(out.contains("AAA\n\n## Goal"), "секции склеены пустой строкой: {out:?}");
+        let out = PromptBuilder::empty()
+            .base("AAA")
+            .goal(Some("BBB".to_string()))
+            .build();
+        assert!(
+            out.contains("AAA\n\n## Goal"),
+            "секции склеены пустой строкой: {out:?}"
+        );
     }
 
     #[test]
@@ -529,17 +556,29 @@ mod tests {
     #[test]
     fn env_all_empty_yields_none() {
         assert!(EnvContext::default().render().is_none());
-        let env = EnvContext { os: "  ".into(), ..Default::default() };
-        assert!(env.render().is_none(), "whitespace-поля — это пустая секция");
+        let env = EnvContext {
+            os: "  ".into(),
+            ..Default::default()
+        };
+        assert!(
+            env.render().is_none(),
+            "whitespace-поля — это пустая секция"
+        );
     }
 
     #[test]
     fn env_git_branch_line() {
-        let env = EnvContext { git_branch: Some("main".into()), ..Default::default() };
+        let env = EnvContext {
+            git_branch: Some("main".into()),
+            ..Default::default()
+        };
         let section = env.render().unwrap();
         assert!(section.contains("- Git branch: main"));
         // пустая ветка — как отсутствующая
-        let env = EnvContext { git_branch: Some("  ".into()), ..Default::default() };
+        let env = EnvContext {
+            git_branch: Some("  ".into()),
+            ..Default::default()
+        };
         assert!(env.render().is_none());
     }
 
@@ -549,13 +588,20 @@ mod tests {
         assert!(!env.os.is_empty());
         assert!(!env.cwd.is_empty());
         assert_eq!(env.date, "2026-07-18");
-        assert!(env.render().is_some(), "секция рендерится даже без ветки git");
+        assert!(
+            env.render().is_some(),
+            "секция рендерится даже без ветки git"
+        );
     }
 
     #[test]
     fn agents_md_layers_glued_with_subheaders() {
-        let out = PromptBuilder::empty().agents_md("GLOBAL BODY", "WORKSPACE BODY").build();
-        let g = out.find("### Global layer (~/.kimi-code/AGENTS.md)").unwrap();
+        let out = PromptBuilder::empty()
+            .agents_md("GLOBAL BODY", "WORKSPACE BODY")
+            .build();
+        let g = out
+            .find("### Global layer (~/.kimi-code/AGENTS.md)")
+            .unwrap();
         let w = out.find("### Workspace layer (AGENTS.md)").unwrap();
         assert!(g < w, "глобальный слой должен идти раньше workspace");
         assert!(out.contains("GLOBAL BODY"));
@@ -580,8 +626,14 @@ mod tests {
     #[test]
     fn agents_md_truncation_with_note() {
         let long = "a".repeat(100);
-        let out = PromptBuilder::empty().agents_md_limit(10).agents_md(long, "").build();
-        assert!(out.contains("truncated"), "должна быть пометка об обрезке: {out}");
+        let out = PromptBuilder::empty()
+            .agents_md_limit(10)
+            .agents_md(long, "")
+            .build();
+        assert!(
+            out.contains("truncated"),
+            "должна быть пометка об обрезке: {out}"
+        );
         assert!(out.contains("100"), "в пометке указан полный размер: {out}");
         assert!(out.contains("aaaaaaaaaa"), "голова — ровно 10 символов");
         assert!(!out.contains("aaaaaaaaaaa"), "11-й символ уже обрезан");
@@ -591,8 +643,14 @@ mod tests {
     fn agents_md_truncation_is_char_safe_for_cyrillic() {
         // 120 символов кириллицы (2 байта/символ в UTF-8): побайтовая обрезка сломала бы границу.
         let text = "Привет".repeat(20);
-        let out = PromptBuilder::empty().agents_md_limit(13).agents_md("", text).build();
-        assert!(out.contains("ПриветПриветП"), "13 символов = 2 слова + 'П': {out}");
+        let out = PromptBuilder::empty()
+            .agents_md_limit(13)
+            .agents_md("", text)
+            .build();
+        assert!(
+            out.contains("ПриветПриветП"),
+            "13 символов = 2 слова + 'П': {out}"
+        );
         assert!(out.contains("truncated"));
     }
 
@@ -608,16 +666,26 @@ mod tests {
     #[test]
     fn skills_desc_truncated_and_single_line() {
         let long_desc = "x".repeat(200) + "\nnewline-word";
-        let out = PromptBuilder::empty().skills(&[skill("s", &long_desc)]).build();
+        let out = PromptBuilder::empty()
+            .skills(&[skill("s", &long_desc)])
+            .build();
         let expect_head = format!("{}...", "x".repeat(SKILL_DESC_MAX_CHARS));
-        assert!(out.contains(&expect_head), "описание усечено до 80 + ...: {out}");
-        assert!(!out.contains("newline-word"), "перевод строки свёрнут, хвост отрезан");
+        assert!(
+            out.contains(&expect_head),
+            "описание усечено до 80 + ...: {out}"
+        );
+        assert!(
+            !out.contains("newline-word"),
+            "перевод строки свёрнут, хвост отрезан"
+        );
     }
 
     #[test]
     fn skills_cap_with_more_note() {
         let total = MAX_SKILLS_IN_DIGEST + 10;
-        let skills: Vec<SkillDigest> = (0..total).map(|i| skill(&format!("sk-{i:02}"), "d")).collect();
+        let skills: Vec<SkillDigest> = (0..total)
+            .map(|i| skill(&format!("sk-{i:02}"), "d"))
+            .collect();
         let out = PromptBuilder::empty().skills(&skills).build();
         let last_shown = format!("sk-{:02}", MAX_SKILLS_IN_DIGEST - 1);
         let first_hidden = format!("sk-{MAX_SKILLS_IN_DIGEST:02}");
@@ -630,7 +698,11 @@ mod tests {
     #[test]
     fn skills_empty_name_entries_skipped() {
         let out = PromptBuilder::empty()
-            .skills(&[skill("", "no name"), skill("  ", "blank"), skill("ok", "yes")])
+            .skills(&[
+                skill("", "no name"),
+                skill("  ", "blank"),
+                skill("ok", "yes"),
+            ])
             .build();
         assert!(out.contains("- ok: yes"));
         assert!(!out.contains("no name"));
@@ -657,14 +729,23 @@ mod tests {
         let plan_pos = out.find("## Plan mode").unwrap();
         let goal_pos = out.find("## Goal").unwrap();
         assert!(plan_pos < goal_pos, "goal — последняя секция");
-        assert!(out.trim_end().ends_with("победить"), "цель триммится: {out:?}");
+        assert!(
+            out.trim_end().ends_with("победить"),
+            "цель триммится: {out:?}"
+        );
     }
 
     #[test]
     fn goal_empty_or_none_skipped() {
         assert!(!PromptBuilder::empty().goal(None).build().contains("Goal"));
-        assert!(!PromptBuilder::empty().goal(Some(String::new())).build().contains("Goal"));
-        assert!(!PromptBuilder::empty().goal(Some("   ".into())).build().contains("## Goal"));
+        assert!(!PromptBuilder::empty()
+            .goal(Some(String::new()))
+            .build()
+            .contains("Goal"));
+        assert!(!PromptBuilder::empty()
+            .goal(Some("   ".into()))
+            .build()
+            .contains("## Goal"));
     }
 
     #[test]

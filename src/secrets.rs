@@ -340,7 +340,10 @@ mod tests {
         let text = format!("ключ: {OPENAI_KEY}, дальше обычный текст");
         let out = redactor.redact(&text);
         // Открыт только постоянный префикс "sk-" (keep_prefix = 3).
-        assert!(out.contains("sk-…[REDACTED openai-api-key]"), "вывод: {out}");
+        assert!(
+            out.contains("sk-…[REDACTED openai-api-key]"),
+            "вывод: {out}"
+        );
         assert!(!out.contains("proj_abcd1234"), "тело ключа протекло: {out}");
         assert!(redactor.is_clean(&out));
     }
@@ -354,11 +357,17 @@ mod tests {
             out.contains("Bearer …[REDACTED bearer-token]"),
             "вывод: {out}"
         );
-        assert!(!out.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"), "токен протек: {out}");
+        assert!(
+            !out.contains("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9"),
+            "токен протек: {out}"
+        );
 
         // Регистр слова не важен, префикс сохраняется как в оригинале.
         let lower = redactor.redact(&format!("bearer {BEARER_TOKEN}"));
-        assert!(lower.starts_with("bearer …[REDACTED bearer-token]"), "вывод: {lower}");
+        assert!(
+            lower.starts_with("bearer …[REDACTED bearer-token]"),
+            "вывод: {lower}"
+        );
     }
 
     #[test]
@@ -367,12 +376,21 @@ mod tests {
         let text = "export DEEPSEEK_API_KEY=dk-9f8e7d6c5b4a3210fedc && env";
         let out = redactor.redact(text);
         // keep_prefix = 17: открыто ровно "DEEPSEEK_API_KEY=".
-        assert!(out.contains("DEEPSEEK_API_KEY=…[REDACTED deepseek-api-key]"), "вывод: {out}");
-        assert!(!out.contains("9f8e7d6c5b4a3210"), "значение протекло: {out}");
+        assert!(
+            out.contains("DEEPSEEK_API_KEY=…[REDACTED deepseek-api-key]"),
+            "вывод: {out}"
+        );
+        assert!(
+            !out.contains("9f8e7d6c5b4a3210"),
+            "значение протекло: {out}"
+        );
 
         // Вариант в кавычках: значение тоже маскируется.
         let quoted = redactor.redact("DEEPSEEK_API_KEY=\"dk-12345678abcd\"");
-        assert!(!quoted.contains("dk-12345678abcd"), "значение протекло: {quoted}");
+        assert!(
+            !quoted.contains("dk-12345678abcd"),
+            "значение протекло: {quoted}"
+        );
     }
 
     #[test]
@@ -397,8 +415,14 @@ mod tests {
         let redactor = Redactor::with_builtin_rules();
         let text = format!("aws_access_key_id = {AWS_KEY}");
         let out = redactor.redact(&text);
-        assert!(out.contains("AKIA…[REDACTED aws-access-key-id]"), "вывод: {out}");
-        assert!(!out.contains("IOSFODNN7EXAMPLE"), "тело ключа протекло: {out}");
+        assert!(
+            out.contains("AKIA…[REDACTED aws-access-key-id]"),
+            "вывод: {out}"
+        );
+        assert!(
+            !out.contains("IOSFODNN7EXAMPLE"),
+            "тело ключа протекло: {out}"
+        );
     }
 
     #[test]
@@ -411,7 +435,10 @@ mod tests {
         let text = format!("до\n{pem}\nпосле");
         let out = redactor.redact(&text);
         assert_eq!(out, "до\n…[REDACTED pem-private-key]\nпосле");
-        assert!(!out.contains("b3BlbnNzaC1rZXktdjE"), "тело ключа протекло: {out}");
+        assert!(
+            !out.contains("b3BlbnNzaC1rZXktdjE"),
+            "тело ключа протекло: {out}"
+        );
 
         // RSA-вариант заголовка тоже покрыт.
         let rsa = "-----BEGIN RSA PRIVATE KEY-----\nMIIabc\n-----END RSA PRIVATE KEY-----";
@@ -435,16 +462,16 @@ mod tests {
         // keep_prefix внутри совпадения.
         let rule = SecretRule::new("demo", r"tok-[0-9]{6}", 4).unwrap();
         let redactor = Redactor::new(vec![rule]);
-        assert_eq!(redactor.redact("x tok-123456 y"), "x tok-…[REDACTED demo] y");
+        assert_eq!(
+            redactor.redact("x tok-123456 y"),
+            "x tok-…[REDACTED demo] y"
+        );
 
         // keep_prefix больше длины совпадения: совпадение сохраняется
         // целиком, маркер добавляется, паники на срезе нет.
         let wide = SecretRule::new("wide", r"tok-[0-9]{6}", 100).unwrap();
         let redactor = Redactor::new(vec![wide]);
-        assert_eq!(
-            redactor.redact("tok-123456"),
-            "tok-123456…[REDACTED wide]"
-        );
+        assert_eq!(redactor.redact("tok-123456"), "tok-123456…[REDACTED wide]");
     }
 
     #[test]
@@ -492,8 +519,15 @@ mod tests {
                     склейка:prefix-theseus-alpha-token-9f8e7d6c5b4a-suffix; \
                     повтор theseus-alpha-token-9f8e7d6c5b4a";
         let out = redactor.redact(text);
-        assert!(!out.contains("theseus-alpha-token-9f8e7d6c5b4a"), "значение протекло: {out}");
-        assert_eq!(out.matches("[REDACTED env:THESEUS_TEST_SECRETS_ALPHA]").count(), 3);
+        assert!(
+            !out.contains("theseus-alpha-token-9f8e7d6c5b4a"),
+            "значение протекло: {out}"
+        );
+        assert_eq!(
+            out.matches("[REDACTED env:THESEUS_TEST_SECRETS_ALPHA]")
+                .count(),
+            3
+        );
         // Имя переменной само по себе — не секрет и остаётся видимым.
         assert!(redactor.is_clean("THESEUS_TEST_SECRETS_ALPHA"));
         // Скан находит env-правило по имени.
@@ -523,7 +557,10 @@ mod tests {
         let _guard = EnvGuard::set("THESEUS_TEST_SECRETS_META", "a.b+c*d(e)f[g]h^i$j\\k|l?m");
         let redactor = Redactor::from_env_keys(&["THESEUS_TEST_SECRETS_META"]);
         let out = redactor.redact("утечка: a.b+c*d(e)f[g]h^i$j\\k|l?m конец");
-        assert!(!out.contains("a.b+c*d(e)f[g]h^i$j\\k|l?m"), "значение протекло: {out}");
+        assert!(
+            !out.contains("a.b+c*d(e)f[g]h^i$j\\k|l?m"),
+            "значение протекло: {out}"
+        );
         // Похожая, но не точная строка не маскируется.
         assert!(redactor.is_clean("aXb+c*d(e)f[g]h^i$j\\k|l?m"));
     }
@@ -563,7 +600,10 @@ mod tests {
         let _guard = EnvGuard::set("THESEUS_TEST_SECRETS_UNICODE", "секретный-токен-123");
         let redactor = Redactor::from_env_keys(&["THESEUS_TEST_SECRETS_UNICODE"]);
         let out = redactor.redact("утечка секретный-токен-123 в логе");
-        assert!(!out.contains("секретный-токен-123"), "значение протекло: {out}");
+        assert!(
+            !out.contains("секретный-токен-123"),
+            "значение протекло: {out}"
+        );
 
         // keep_prefix по символам на кириллице.
         let rule = SecretRule::new("uni", r"секрет[0-9]+", 7).unwrap();
@@ -574,9 +614,8 @@ mod tests {
     #[test]
     fn redact_is_idempotent() {
         let redactor = Redactor::with_builtin_rules();
-        let text = format!(
-            "ключи: {OPENAI_KEY}, {AWS_KEY}, hex {HEX_TOKEN}, bearer {BEARER_TOKEN}"
-        );
+        let text =
+            format!("ключи: {OPENAI_KEY}, {AWS_KEY}, hex {HEX_TOKEN}, bearer {BEARER_TOKEN}");
         let once = redactor.redact(&text);
         let twice = redactor.redact(&once);
         assert_eq!(once, twice, "повторная маскировка изменила текст: {twice}");
@@ -604,6 +643,9 @@ mod tests {
         assert!(redactor.is_clean(&out));
         // В debug-сборке замерено ~1 с; порог с запасом ловит только
         // патологические регрессии (катастрофический бэктрекинг и т.п.).
-        assert!(elapsed < Duration::from_secs(5), "слишком медленно: {elapsed:?}");
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "слишком медленно: {elapsed:?}"
+        );
     }
 }

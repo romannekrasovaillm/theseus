@@ -163,38 +163,108 @@ const RAW_LINE_RULES: &[(Language, RiskLevel, &str, &str)] = &[
     // --- Python ---
     // Прямой shell-out строкой: в сгенерированном коде почти всегда
     // означает конкатенацию команды с внешними данными.
-    (Language::Python, RiskLevel::High, "python/os-system", r"\bos\.system\s*\("),
+    (
+        Language::Python,
+        RiskLevel::High,
+        "python/os-system",
+        r"\bos\.system\s*\(",
+    ),
     // subprocess с shell=True — тот же shell-out через /bin/sh.
-    (Language::Python, RiskLevel::High, "python/subprocess-shell-true", r"\bsubprocess\.\w+\s*\([^()\n]*\bshell\s*=\s*True\b"),
+    (
+        Language::Python,
+        RiskLevel::High,
+        "python/subprocess-shell-true",
+        r"\bsubprocess\.\w+\s*\([^()\n]*\bshell\s*=\s*True\b",
+    ),
     // eval/exec кода: не shell, но исполнение произвольного выражения.
-    (Language::Python, RiskLevel::Medium, "python/eval-exec", r"\b(?:eval|exec)\s*\("),
+    (
+        Language::Python,
+        RiskLevel::Medium,
+        "python/eval-exec",
+        r"\b(?:eval|exec)\s*\(",
+    ),
     // pickle.load(s) на недоверенных данных = исполнение произвольного кода.
-    (Language::Python, RiskLevel::High, "python/pickle-load", r"\bpickle\.loads?\s*\("),
+    (
+        Language::Python,
+        RiskLevel::High,
+        "python/pickle-load",
+        r"\bpickle\.loads?\s*\(",
+    ),
     // Деструктивное удаление дерева каталогов.
-    (Language::Python, RiskLevel::Medium, "python/shutil-rmtree", r"\bshutil\.rmtree\s*\("),
+    (
+        Language::Python,
+        RiskLevel::Medium,
+        "python/shutil-rmtree",
+        r"\bshutil\.rmtree\s*\(",
+    ),
     // Устаревший shell-out; в новом коде — сигнал переписать на subprocess.
-    (Language::Python, RiskLevel::Low, "python/os-popen", r"\bos\.popen\s*\("),
+    (
+        Language::Python,
+        RiskLevel::Low,
+        "python/os-popen",
+        r"\bos\.popen\s*\(",
+    ),
     // --- Shell ---
     // Катастрофическое удаление: корень, его содержимое или домашний каталог.
-    (Language::Shell, RiskLevel::High, "shell/rm-rf-root", r"\brm\s+-(?:[rR][fF]|[fF][rR])\s+(?:--[a-z-]+\s+)*(?:/(?:[\s*]|$)|~(?:[\s/]|$))"),
+    (
+        Language::Shell,
+        RiskLevel::High,
+        "shell/rm-rf-root",
+        r"\brm\s+-(?:[rR][fF]|[fF][rR])\s+(?:--[a-z-]+\s+)*(?:/(?:[\s*]|$)|~(?:[\s/]|$))",
+    ),
     // Загрузка и немедленное исполнение чужого скрипта.
-    (Language::Shell, RiskLevel::High, "shell/curl-pipe-shell", r"\b(?:curl|wget)\b[^|&#\n]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh)\b"),
+    (
+        Language::Shell,
+        RiskLevel::High,
+        "shell/curl-pipe-shell",
+        r"\b(?:curl|wget)\b[^|&#\n]*\|\s*(?:sudo\s+)?(?:bash|sh|zsh)\b",
+    ),
     // Всем полный доступ: почти всегда ошибка, а не осознанное решение.
-    (Language::Shell, RiskLevel::Medium, "shell/chmod-777", r"\bchmod\s+(?:-[a-zA-Z]+\s+)*777\b"),
+    (
+        Language::Shell,
+        RiskLevel::Medium,
+        "shell/chmod-777",
+        r"\bchmod\s+(?:-[a-zA-Z]+\s+)*777\b",
+    ),
     // Исполнение собранной строки.
-    (Language::Shell, RiskLevel::Medium, "shell/eval", r"\beval\s+\S"),
+    (
+        Language::Shell,
+        RiskLevel::Medium,
+        "shell/eval",
+        r"\beval\s+\S",
+    ),
     // --- Rust ---
     // Блок unsafe: компилятор разрешит, человек обязан посмотреть.
-    (Language::Rust, RiskLevel::Medium, "rust/unsafe-block", r"\bunsafe\s*\{"),
+    (
+        Language::Rust,
+        RiskLevel::Medium,
+        "rust/unsafe-block",
+        r"\bunsafe\s*\{",
+    ),
     // Имя программы собирается format!-строкой — признак инъекции аргументов.
-    (Language::Rust, RiskLevel::Medium, "rust/command-format-string", r"\bCommand::new\s*\(\s*format!\s*\("),
+    (
+        Language::Rust,
+        RiskLevel::Medium,
+        "rust/command-format-string",
+        r"\bCommand::new\s*\(\s*format!\s*\(",
+    ),
     // --- JavaScript / TypeScript ---
     // eval кода (в т.ч. window.eval).
     (Language::Js, RiskLevel::Medium, "js/eval", r"\beval\s*\("),
     // exec/execSync из child_process: shell-out строкой.
-    (Language::Js, RiskLevel::High, "js/child-process-exec", r"\bchild_process\b[^;\n]*\bexec|\bexecSync\s*\("),
+    (
+        Language::Js,
+        RiskLevel::High,
+        "js/child-process-exec",
+        r"\bchild_process\b[^;\n]*\bexec|\bexecSync\s*\(",
+    ),
     // Рекурсивное удаление через fs.
-    (Language::Js, RiskLevel::Medium, "js/fs-rmsync-recursive", r"\brmSync\s*\([^()\n]*\brecursive\s*:\s*true"),
+    (
+        Language::Js,
+        RiskLevel::Medium,
+        "js/fs-rmsync-recursive",
+        r"\brmSync\s*\([^()\n]*\brecursive\s*:\s*true",
+    ),
 ];
 
 /// Скомпилированные построчные правила (ленивая инициализация, раз на процесс).
@@ -204,9 +274,12 @@ fn line_rules() -> &'static [LineRule] {
         RAW_LINE_RULES
             .iter()
             .filter_map(|&(lang, level, rule, pattern)| {
-                Regex::new(pattern)
-                    .ok()
-                    .map(|re| LineRule { lang, level, rule, re })
+                Regex::new(pattern).ok().map(|re| LineRule {
+                    lang,
+                    level,
+                    rule,
+                    re,
+                })
             })
             .collect()
     })
@@ -337,12 +410,18 @@ pub fn report(risks: &[Risk]) -> String {
     let mut out = String::new();
     if risks.is_empty() {
         let v = verdict(risks).as_str();
-        let _ = writeln!(out, "Результат сканирования: вердикт {v}, рисков не найдено.");
+        let _ = writeln!(
+            out,
+            "Результат сканирования: вердикт {v}, рисков не найдено."
+        );
         return out;
     }
 
     let high = risks.iter().filter(|r| r.level == RiskLevel::High).count();
-    let medium = risks.iter().filter(|r| r.level == RiskLevel::Medium).count();
+    let medium = risks
+        .iter()
+        .filter(|r| r.level == RiskLevel::Medium)
+        .count();
     let low = risks.len() - high - medium;
     let v = verdict(risks).as_str();
     let total = risks.len();
@@ -492,7 +571,10 @@ mod tests {
 
     #[test]
     fn shell_chmod_777_and_eval_flagged() {
-        let risks = scan_code("setup.sh", "chmod 777 data\nchmod -R 777 /srv\neval \"$cmd\"\n");
+        let risks = scan_code(
+            "setup.sh",
+            "chmod 777 data\nchmod -R 777 /srv\neval \"$cmd\"\n",
+        );
         assert_eq!(risks.len(), 3, "находки: {risks:?}");
         assert_eq!(risks[0].rule, "shell/chmod-777");
         assert_eq!(risks[0].level, RiskLevel::Medium);
@@ -559,8 +641,16 @@ mod tests {
         assert_eq!(risk.rule, "aws-access-key-id");
         assert_eq!(risk.level, RiskLevel::High);
         // Сниппет маскируется: тело ключа не протекает в отчёт.
-        assert!(!risk.snippet.contains("IOSFODNN7EXAMPLE"), "сниппет: {}", risk.snippet);
-        assert!(risk.snippet.contains("[REDACTED aws-access-key-id]"), "сниппет: {}", risk.snippet);
+        assert!(
+            !risk.snippet.contains("IOSFODNN7EXAMPLE"),
+            "сниппет: {}",
+            risk.snippet
+        );
+        assert!(
+            risk.snippet.contains("[REDACTED aws-access-key-id]"),
+            "сниппет: {}",
+            risk.snippet
+        );
     }
 
     #[test]
@@ -570,7 +660,11 @@ mod tests {
         assert_eq!(risks.len(), 1, "находки: {risks:?}");
         assert_eq!(risks[0].rule, "github-token");
         assert_eq!(risks[0].level, RiskLevel::High);
-        assert!(!risks[0].snippet.contains("ABCDEFGHIJKLMNOP"), "сниппет: {}", risks[0].snippet);
+        assert!(
+            !risks[0].snippet.contains("ABCDEFGHIJKLMNOP"),
+            "сниппет: {}",
+            risks[0].snippet
+        );
     }
 
     #[test]
@@ -585,14 +679,29 @@ mod tests {
     fn verdict_aggregation() {
         assert_eq!(verdict(&[]), ScanVerdict::Clean);
 
-        let low = Risk { level: RiskLevel::Low, rule: "python/os-popen", line: 1, snippet: "s".into() };
+        let low = Risk {
+            level: RiskLevel::Low,
+            rule: "python/os-popen",
+            line: 1,
+            snippet: "s".into(),
+        };
         assert_eq!(verdict(std::slice::from_ref(&low)), ScanVerdict::Clean);
 
-        let medium = Risk { level: RiskLevel::Medium, rule: "js/eval", line: 1, snippet: "s".into() };
+        let medium = Risk {
+            level: RiskLevel::Medium,
+            rule: "js/eval",
+            line: 1,
+            snippet: "s".into(),
+        };
         assert_eq!(verdict(std::slice::from_ref(&medium)), ScanVerdict::Warn);
         assert_eq!(verdict(&[low.clone(), medium.clone()]), ScanVerdict::Warn);
 
-        let high = Risk { level: RiskLevel::High, rule: "python/os-system", line: 1, snippet: "s".into() };
+        let high = Risk {
+            level: RiskLevel::High,
+            rule: "python/os-system",
+            line: 1,
+            snippet: "s".into(),
+        };
         assert_eq!(verdict(std::slice::from_ref(&high)), ScanVerdict::Block);
         // Смесь уровней: побеждает худший.
         assert_eq!(verdict(&[low, medium, high]), ScanVerdict::Block);
@@ -617,7 +726,11 @@ mod tests {
         let content = format!("os.system(\"{long_arg}\")\n");
         let risks = scan_code("a.py", &content);
         let snippet = &risks[0].snippet;
-        assert_eq!(snippet.chars().count(), MAX_SNIPPET_CHARS, "сниппет: {snippet}");
+        assert_eq!(
+            snippet.chars().count(),
+            MAX_SNIPPET_CHARS,
+            "сниппет: {snippet}"
+        );
         assert!(snippet.ends_with('…'), "сниппет: {snippet}");
     }
 

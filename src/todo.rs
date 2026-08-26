@@ -176,7 +176,9 @@ impl TodoItem {
     /// Сколько секунд задача жила: до закрытия, а для открытой — до `now`.
     /// Насыщающее вычитание: при «сдвиге часов» назад даёт 0, а не панику.
     pub fn lifetime(&self, now: u64) -> u64 {
-        self.closed_at.unwrap_or(now).saturating_sub(self.created_at)
+        self.closed_at
+            .unwrap_or(now)
+            .saturating_sub(self.created_at)
     }
 }
 
@@ -212,7 +214,11 @@ pub enum TodoEvent {
     /// Список полностью заменён (`set_full`): всего задач и сколько из них done.
     ListReplaced { total: usize, done: usize },
     /// У задачи `id` сменился статус `from` → `to`.
-    StatusChanged { id: String, from: TodoStatus, to: TodoStatus },
+    StatusChanged {
+        id: String,
+        from: TodoStatus,
+        to: TodoStatus,
+    },
     /// Хук наружу: задача помечена done, но её артефакт не проверен.
     ArtifactUnverified { id: String, content: String },
 }
@@ -312,7 +318,11 @@ impl TodoList {
     /// список целиком, а история не теряется; свежее закрытие ставит
     /// `closed_at = now` и сбрасывает проверку артефакта; переоткрытие
     /// (closed → pending/in_progress) очищает `closed_at`.
-    pub fn set_full_at(&mut self, items: Vec<TodoItem>, now: u64) -> Result<ValidationReport, TodoError> {
+    pub fn set_full_at(
+        &mut self,
+        items: Vec<TodoItem>,
+        now: u64,
+    ) -> Result<ValidationReport, TodoError> {
         Self::check_ids(&items)?;
         let prev: HashMap<String, TodoItem> = std::mem::take(&mut self.items)
             .into_iter()
@@ -325,7 +335,11 @@ impl TodoList {
             Self::normalize(&mut it, old, now);
             if let Some(p) = old {
                 if p.status != it.status {
-                    changes.push(TodoEvent::StatusChanged { id: it.id.clone(), from: p.status, to: it.status });
+                    changes.push(TodoEvent::StatusChanged {
+                        id: it.id.clone(),
+                        from: p.status,
+                        to: it.status,
+                    });
                 }
             }
             next.push(it);
@@ -344,8 +358,16 @@ impl TodoList {
     }
 
     /// То же с явным `now`.
-    pub fn set_status_at(&mut self, id: &str, status: TodoStatus, now: u64) -> Result<TodoStatus, TodoError> {
-        let idx = self.items.iter().position(|t| t.id == id)
+    pub fn set_status_at(
+        &mut self,
+        id: &str,
+        status: TodoStatus,
+        now: u64,
+    ) -> Result<TodoStatus, TodoError> {
+        let idx = self
+            .items
+            .iter()
+            .position(|t| t.id == id)
             .ok_or_else(|| TodoError::UnknownId(id.to_string()))?;
         let prev = self.items[idx].clone();
         let from = prev.status;
@@ -354,14 +376,21 @@ impl TodoList {
         Self::normalize(&mut it, Some(&prev), now);
         self.items[idx] = it;
         if from != status {
-            self.events.push(TodoEvent::StatusChanged { id: id.to_string(), from, to: status });
+            self.events.push(TodoEvent::StatusChanged {
+                id: id.to_string(),
+                from,
+                to: status,
+            });
         }
         Ok(from)
     }
 
     /// Отметить, что артефакт done-задачи проверен (хук сборки/тестов/ревью).
     pub fn mark_artifact_verified(&mut self, id: &str) -> Result<(), TodoError> {
-        let it = self.items.iter_mut().find(|t| t.id == id)
+        let it = self
+            .items
+            .iter_mut()
+            .find(|t| t.id == id)
             .ok_or_else(|| TodoError::UnknownId(id.to_string()))?;
         it.artifact_verified = true;
         Ok(())
@@ -384,10 +413,17 @@ impl TodoList {
                     .push(format!("у задачи «{}» пустое содержимое", it.id));
             }
         }
-        let in_prog: Vec<&TodoItem> =
-            self.items.iter().filter(|t| t.status == TodoStatus::InProgress).collect();
+        let in_prog: Vec<&TodoItem> = self
+            .items
+            .iter()
+            .filter(|t| t.status == TodoStatus::InProgress)
+            .collect();
         if in_prog.len() > 1 {
-            let ids = in_prog.iter().map(|t| t.id.as_str()).collect::<Vec<_>>().join(", ");
+            let ids = in_prog
+                .iter()
+                .map(|t| t.id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
             report.warnings.push(format!(
                 "допустим максимум один in_progress, сейчас {}: {ids}",
                 in_prog.len()
@@ -405,7 +441,11 @@ impl TodoList {
 
     /// Прогресс: (число done, всего задач). Cancelled done не считается.
     pub fn progress(&self) -> (usize, usize) {
-        let done = self.items.iter().filter(|t| t.status == TodoStatus::Done).count();
+        let done = self
+            .items
+            .iter()
+            .filter(|t| t.status == TodoStatus::Done)
+            .count();
         (done, self.items.len())
     }
 
@@ -465,7 +505,11 @@ impl TodoList {
             return Ok(GateVerdict::Allow);
         }
         let mut notes: Vec<String> = Vec::new();
-        if !self.items.iter().any(|t| t.status == TodoStatus::InProgress) {
+        if !self
+            .items
+            .iter()
+            .any(|t| t.status == TodoStatus::InProgress)
+        {
             let mut msg = format!(
                 "TodoGate: ни одна задача не отмечена in_progress — \
                  обновите todo_write перед вызовом «{tool_name}»."
@@ -492,7 +536,8 @@ impl TodoList {
                  (вызовите mark_artifact_verified): {names}."
             ));
             for (id, content) in unverified {
-                self.events.push(TodoEvent::ArtifactUnverified { id, content });
+                self.events
+                    .push(TodoEvent::ArtifactUnverified { id, content });
             }
         }
         Ok(if notes.is_empty() {
@@ -607,7 +652,8 @@ mod tests {
     #[test]
     fn set_full_replaces_previous_list() {
         let mut l = list(vec![item("a", Pending)], 100);
-        l.set_full_at(vec![item("b", Pending), item("c", Done)], 200).unwrap();
+        l.set_full_at(vec![item("b", Pending), item("c", Done)], 200)
+            .unwrap();
         let ids: Vec<&str> = l.items().iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, ["b", "c"]);
         assert!(l.get("a").is_none());
@@ -617,9 +663,18 @@ mod tests {
     fn set_full_preserves_created_at_by_id() {
         let mut l = list(vec![item("a", Pending)], 100);
         // LLM перезаписал список: «a» осталась, «b» новая.
-        l.set_full_at(vec![item("a", InProgress), item("b", Pending)], 200).unwrap();
-        assert_eq!(l.get("a").unwrap().created_at, 100, "created_at наследуется по id");
-        assert_eq!(l.get("b").unwrap().created_at, 200, "новая задача получает now");
+        l.set_full_at(vec![item("a", InProgress), item("b", Pending)], 200)
+            .unwrap();
+        assert_eq!(
+            l.get("a").unwrap().created_at,
+            100,
+            "created_at наследуется по id"
+        );
+        assert_eq!(
+            l.get("b").unwrap().created_at,
+            200,
+            "новая задача получает now"
+        );
     }
 
     #[test]
@@ -682,7 +737,10 @@ mod tests {
 
     #[test]
     fn progress_counts_done_over_total() {
-        let l = list(vec![item("a", Done), item("b", Cancelled), item("c", Pending)], 100);
+        let l = list(
+            vec![item("a", Done), item("b", Cancelled), item("c", Pending)],
+            100,
+        );
         assert_eq!(l.progress(), (1, 3), "cancelled не считается done");
         assert_eq!(TodoList::new().progress(), (0, 0));
     }
@@ -700,10 +758,19 @@ mod tests {
         );
         let md = l.render();
         assert!(md.contains("## TODO-список — прогресс 1/4"));
-        assert!(md.contains("- ✔ сделать раз (0с)"), "done с длительностью: {md}");
-        assert!(md.contains("- ◐ сделать два — *делаю два*"), "active_form: {md}");
+        assert!(
+            md.contains("- ✔ сделать раз (0с)"),
+            "done с длительностью: {md}"
+        );
+        assert!(
+            md.contains("- ◐ сделать два — *делаю два*"),
+            "active_form: {md}"
+        );
         assert!(md.contains("- ☐ сделать три"));
-        assert!(md.contains("- ✖ ~~сделать четыре~~ _(отменено)_"), "strikethrough: {md}");
+        assert!(
+            md.contains("- ✖ ~~сделать четыре~~ _(отменено)_"),
+            "strikethrough: {md}"
+        );
         let empty = TodoList::new().render();
         assert!(empty.contains("прогресс 0/0"));
         assert!(empty.contains("_(план пуст)_"));
@@ -711,7 +778,10 @@ mod tests {
 
     #[test]
     fn serde_status_uses_snake_case() {
-        assert_eq!(serde_json::to_string(&InProgress).unwrap(), "\"in_progress\"");
+        assert_eq!(
+            serde_json::to_string(&InProgress).unwrap(),
+            "\"in_progress\""
+        );
         assert_eq!(serde_json::to_string(&Cancelled).unwrap(), "\"cancelled\"");
         let s: TodoStatus = serde_json::from_str("\"in_progress\"").unwrap();
         assert_eq!(s, InProgress);
@@ -741,7 +811,10 @@ mod tests {
         assert!(!json.contains("ListReplaced"), "события не сериализуются");
         let mut back: TodoList = serde_json::from_str(&json).unwrap();
         assert_eq!(back.items(), l.items());
-        assert!(back.drain_events().is_empty(), "очередь событий пуста после загрузки");
+        assert!(
+            back.drain_events().is_empty(),
+            "очередь событий пуста после загрузки"
+        );
     }
 
     #[test]
@@ -762,13 +835,19 @@ mod tests {
         match l.gate_check("bash") {
             Ok(GateVerdict::Remind(msg)) => {
                 assert!(msg.contains("in_progress"), "напоминание про статус: {msg}");
-                assert!(msg.contains("задача a"), "подсказка ближайшей pending: {msg}");
+                assert!(
+                    msg.contains("задача a"),
+                    "подсказка ближайшей pending: {msg}"
+                );
                 assert!(msg.contains("bash"), "упоминается инструмент: {msg}");
             }
             other => panic!("ожидали Remind, получили {other:?}"),
         }
         // мягкое напоминание не порождает хук-событий
-        assert!(l.drain_events().iter().all(|e| !matches!(e, TodoEvent::ArtifactUnverified { .. })));
+        assert!(l
+            .drain_events()
+            .iter()
+            .all(|e| !matches!(e, TodoEvent::ArtifactUnverified { .. })));
     }
 
     #[test]
@@ -778,7 +857,10 @@ mod tests {
         match l.gate_check("edit_file") {
             Ok(GateVerdict::Remind(msg)) => {
                 assert!(msg.contains("артефакт"), "есть хук-строка: {msg}");
-                assert!(!msg.contains("in_progress —"), "in_progress есть — про него молчим: {msg}");
+                assert!(
+                    !msg.contains("in_progress —"),
+                    "in_progress есть — про него молчим: {msg}"
+                );
             }
             other => panic!("ожидали Remind, получили {other:?}"),
         }
@@ -841,12 +923,18 @@ mod tests {
 
     #[test]
     fn stats_open_and_close_durations() {
-        let mut l = list(vec![item("a", Pending), item("b", Pending), item("c", Pending)], 100);
+        let mut l = list(
+            vec![item("a", Pending), item("b", Pending), item("c", Pending)],
+            100,
+        );
         l.set_status_at("a", Done, 160).unwrap(); // жила 60
         l.set_status_at("b", Cancelled, 220).unwrap(); // жила 120
         let st = l.stats(300);
         assert_eq!(st.total, 3);
-        assert_eq!((st.done, st.cancelled, st.pending, st.in_progress), (1, 1, 1, 0));
+        assert_eq!(
+            (st.done, st.cancelled, st.pending, st.in_progress),
+            (1, 1, 1, 0)
+        );
         assert_eq!(st.avg_close_secs, Some(90), "(60+120)/2");
         assert_eq!(st.max_close_secs, Some(120));
         assert_eq!(st.open_secs, 200, "c открыта 300-100");
@@ -860,7 +948,10 @@ mod tests {
     fn drain_events_empties_queue() {
         let mut l = list(vec![item("a", Pending)], 100);
         let evs = l.drain_events();
-        assert_eq!(evs.first(), Some(&TodoEvent::ListReplaced { total: 1, done: 0 }));
+        assert_eq!(
+            evs.first(),
+            Some(&TodoEvent::ListReplaced { total: 1, done: 0 })
+        );
         assert!(l.drain_events().is_empty(), "второй drain пуст");
         assert!(l.events().is_empty());
     }

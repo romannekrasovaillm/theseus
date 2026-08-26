@@ -699,7 +699,10 @@ mod tests {
         let text = "Раз два три четыре пять шесть семь восемь девять десять слов много";
         let out = render(text, 20);
         for line in out.lines() {
-            assert!(visible_width(line) <= 20, "строка слишком длинная: {line:?}");
+            assert!(
+                visible_width(line) <= 20,
+                "строка слишком длинная: {line:?}"
+            );
         }
         let plain = strip_ansi(&out);
         let got: Vec<&str> = plain.split_whitespace().collect();
@@ -716,7 +719,10 @@ mod tests {
         assert!(lines[0].starts_with("• "));
         assert!(lines[1].starts_with("  "));
         for line in lines {
-            assert!(visible_width(line) <= 14, "строка слишком длинная: {line:?}");
+            assert!(
+                visible_width(line) <= 14,
+                "строка слишком длинная: {line:?}"
+            );
         }
     }
 

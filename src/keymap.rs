@@ -101,7 +101,11 @@ impl fmt::Display for ModSet {
     /// (хвостовой `+` при необходимости добавляет [`KeyStroke`]).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut first = true;
-        for (flag, name) in [(Self::CTRL, "Ctrl"), (Self::ALT, "Alt"), (Self::SHIFT, "Shift")] {
+        for (flag, name) in [
+            (Self::CTRL, "Ctrl"),
+            (Self::ALT, "Alt"),
+            (Self::SHIFT, "Shift"),
+        ] {
             if self.contains(flag) {
                 if !first {
                     f.write_str("+")?;
@@ -282,7 +286,9 @@ pub struct ParseError {
 
 impl ParseError {
     fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -308,7 +314,9 @@ fn modifier_for(token: &str) -> Option<ModSet> {
 /// повторный модификатор — ошибка разбора.
 fn add_modifier(mods: ModSet, raw: &str) -> Result<ModSet, ParseError> {
     if raw.is_empty() {
-        return Err(ParseError::new("пустой модификатор (два «+» подряд или «+» в начале)"));
+        return Err(ParseError::new(
+            "пустой модификатор (два «+» подряд или «+» в начале)",
+        ));
     }
     let lower = raw.to_lowercase();
     let Some(flag) = modifier_for(&lower) else {
@@ -336,7 +344,9 @@ fn parse_f_key(token: &str) -> Result<Option<KeyId>, ParseError> {
     if (1..=24).contains(&n) {
         Ok(Some(KeyId::F(n)))
     } else {
-        Err(ParseError::new(format!("F-клавиши бывают только f1–f24, а не «{token}»")))
+        Err(ParseError::new(format!(
+            "F-клавиши бывают только f1–f24, а не «{token}»"
+        )))
     }
 }
 
@@ -445,8 +455,16 @@ pub enum Action {
 impl Action {
     /// Все действия (для проверок полноты раскладки).
     pub const ALL: [Action; 10] = [
-        Action::Submit, Action::Cancel, Action::Interrupt, Action::HistoryPrev, Action::HistoryNext,
-        Action::Complete, Action::ScrollUp, Action::ScrollDown, Action::NewLine, Action::Quit,
+        Action::Submit,
+        Action::Cancel,
+        Action::Interrupt,
+        Action::HistoryPrev,
+        Action::HistoryNext,
+        Action::Complete,
+        Action::ScrollUp,
+        Action::ScrollDown,
+        Action::NewLine,
+        Action::Quit,
     ];
 
     /// Каноническое snake_case-имя (совпадает с serde-представлением).
@@ -501,7 +519,10 @@ pub struct KeymapError {
 
 impl KeymapError {
     fn new(message: impl Into<String>) -> Self {
-        Self { line: None, message: message.into() }
+        Self {
+            line: None,
+            message: message.into(),
+        }
     }
 }
 
@@ -533,7 +554,10 @@ impl KeyMap {
         let pairs = [
             (KeyStroke::plain(KeyId::Enter), Action::Submit),
             (KeyStroke::plain(KeyId::Esc), Action::Cancel),
-            (KeyStroke::new(KeyId::Char('c'), ModSet::CTRL), Action::Interrupt),
+            (
+                KeyStroke::new(KeyId::Char('c'), ModSet::CTRL),
+                Action::Interrupt,
+            ),
             (KeyStroke::plain(KeyId::Up), Action::HistoryPrev),
             (KeyStroke::plain(KeyId::Down), Action::HistoryNext),
             (KeyStroke::plain(KeyId::Tab), Action::Complete),
@@ -542,7 +566,9 @@ impl KeyMap {
             (KeyStroke::new(KeyId::Enter, ModSet::ALT), Action::NewLine),
             (KeyStroke::new(KeyId::Char('q'), ModSet::CTRL), Action::Quit),
         ];
-        Self { bindings: pairs.into_iter().collect() }
+        Self {
+            bindings: pairs.into_iter().collect(),
+        }
     }
 
     /// Разбор раскладки из TOML-таблицы вида `"клавиша" = "действие"`.
@@ -571,22 +597,34 @@ impl KeyMap {
                 }
             };
             let Some(action_name) = action_value.as_str() else {
-                errors.push(KeymapError::new(format!("привязка «{key_text}»: действие должно быть строкой")));
+                errors.push(KeymapError::new(format!(
+                    "привязка «{key_text}»: действие должно быть строкой"
+                )));
                 continue;
             };
             let Some(action) = Action::from_name(action_name) else {
-                let known = Action::ALL.iter().map(Action::as_str).collect::<Vec<_>>().join(", ");
+                let known = Action::ALL
+                    .iter()
+                    .map(Action::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", ");
                 errors.push(KeymapError::new(format!(
                     "привязка «{key_text}»: неизвестное действие «{action_name}»; допустимые: {known}"
                 )));
                 continue;
             };
             if let Some(prev) = bindings.insert(stroke, action) {
-                errors.push(KeymapError::new(format!("«{stroke}» привязана дважды: «{prev}» и «{action}»")));
+                errors.push(KeymapError::new(format!(
+                    "«{stroke}» привязана дважды: «{prev}» и «{action}»"
+                )));
             }
         }
 
-        if errors.is_empty() { Ok(Self { bindings }) } else { Err(errors) }
+        if errors.is_empty() {
+            Ok(Self { bindings })
+        } else {
+            Err(errors)
+        }
     }
 
     /// Действие, привязанное к комбинации. Сравнение точное: искать по тому
@@ -603,7 +641,9 @@ impl KeyMap {
 
     /// Итератор по привязкам в порядке комбинаций.
     pub fn iter(&self) -> impl Iterator<Item = (KeyStroke, Action)> + '_ {
-        self.bindings.iter().map(|(stroke, action)| (*stroke, *action))
+        self.bindings
+            .iter()
+            .map(|(stroke, action)| (*stroke, *action))
     }
 
     /// Конфликты терминальных эквивалентностей: группы комбинаций, которые
@@ -614,7 +654,10 @@ impl KeyMap {
     pub fn conflicts(&self) -> Vec<(KeyStroke, Vec<Action>)> {
         let mut by_form: BTreeMap<KeyStroke, BTreeSet<Action>> = BTreeMap::new();
         for (stroke, action) in &self.bindings {
-            by_form.entry(stroke.terminal_form()).or_default().insert(*action);
+            by_form
+                .entry(stroke.terminal_form())
+                .or_default()
+                .insert(*action);
         }
         by_form
             .into_iter()
@@ -653,9 +696,18 @@ mod tests {
         assert_eq!(stroke("7"), KeyStroke::plain(KeyId::Char('7')));
         assert_eq!(stroke(" c "), KeyStroke::plain(KeyId::Char('c')));
         // Примеры из постановки задачи.
-        assert_eq!(stroke("Ctrl+R"), KeyStroke::new(KeyId::Char('r'), ModSet::CTRL));
-        assert_eq!(stroke("Alt+Enter"), KeyStroke::new(KeyId::Enter, ModSet::ALT));
-        assert_eq!(stroke("Shift+Tab"), KeyStroke::new(KeyId::Tab, ModSet::SHIFT));
+        assert_eq!(
+            stroke("Ctrl+R"),
+            KeyStroke::new(KeyId::Char('r'), ModSet::CTRL)
+        );
+        assert_eq!(
+            stroke("Alt+Enter"),
+            KeyStroke::new(KeyId::Enter, ModSet::ALT)
+        );
+        assert_eq!(
+            stroke("Shift+Tab"),
+            KeyStroke::new(KeyId::Tab, ModSet::SHIFT)
+        );
         assert_eq!(stroke("F5"), KeyStroke::plain(KeyId::F(5)));
         assert_eq!(stroke("Esc"), KeyStroke::plain(KeyId::Esc));
         assert_eq!(stroke("Up"), KeyStroke::plain(KeyId::Up));
@@ -665,8 +717,16 @@ mod tests {
     fn parse_modifiers_synonyms_case_and_spaces() {
         let expected = KeyStroke::new(KeyId::Char('r'), ModSet::CTRL);
         let forms = [
-            "Ctrl+R", "ctrl+r", "CONTROL+R", "cTrL+R", "control+r", "Control+R", "c+r", "C+R",
-            " ctrl + r ", "Ctrl  +  R",
+            "Ctrl+R",
+            "ctrl+r",
+            "CONTROL+R",
+            "cTrL+R",
+            "control+r",
+            "Control+R",
+            "c+r",
+            "C+R",
+            " ctrl + r ",
+            "Ctrl  +  R",
         ];
         for text in forms {
             assert_eq!(stroke(text), expected, "вариант: {text}");
@@ -675,10 +735,16 @@ mod tests {
         assert_eq!(stroke("Alt+R"), alt);
         assert_eq!(stroke("a+r"), alt);
         assert_eq!(stroke("Meta+R"), alt);
-        assert_eq!(stroke("s+r"), KeyStroke::new(KeyId::Char('r'), ModSet::SHIFT));
+        assert_eq!(
+            stroke("s+r"),
+            KeyStroke::new(KeyId::Char('r'), ModSet::SHIFT)
+        );
         // Несколько модификаторов, порядок в записи не важен.
         let all = ModSet::CTRL.union(ModSet::ALT).union(ModSet::SHIFT);
-        assert_eq!(stroke("Ctrl+Alt+Shift+x"), KeyStroke::new(KeyId::Char('x'), all));
+        assert_eq!(
+            stroke("Ctrl+Alt+Shift+x"),
+            KeyStroke::new(KeyId::Char('x'), all)
+        );
         assert_eq!(stroke("shift+ctrl+x"), stroke("Ctrl+Shift+X"));
         assert!(!stroke("x").mods.contains(ModSet::CTRL));
     }
@@ -686,17 +752,28 @@ mod tests {
     #[test]
     fn parse_named_keys_and_aliases() {
         let cases: [(&str, KeyId); 23] = [
-            ("enter", KeyId::Enter), ("return", KeyId::Enter),
-            ("esc", KeyId::Esc), ("escape", KeyId::Esc),
-            ("tab", KeyId::Tab), ("backspace", KeyId::Backspace),
-            ("bs", KeyId::Backspace), ("delete", KeyId::Delete),
-            ("del", KeyId::Delete), ("insert", KeyId::Insert),
-            ("ins", KeyId::Insert), ("home", KeyId::Home),
-            ("end", KeyId::End), ("pageup", KeyId::PageUp),
-            ("pgup", KeyId::PageUp), ("pagedown", KeyId::PageDown),
-            ("pgdn", KeyId::PageDown), ("up", KeyId::Up),
-            ("down", KeyId::Down), ("left", KeyId::Left),
-            ("right", KeyId::Right), ("space", KeyId::Char(' ')),
+            ("enter", KeyId::Enter),
+            ("return", KeyId::Enter),
+            ("esc", KeyId::Esc),
+            ("escape", KeyId::Esc),
+            ("tab", KeyId::Tab),
+            ("backspace", KeyId::Backspace),
+            ("bs", KeyId::Backspace),
+            ("delete", KeyId::Delete),
+            ("del", KeyId::Delete),
+            ("insert", KeyId::Insert),
+            ("ins", KeyId::Insert),
+            ("home", KeyId::Home),
+            ("end", KeyId::End),
+            ("pageup", KeyId::PageUp),
+            ("pgup", KeyId::PageUp),
+            ("pagedown", KeyId::PageDown),
+            ("pgdn", KeyId::PageDown),
+            ("up", KeyId::Up),
+            ("down", KeyId::Down),
+            ("left", KeyId::Left),
+            ("right", KeyId::Right),
+            ("space", KeyId::Char(' ')),
             ("plus", KeyId::Char('+')),
         ];
         for (text, key) in cases {
@@ -709,7 +786,10 @@ mod tests {
         assert_eq!(stroke("F1"), KeyStroke::plain(KeyId::F(1)));
         assert_eq!(stroke("f5"), KeyStroke::plain(KeyId::F(5)));
         assert_eq!(stroke("F12"), KeyStroke::plain(KeyId::F(12)));
-        assert_eq!(stroke("Ctrl+F24"), KeyStroke::new(KeyId::F(24), ModSet::CTRL));
+        assert_eq!(
+            stroke("Ctrl+F24"),
+            KeyStroke::new(KeyId::F(24), ModSet::CTRL)
+        );
         for bad in ["F0", "F25", "F100", "F999", "ff", "f-1"] {
             assert!(parse_keystroke(bad).is_err(), "вариант: {bad}");
         }
@@ -718,8 +798,18 @@ mod tests {
     #[test]
     fn parse_errors_are_reported() {
         let forms = [
-            "", "   ", "Ctrl+", "+R", "Ctrl++R", "Ctrl", "alt", "Ctrl+Ctrl+R", "ctrl+c+r",
-            "R+Ctrl", "Ctrl+Wat", "Wat+R",
+            "",
+            "   ",
+            "Ctrl+",
+            "+R",
+            "Ctrl++R",
+            "Ctrl",
+            "alt",
+            "Ctrl+Ctrl+R",
+            "ctrl+c+r",
+            "R+Ctrl",
+            "Ctrl+Wat",
+            "Wat+R",
         ];
         for bad in forms {
             assert!(parse_keystroke(bad).is_err(), "вариант: {bad:?}");
@@ -735,8 +825,14 @@ mod tests {
     #[test]
     fn display_roundtrips_through_parse() {
         let strokes = [
-            stroke("r"), stroke("Ctrl+R"), stroke("Alt+Enter"), stroke("Shift+Tab"),
-            stroke("Ctrl+Alt+Shift+F1"), stroke("space"), stroke("plus"), stroke("F24"),
+            stroke("r"),
+            stroke("Ctrl+R"),
+            stroke("Alt+Enter"),
+            stroke("Shift+Tab"),
+            stroke("Ctrl+Alt+Shift+F1"),
+            stroke("space"),
+            stroke("plus"),
+            stroke("F24"),
             stroke("Ctrl+Shift+PageDown"),
         ];
         for original in strokes {
@@ -752,17 +848,35 @@ mod tests {
     #[test]
     fn terminal_form_rules() {
         // Классические control-байты: Ctrl+I/M/H/[ == Tab/Enter/Backspace/Esc.
-        assert_eq!(stroke("Ctrl+i").terminal_form(), KeyStroke::plain(KeyId::Tab));
-        assert_eq!(stroke("Ctrl+M").terminal_form(), KeyStroke::plain(KeyId::Enter));
-        assert_eq!(stroke("Ctrl+h").terminal_form(), KeyStroke::plain(KeyId::Backspace));
-        assert_eq!(stroke("Ctrl+[").terminal_form(), KeyStroke::plain(KeyId::Esc));
+        assert_eq!(
+            stroke("Ctrl+i").terminal_form(),
+            KeyStroke::plain(KeyId::Tab)
+        );
+        assert_eq!(
+            stroke("Ctrl+M").terminal_form(),
+            KeyStroke::plain(KeyId::Enter)
+        );
+        assert_eq!(
+            stroke("Ctrl+h").terminal_form(),
+            KeyStroke::plain(KeyId::Backspace)
+        );
+        assert_eq!(
+            stroke("Ctrl+[").terminal_form(),
+            KeyStroke::plain(KeyId::Esc)
+        );
         // Shift теряется в control-байте, а Alt идёт отдельным ESC-префиксом.
-        assert_eq!(stroke("Ctrl+Shift+i").terminal_form(), KeyStroke::plain(KeyId::Tab));
+        assert_eq!(
+            stroke("Ctrl+Shift+i").terminal_form(),
+            KeyStroke::plain(KeyId::Tab)
+        );
         assert_eq!(stroke("Alt+Ctrl+i").terminal_form(), stroke("Alt+Ctrl+i"));
         // Обычные Ctrl-буквы не трогаем.
         assert_eq!(stroke("Ctrl+c").terminal_form(), stroke("Ctrl+c"));
         // Shift+буква — символ верхнего регистра без Shift; Shift+Tab — свой (BackTab).
-        assert_eq!(stroke("Shift+r").terminal_form(), KeyStroke::plain(KeyId::Char('R')));
+        assert_eq!(
+            stroke("Shift+r").terminal_form(),
+            KeyStroke::plain(KeyId::Char('R'))
+        );
         assert_eq!(stroke("r").terminal_form(), stroke("r"));
         assert_eq!(stroke("Shift+Tab").terminal_form(), stroke("Shift+Tab"));
     }
@@ -790,7 +904,10 @@ mod tests {
     fn default_map_covers_every_action_without_conflicts() {
         let map = KeyMap::default_map();
         for action in Action::ALL {
-            assert!(map.iter().any(|(_, bound)| bound == action), "нет привязки: {action}");
+            assert!(
+                map.iter().any(|(_, bound)| bound == action),
+                "нет привязки: {action}"
+            );
         }
         assert!(map.conflicts().is_empty());
         assert_eq!(map.iter().count(), Action::ALL.len());
@@ -824,7 +941,11 @@ mod tests {
         let value: toml::Value = toml::from_str(doc).unwrap();
         let errors = KeyMap::from_toml(&value).unwrap_err();
         assert_eq!(errors.len(), 4, "ошибки: {errors:?}");
-        assert!(errors[0].message.contains("Ctrl+"), "сообщение: {}", errors[0]);
+        assert!(
+            errors[0].message.contains("Ctrl+"),
+            "сообщение: {}",
+            errors[0]
+        );
         assert!(errors.iter().any(|e| e.message.contains("unknown_action")));
         assert!(errors.iter().any(|e| e.message.contains("строкой")));
         assert!(errors.iter().any(|e| e.message.contains("дважды")));

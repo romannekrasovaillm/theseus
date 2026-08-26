@@ -96,11 +96,20 @@ impl ShellEnv {
     /// каталог удалён из-под процесса), используется `/`.
     pub fn capture() -> Self {
         let vars = std::env::vars_os()
-            .map(|(k, v)| (k.to_string_lossy().into_owned(), v.to_string_lossy().into_owned()))
+            .map(|(k, v)| {
+                (
+                    k.to_string_lossy().into_owned(),
+                    v.to_string_lossy().into_owned(),
+                )
+            })
             .collect();
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/"));
         let shell_path = detect_shell_path(&vars);
-        ShellEnv { vars, cwd, shell_path }
+        ShellEnv {
+            vars,
+            cwd,
+            shell_path,
+        }
     }
 
     /// Вычисляет разницу ЭТОГО (более нового) снапшота против `older`.
@@ -112,7 +121,8 @@ impl ShellEnv {
                     diff.added.insert(name.clone(), value.clone());
                 }
                 Some(old_value) if old_value != value => {
-                    diff.changed.insert(name.clone(), (old_value.clone(), value.clone()));
+                    diff.changed
+                        .insert(name.clone(), (old_value.clone(), value.clone()));
                 }
                 Some(_) => {}
             }
@@ -361,7 +371,10 @@ impl PersistentShell {
         let payload = format!("{command}\n{tail}\n");
         {
             let stdin = self.stdin.as_mut().context("stdin shell недоступен")?;
-            if let Err(e) = stdin.write_all(payload.as_bytes()).and_then(|()| stdin.flush()) {
+            if let Err(e) = stdin
+                .write_all(payload.as_bytes())
+                .and_then(|()| stdin.flush())
+            {
                 self.kill();
                 return Err(anyhow!(e).context("не удалось отправить команду в shell"));
             }
@@ -406,7 +419,11 @@ impl PersistentShell {
             }
         }
 
-        Ok(Output { stdout, stderr, code })
+        Ok(Output {
+            stdout,
+            stderr,
+            code,
+        })
     }
 
     /// Снимает снапшот окружения ПЕРСИСТЕНТНОГО shell (выполняет `env`).
@@ -421,7 +438,11 @@ impl PersistentShell {
                 vars.insert(name.to_string(), value.to_string());
             }
         }
-        Ok(ShellEnv { vars, cwd: self.cwd.clone(), shell_path: self.shell_path.clone() })
+        Ok(ShellEnv {
+            vars,
+            cwd: self.cwd.clone(),
+            shell_path: self.shell_path.clone(),
+        })
     }
 
     /// Одна строка из выбранного потока с учётом дедлайна.
@@ -443,7 +464,9 @@ impl PersistentShell {
             }
             Err(RecvFailure::Closed) => {
                 self.kill();
-                Err(anyhow!("shell завершился во время чтения {what}; будет перезапущен при следующем exec"))
+                Err(anyhow!(
+                    "shell завершился во время чтения {what}; будет перезапущен при следующем exec"
+                ))
             }
         }
     }
@@ -523,7 +546,10 @@ mod tests {
 
     fn env_with(pairs: &[(&str, &str)]) -> ShellEnv {
         ShellEnv {
-            vars: pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            vars: pairs
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
             cwd: PathBuf::from("/tmp"),
             shell_path: PathBuf::from("/bin/bash"),
         }
@@ -661,9 +687,14 @@ mod tests {
     #[test]
     fn snapshot_env_sees_exported_vars() {
         let mut shell = sh();
-        shell.exec("export THESEUS_SNAP_PROBE=snap-value", T).unwrap();
+        shell
+            .exec("export THESEUS_SNAP_PROBE=snap-value", T)
+            .unwrap();
         let env = shell.snapshot_env(T).unwrap();
-        assert_eq!(env.vars.get("THESEUS_SNAP_PROBE").map(String::as_str), Some("snap-value"));
+        assert_eq!(
+            env.vars.get("THESEUS_SNAP_PROBE").map(String::as_str),
+            Some("snap-value")
+        );
         assert_eq!(env.cwd, shell.cwd().to_path_buf());
         assert_eq!(env.shell_path, shell.shell_path().to_path_buf());
     }
@@ -684,7 +715,10 @@ mod tests {
         assert!(!diff.is_empty());
         assert_eq!(diff.added.get("NEW").map(String::as_str), Some("fresh"));
         assert_eq!(diff.removed.get("GONE").map(String::as_str), Some("old"));
-        assert_eq!(diff.changed.get("MUT"), Some(&("before".to_string(), "after".to_string())));
+        assert_eq!(
+            diff.changed.get("MUT"),
+            Some(&("before".to_string(), "after".to_string()))
+        );
         assert!(!diff.changed.contains_key("KEEP"));
         let summary = diff.summary();
         assert!(summary.contains("+1"), "{summary}");
@@ -705,11 +739,15 @@ mod tests {
         let mut env = env_with(&[("THESEUS_APPLY_PROBE", "probe-value")]);
         env.cwd = PathBuf::from("/tmp");
         let mut cmd = Command::new("/bin/sh");
-        cmd.arg("-c").arg("echo \"${HOME-unset}\"; echo \"$THESEUS_APPLY_PROBE\"; pwd");
+        cmd.arg("-c")
+            .arg("echo \"${HOME-unset}\"; echo \"$THESEUS_APPLY_PROBE\"; pwd");
         env.apply_to(&mut cmd);
         let out = cmd.output().unwrap();
         // HOME родителя не протёк (env_clear), переменная снапшота видна, cwd = /tmp.
-        assert_eq!(String::from_utf8(out.stdout).unwrap(), "unset\nprobe-value\n/tmp\n");
+        assert_eq!(
+            String::from_utf8(out.stdout).unwrap(),
+            "unset\nprobe-value\n/tmp\n"
+        );
     }
 
     #[test]

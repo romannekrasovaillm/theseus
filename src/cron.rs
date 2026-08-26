@@ -67,7 +67,14 @@ impl CivilTime {
             return None;
         }
         let weekday = weekday_from_days(days_from_civil(year, month, day));
-        Some(CivilTime { year, month, day, hour, minute, weekday })
+        Some(CivilTime {
+            year,
+            month,
+            day,
+            hour,
+            minute,
+            weekday,
+        })
     }
 
     /// Високосный ли год (правила Григорианского календаря).
@@ -276,19 +283,45 @@ struct FieldSpec {
     max: u32,
 }
 
-const MINUTE_SPEC: FieldSpec = FieldSpec { name: "минута", min: 0, max: 59 };
-const HOUR_SPEC: FieldSpec = FieldSpec { name: "час", min: 0, max: 23 };
-const DOM_SPEC: FieldSpec = FieldSpec { name: "день-месяца", min: 1, max: 31 };
-const MONTH_SPEC: FieldSpec = FieldSpec { name: "месяц", min: 1, max: 12 };
-const DOW_SPEC: FieldSpec = FieldSpec { name: "день-недели", min: 0, max: 7 };
+const MINUTE_SPEC: FieldSpec = FieldSpec {
+    name: "минута",
+    min: 0,
+    max: 59,
+};
+const HOUR_SPEC: FieldSpec = FieldSpec {
+    name: "час",
+    min: 0,
+    max: 23,
+};
+const DOM_SPEC: FieldSpec = FieldSpec {
+    name: "день-месяца",
+    min: 1,
+    max: 31,
+};
+const MONTH_SPEC: FieldSpec = FieldSpec {
+    name: "месяц",
+    min: 1,
+    max: 12,
+};
+const DOW_SPEC: FieldSpec = FieldSpec {
+    name: "день-недели",
+    min: 0,
+    max: 7,
+};
 
 /// Число с проверкой диапазона поля.
 fn parse_num(text: &str, spec: &FieldSpec) -> Result<u32, CronError> {
-    let value: u32 = text
-        .parse()
-        .map_err(|_| CronError::InvalidNumber { field: spec.name, text: text.to_string() })?;
+    let value: u32 = text.parse().map_err(|_| CronError::InvalidNumber {
+        field: spec.name,
+        text: text.to_string(),
+    })?;
     if !(spec.min..=spec.max).contains(&value) {
-        return Err(CronError::OutOfRange { field: spec.name, value, min: spec.min, max: spec.max });
+        return Err(CronError::OutOfRange {
+            field: spec.name,
+            value,
+            min: spec.min,
+            max: spec.max,
+        });
     }
     Ok(value)
 }
@@ -300,14 +333,20 @@ fn parse_item(item: &str, spec: &FieldSpec) -> Result<u64, CronError> {
     }
     let (base, step) = match item.split_once('/') {
         Some((b, s)) => {
-            let step: u32 = s
-                .parse()
-                .map_err(|_| CronError::InvalidNumber { field: spec.name, text: s.to_string() })?;
+            let step: u32 = s.parse().map_err(|_| CronError::InvalidNumber {
+                field: spec.name,
+                text: s.to_string(),
+            })?;
             if step == 0 {
                 return Err(CronError::ZeroStep { field: spec.name });
             }
             if step > spec.max {
-                return Err(CronError::OutOfRange { field: spec.name, value: step, min: 1, max: spec.max });
+                return Err(CronError::OutOfRange {
+                    field: spec.name,
+                    value: step,
+                    min: 1,
+                    max: spec.max,
+                });
             }
             (b, step)
         }
@@ -319,7 +358,11 @@ fn parse_item(item: &str, spec: &FieldSpec) -> Result<u64, CronError> {
         let lo = parse_num(a, spec)?;
         let hi = parse_num(b, spec)?;
         if lo > hi {
-            return Err(CronError::BadRange { field: spec.name, lo, hi });
+            return Err(CronError::BadRange {
+                field: spec.name,
+                lo,
+                hi,
+            });
         }
         (lo, hi)
     } else {
@@ -364,13 +407,13 @@ fn next_set(bits: u64, from: u32) -> Option<u32> {
 /// Разобранное cron-расписание: битовые маски допустимых значений каждого поля.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CronSchedule {
-    minutes: u64,   // биты 0..=59
-    hours: u64,     // биты 0..=23
-    dom: u64,       // биты 1..=31
-    months: u64,    // биты 1..=12
-    dow: u64,       // биты 0..=6 (7 нормализуется в 0 — воскресенье)
-    dom_any: bool,  // поле дня-месяца — ровно «*»
-    dow_any: bool,  // поле дня-недели — ровно «*»
+    minutes: u64,  // биты 0..=59
+    hours: u64,    // биты 0..=23
+    dom: u64,      // биты 1..=31
+    months: u64,   // биты 1..=12
+    dow: u64,      // биты 0..=6 (7 нормализуется в 0 — воскресенье)
+    dom_any: bool, // поле дня-месяца — ровно «*»
+    dow_any: bool, // поле дня-недели — ровно «*»
 }
 
 impl CronSchedule {
@@ -384,7 +427,9 @@ impl CronSchedule {
 
     /// Совпадает ли момент времени с расписанием (точность — минута).
     pub fn matches(&self, t: &CivilTime) -> bool {
-        bit(self.minutes, u32::from(t.minute)) && bit(self.hours, u32::from(t.hour)) && self.date_matches(t)
+        bit(self.minutes, u32::from(t.minute))
+            && bit(self.hours, u32::from(t.hour))
+            && self.date_matches(t)
     }
 
     /// Первое срабатывание строго позже `from`.
@@ -398,8 +443,11 @@ impl CronSchedule {
             if self.date_matches(&cursor) {
                 let mut hour_from = u32::from(cursor.hour);
                 while let Some(h) = next_set(self.hours, hour_from) {
-                    let minute_from =
-                        if h == u32::from(cursor.hour) { u32::from(cursor.minute) } else { 0 };
+                    let minute_from = if h == u32::from(cursor.hour) {
+                        u32::from(cursor.minute)
+                    } else {
+                        0
+                    };
                     if let Some(mi) = next_set(self.minutes, minute_from) {
                         let hour = u8::try_from(h).ok()?;
                         let minute = u8::try_from(mi).ok()?;
@@ -445,7 +493,9 @@ impl FromStr for CronSchedule {
             fields.next(),
             fields.next(),
         ) else {
-            return Err(CronError::FieldCount { got: s.split_whitespace().count() });
+            return Err(CronError::FieldCount {
+                got: s.split_whitespace().count(),
+            });
         };
         let minutes = parse_field(mi, &MINUTE_SPEC)?;
         let hours = parse_field(ho, &HOUR_SPEC)?;
@@ -456,7 +506,15 @@ impl FromStr for CronSchedule {
             // 7 — синоним воскресенья (0)
             dow = (dow | 1) & !(1u64 << 7);
         }
-        Ok(CronSchedule { minutes, hours, dom, months, dow, dom_any: dm == "*", dow_any: dw == "*" })
+        Ok(CronSchedule {
+            minutes,
+            hours,
+            dom,
+            months,
+            dow,
+            dom_any: dm == "*",
+            dow_any: dw == "*",
+        })
     }
 }
 
@@ -483,7 +541,8 @@ fn effective_fire(id: u64, schedule: &CronSchedule, fire: &CivilTime) -> CivilTi
     let period = schedule
         .next_fire_after(fire)
         .map_or(DEFAULT_PERIOD_MINUTES, |next| minutes_between(fire, &next));
-    fire.add_minutes(jitter_minutes(id, period)).unwrap_or(*fire)
+    fire.add_minutes(jitter_minutes(id, period))
+        .unwrap_or(*fire)
 }
 
 /// Запланированная задача: отложенный или повторный промпт агента.
@@ -544,22 +603,33 @@ impl CronScheduler {
     /// # Ошибки
     /// [`CronError`] из парсера, а также [`CronError::NeverFires`], если у корректного
     /// выражения нет срабатываний в горизонте 5 лет (`0 0 31 2 *` и т.п.).
-    pub fn add(&mut self, expr: &str, prompt: &str, recurring: bool, now: &CivilTime) -> Result<u64, CronError> {
+    pub fn add(
+        &mut self,
+        expr: &str,
+        prompt: &str,
+        recurring: bool,
+        now: &CivilTime,
+    ) -> Result<u64, CronError> {
         let schedule = CronSchedule::parse(expr)?;
         let first = schedule
             .next_fire_after(now)
-            .ok_or_else(|| CronError::NeverFires { expr: expr.to_string() })?;
+            .ok_or_else(|| CronError::NeverFires {
+                expr: expr.to_string(),
+            })?;
         self.next_id += 1;
         let id = self.next_id;
-        self.tasks.insert(id, CronTask {
+        self.tasks.insert(
             id,
-            expr: expr.to_string(),
-            prompt: prompt.to_string(),
-            recurring,
-            created_at: *now,
-            schedule,
-            next_fire: first,
-        });
+            CronTask {
+                id,
+                expr: expr.to_string(),
+                prompt: prompt.to_string(),
+                recurring,
+                created_at: *now,
+                schedule,
+                next_fire: first,
+            },
+        );
         Ok(id)
     }
 
@@ -605,7 +675,10 @@ impl CronScheduler {
             if count == 0 {
                 continue;
             }
-            due.push(DueTask { id: task.id, coalesced_count: count });
+            due.push(DueTask {
+                id: task.id,
+                coalesced_count: count,
+            });
             if !task.recurring || exhausted {
                 remove.push(task.id);
             } else {
@@ -631,7 +704,9 @@ mod tests {
 
     /// Битовая маска диапазона с шагом — эталон для проверок парсера.
     fn mask(range: std::ops::RangeInclusive<u32>, step: u32) -> u64 {
-        range.step_by(step as usize).fold(0u64, |acc, v| acc | (1u64 << v))
+        range
+            .step_by(step as usize)
+            .fold(0u64, |acc, v| acc | (1u64 << v))
     }
 
     #[test]
@@ -661,11 +736,26 @@ mod tests {
 
     #[test]
     fn add_minutes_cascades_calendar_boundaries() {
-        assert_eq!(ct(2026, 1, 31, 23, 59).add_minutes(2), Some(ct(2026, 2, 1, 0, 1)));
-        assert_eq!(ct(2026, 12, 31, 23, 59).add_minutes(1), Some(ct(2027, 1, 1, 0, 0)));
-        assert_eq!(ct(2024, 2, 28, 23, 59).add_minutes(1), Some(ct(2024, 2, 29, 0, 0)));
-        assert_eq!(ct(2026, 3, 1, 0, 0).add_minutes(-1), Some(ct(2026, 2, 28, 23, 59)));
-        assert_eq!(ct(2026, 7, 18, 10, 30).add_minutes(0), Some(ct(2026, 7, 18, 10, 30)));
+        assert_eq!(
+            ct(2026, 1, 31, 23, 59).add_minutes(2),
+            Some(ct(2026, 2, 1, 0, 1))
+        );
+        assert_eq!(
+            ct(2026, 12, 31, 23, 59).add_minutes(1),
+            Some(ct(2027, 1, 1, 0, 0))
+        );
+        assert_eq!(
+            ct(2024, 2, 28, 23, 59).add_minutes(1),
+            Some(ct(2024, 2, 29, 0, 0))
+        );
+        assert_eq!(
+            ct(2026, 3, 1, 0, 0).add_minutes(-1),
+            Some(ct(2026, 2, 28, 23, 59))
+        );
+        assert_eq!(
+            ct(2026, 7, 18, 10, 30).add_minutes(0),
+            Some(ct(2026, 7, 18, 10, 30))
+        );
     }
 
     #[test]
@@ -686,11 +776,26 @@ mod tests {
         assert_eq!(s.dow, mask(0..=6, 1));
         assert!(s.dom_any && s.dow_any);
 
-        assert_eq!(CronSchedule::parse("*/5 * * * *").unwrap().minutes, mask(0..=59, 5));
-        assert_eq!(CronSchedule::parse("7 * * * *").unwrap().minutes, mask(7..=7, 1));
-        assert_eq!(CronSchedule::parse("1-4 * * * *").unwrap().minutes, mask(1..=4, 1));
-        assert_eq!(CronSchedule::parse("1-10/3 * * * *").unwrap().minutes, mask(1..=10, 3));
-        assert_eq!(CronSchedule::parse("2,4,6 * * * *").unwrap().minutes, mask(2..=6, 2));
+        assert_eq!(
+            CronSchedule::parse("*/5 * * * *").unwrap().minutes,
+            mask(0..=59, 5)
+        );
+        assert_eq!(
+            CronSchedule::parse("7 * * * *").unwrap().minutes,
+            mask(7..=7, 1)
+        );
+        assert_eq!(
+            CronSchedule::parse("1-4 * * * *").unwrap().minutes,
+            mask(1..=4, 1)
+        );
+        assert_eq!(
+            CronSchedule::parse("1-10/3 * * * *").unwrap().minutes,
+            mask(1..=10, 3)
+        );
+        assert_eq!(
+            CronSchedule::parse("2,4,6 * * * *").unwrap().minutes,
+            mask(2..=6, 2)
+        );
         assert_eq!(
             CronSchedule::parse("0,30,45-50 * * * *").unwrap().minutes,
             mask(0..=0, 1) | mask(30..=30, 1) | mask(45..=50, 1)
@@ -713,41 +818,107 @@ mod tests {
     fn parser_rejects_invalid_expressions() {
         use CronError::*;
         assert!(matches!(CronSchedule::parse(""), Err(FieldCount { .. })));
-        assert!(matches!(CronSchedule::parse("* * *"), Err(FieldCount { .. })));
-        assert!(matches!(CronSchedule::parse("* * * * * *"), Err(FieldCount { .. })));
-        assert!(matches!(CronSchedule::parse("60 * * * *"), Err(OutOfRange { .. })));
-        assert!(matches!(CronSchedule::parse("* 24 * * *"), Err(OutOfRange { .. })));
-        assert!(matches!(CronSchedule::parse("* * 0 * *"), Err(OutOfRange { .. })));
-        assert!(matches!(CronSchedule::parse("* * * 13 *"), Err(OutOfRange { .. })));
-        assert!(matches!(CronSchedule::parse("* * * * 8"), Err(OutOfRange { .. })));
-        assert!(matches!(CronSchedule::parse("*/0 * * * *"), Err(ZeroStep { .. })));
-        assert!(matches!(CronSchedule::parse("*/99 * * * *"), Err(OutOfRange { .. })));
-        assert!(matches!(CronSchedule::parse("5-2 * * * *"), Err(BadRange { .. })));
-        assert!(matches!(CronSchedule::parse("abc * * * *"), Err(InvalidNumber { .. })));
-        assert!(matches!(CronSchedule::parse("1,,2 * * * *"), Err(EmptyField { .. })));
-        assert!(matches!(CronSchedule::parse("5/2 * * * *"), Err(StepWithoutRange { .. })));
-        assert!(matches!(CronSchedule::parse("1- * * * *"), Err(InvalidNumber { .. })));
+        assert!(matches!(
+            CronSchedule::parse("* * *"),
+            Err(FieldCount { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("* * * * * *"),
+            Err(FieldCount { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("60 * * * *"),
+            Err(OutOfRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("* 24 * * *"),
+            Err(OutOfRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("* * 0 * *"),
+            Err(OutOfRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("* * * 13 *"),
+            Err(OutOfRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("* * * * 8"),
+            Err(OutOfRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("*/0 * * * *"),
+            Err(ZeroStep { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("*/99 * * * *"),
+            Err(OutOfRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("5-2 * * * *"),
+            Err(BadRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("abc * * * *"),
+            Err(InvalidNumber { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("1,,2 * * * *"),
+            Err(EmptyField { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("5/2 * * * *"),
+            Err(StepWithoutRange { .. })
+        ));
+        assert!(matches!(
+            CronSchedule::parse("1- * * * *"),
+            Err(InvalidNumber { .. })
+        ));
     }
 
     #[test]
     fn next_fire_every_five_minutes() {
         let s = CronSchedule::parse("*/5 * * * *").unwrap();
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 10, 3)), Some(ct(2026, 7, 18, 10, 5)));
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 10, 3)),
+            Some(ct(2026, 7, 18, 10, 5))
+        );
         // строго «после»: ровно в момент срабатывания ищется уже следующее
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 10, 5)), Some(ct(2026, 7, 18, 10, 10)));
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 10, 55)), Some(ct(2026, 7, 18, 11, 0)));
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 23, 58)), Some(ct(2026, 7, 19, 0, 0)));
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 10, 5)),
+            Some(ct(2026, 7, 18, 10, 10))
+        );
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 10, 55)),
+            Some(ct(2026, 7, 18, 11, 0))
+        );
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 23, 58)),
+            Some(ct(2026, 7, 19, 0, 0))
+        );
     }
 
     #[test]
     fn next_fire_daily_and_strictly_after() {
         let s = CronSchedule::parse("30 9 * * *").unwrap();
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 9, 29)), Some(ct(2026, 7, 18, 9, 30)));
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 9, 30)), Some(ct(2026, 7, 19, 9, 30)));
-        assert_eq!(s.next_fire_after(&ct(2026, 7, 18, 10, 0)), Some(ct(2026, 7, 19, 9, 30)));
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 9, 29)),
+            Some(ct(2026, 7, 18, 9, 30))
+        );
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 9, 30)),
+            Some(ct(2026, 7, 19, 9, 30))
+        );
+        assert_eq!(
+            s.next_fire_after(&ct(2026, 7, 18, 10, 0)),
+            Some(ct(2026, 7, 19, 9, 30))
+        );
         // через границу года
         let ny = CronSchedule::parse("0 0 1 1 *").unwrap();
-        assert_eq!(ny.next_fire_after(&ct(2026, 6, 15, 12, 0)), Some(ct(2027, 1, 1, 0, 0)));
+        assert_eq!(
+            ny.next_fire_after(&ct(2026, 6, 15, 12, 0)),
+            Some(ct(2027, 1, 1, 0, 0))
+        );
     }
 
     #[test]
@@ -756,8 +927,11 @@ mod tests {
         let fire = s.next_fire_after(&ct(2026, 1, 1, 0, 0)).unwrap();
         assert_eq!(fire, ct(2028, 2, 29, 0, 0));
         assert_eq!(fire.weekday, 2); // вторник — день недели согласован с датой
-        // строго после самого високосного дня — следующий через 4 года
-        assert_eq!(s.next_fire_after(&ct(2028, 2, 29, 0, 0)), Some(ct(2032, 2, 29, 0, 0)));
+                                     // строго после самого високосного дня — следующий через 4 года
+        assert_eq!(
+            s.next_fire_after(&ct(2028, 2, 29, 0, 0)),
+            Some(ct(2032, 2, 29, 0, 0))
+        );
     }
 
     #[test]
@@ -774,13 +948,22 @@ mod tests {
     fn next_fire_dom_dow_or_semantics() {
         // ограничены оба дня — срабатывает при совпадении любого (среда = 3)
         let both = CronSchedule::parse("0 12 15 * 3").unwrap();
-        assert_eq!(both.next_fire_after(&ct(2026, 7, 18, 0, 0)), Some(ct(2026, 7, 22, 12, 0)));
+        assert_eq!(
+            both.next_fire_after(&ct(2026, 7, 18, 0, 0)),
+            Some(ct(2026, 7, 22, 12, 0))
+        );
         // ограничен только день-месяца: 15 июля уже прошло — ждём 15 августа
         let dom = CronSchedule::parse("0 12 15 * *").unwrap();
-        assert_eq!(dom.next_fire_after(&ct(2026, 7, 18, 0, 0)), Some(ct(2026, 8, 15, 12, 0)));
+        assert_eq!(
+            dom.next_fire_after(&ct(2026, 7, 18, 0, 0)),
+            Some(ct(2026, 8, 15, 12, 0))
+        );
         // ограничен только день-недели
         let dow = CronSchedule::parse("0 12 * * 3").unwrap();
-        assert_eq!(dow.next_fire_after(&ct(2026, 7, 18, 0, 0)), Some(ct(2026, 7, 22, 12, 0)));
+        assert_eq!(
+            dow.next_fire_after(&ct(2026, 7, 18, 0, 0)),
+            Some(ct(2026, 7, 22, 12, 0))
+        );
     }
 
     #[test]
@@ -819,7 +1002,13 @@ mod tests {
         let id = sch.add("*/1 * * * *", "каждую минуту", true, &t0).unwrap();
         assert!(sch.due_tasks(&t0).is_empty());
         let due = sch.due_tasks(&ct(2026, 7, 18, 10, 1));
-        assert_eq!(due, vec![DueTask { id, coalesced_count: 1 }]);
+        assert_eq!(
+            due,
+            vec![DueTask {
+                id,
+                coalesced_count: 1
+            }]
+        );
         // повторный опрос того же момента — пусто: задача продвинулась
         assert!(sch.due_tasks(&ct(2026, 7, 18, 10, 1)).is_empty());
         assert_eq!(sch.due_tasks(&ct(2026, 7, 18, 10, 2)).len(), 1);
@@ -832,14 +1021,26 @@ mod tests {
         let id = sch.add("*/1 * * * *", "минутная", true, &t0).unwrap();
         // «проспали» 10 минут: одна запись со счётчиком 10
         let due = sch.due_tasks(&ct(2026, 7, 18, 10, 10));
-        assert_eq!(due, vec![DueTask { id, coalesced_count: 10 }]);
+        assert_eq!(
+            due,
+            vec![DueTask {
+                id,
+                coalesced_count: 10
+            }]
+        );
         // долг погашен — повторный опрос пуст
         assert!(sch.due_tasks(&ct(2026, 7, 18, 10, 10)).is_empty());
 
         let mut sch5 = CronScheduler::new();
         let id5 = sch5.add("*/5 * * * *", "пятиминутная", true, &t0).unwrap();
         let due5 = sch5.due_tasks(&ct(2026, 7, 18, 10, 30));
-        assert_eq!(due5, vec![DueTask { id: id5, coalesced_count: 6 }]);
+        assert_eq!(
+            due5,
+            vec![DueTask {
+                id: id5,
+                coalesced_count: 6
+            }]
+        );
     }
 
     #[test]
@@ -848,7 +1049,13 @@ mod tests {
         let t0 = ct(2026, 7, 18, 10, 0);
         let id = sch.add("*/5 * * * *", "разовая", false, &t0).unwrap();
         // пропустили несколько окон — разовая всё равно срабатывает ровно один раз
-        assert_eq!(sch.due_tasks(&ct(2026, 7, 18, 10, 20)), vec![DueTask { id, coalesced_count: 1 }]);
+        assert_eq!(
+            sch.due_tasks(&ct(2026, 7, 18, 10, 20)),
+            vec![DueTask {
+                id,
+                coalesced_count: 1
+            }]
+        );
         assert!(sch.list().is_empty()); // снята после срабатывания
         assert!(sch.due_tasks(&ct(2026, 7, 18, 10, 25)).is_empty());
     }
@@ -857,8 +1064,15 @@ mod tests {
     fn jitter_is_deterministic_and_bounded() {
         for id in 0..500u64 {
             let j = jitter_minutes(id, 1440);
-            assert!((0..=MAX_JITTER_MINUTES).contains(&j), "джиттер {j} вне границ");
-            assert_eq!(j, jitter_minutes(id, 1440), "джиттер обязан быть детерминированным");
+            assert!(
+                (0..=MAX_JITTER_MINUTES).contains(&j),
+                "джиттер {j} вне границ"
+            );
+            assert_eq!(
+                j,
+                jitter_minutes(id, 1440),
+                "джиттер обязан быть детерминированным"
+            );
             assert!((0..=6).contains(&jitter_minutes(id, 60)));
             assert_eq!(jitter_minutes(id, 5), 0, "период < 10 минут — без джиттера");
         }
@@ -871,7 +1085,9 @@ mod tests {
     fn jitter_shifts_effective_fire_and_due_time() {
         let mut sch = CronScheduler::new();
         let t0 = ct(2026, 7, 18, 10, 0);
-        let id = sch.add("0 12 * * *", "ежедневно в полдень", true, &t0).unwrap();
+        let id = sch
+            .add("0 12 * * *", "ежедневно в полдень", true, &t0)
+            .unwrap();
         let (next, eff) = {
             let listed = sch.list();
             (listed[0].next_fire(), listed[0].effective_fire())
@@ -881,6 +1097,12 @@ mod tests {
         let expected = next.add_minutes(jitter_minutes(id, 1440)).unwrap();
         assert_eq!(eff, expected);
         assert!(sch.due_tasks(&eff.add_minutes(-1).unwrap()).is_empty());
-        assert_eq!(sch.due_tasks(&eff), vec![DueTask { id, coalesced_count: 1 }]);
+        assert_eq!(
+            sch.due_tasks(&eff),
+            vec![DueTask {
+                id,
+                coalesced_count: 1
+            }]
+        );
     }
 }

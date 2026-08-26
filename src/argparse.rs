@@ -170,7 +170,11 @@ pub struct ArgError {
 
 impl fmt::Display for ArgError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ошибка аргументов: {}\nподсказка: {}", self.message, self.usage_hint)
+        write!(
+            f,
+            "ошибка аргументов: {}\nподсказка: {}",
+            self.message, self.usage_hint
+        )
     }
 }
 
@@ -265,7 +269,9 @@ where
 fn parse_num<T: std::str::FromStr>(value: &str, flag: &str) -> Result<T, ArgError> {
     value.parse::<T>().map_err(|_| ArgError {
         message: format!("некорректное числовое значение для {flag}: «{value}»"),
-        usage_hint: format!("{flag} ожидает целое неотрицательное число; справка — `theseus --help`"),
+        usage_hint: format!(
+            "{flag} ожидает целое неотрицательное число; справка — `theseus --help`"
+        ),
     })
 }
 
@@ -317,7 +323,10 @@ mod tests {
 
     /// Собрать argv как у `std::env::args()`: имя программы первым элементом.
     fn argv(args: &[&str]) -> Vec<String> {
-        std::iter::once("theseus").chain(args.iter().copied()).map(str::to_string).collect()
+        std::iter::once("theseus")
+            .chain(args.iter().copied())
+            .map(str::to_string)
+            .collect()
     }
 
     /// Тестовый сахар: разбор заведомо успешной командной строки.
@@ -365,14 +374,26 @@ mod tests {
 
     #[test]
     fn workspace_short_and_long() {
-        assert_eq!(parse_ok(&["-w", "/tmp/ws-a"]).workspace, PathBuf::from("/tmp/ws-a"));
-        assert_eq!(parse_ok(&["--workspace", "/tmp/ws-b"]).workspace, PathBuf::from("/tmp/ws-b"));
+        assert_eq!(
+            parse_ok(&["-w", "/tmp/ws-a"]).workspace,
+            PathBuf::from("/tmp/ws-a")
+        );
+        assert_eq!(
+            parse_ok(&["--workspace", "/tmp/ws-b"]).workspace,
+            PathBuf::from("/tmp/ws-b")
+        );
     }
 
     #[test]
     fn prompt_short_and_long() {
-        assert_eq!(parse_ok(&["-p", "первый"]).prompt.as_deref(), Some("первый"));
-        assert_eq!(parse_ok(&["--prompt", "второй"]).prompt.as_deref(), Some("второй"));
+        assert_eq!(
+            parse_ok(&["-p", "первый"]).prompt.as_deref(),
+            Some("первый")
+        );
+        assert_eq!(
+            parse_ok(&["--prompt", "второй"]).prompt.as_deref(),
+            Some("второй")
+        );
     }
 
     #[test]
@@ -428,8 +449,14 @@ mod tests {
 
     #[test]
     fn model_short_and_long() {
-        assert_eq!(parse_ok(&["-m", "deepseek-v4-pro"]).model.as_deref(), Some("deepseek-v4-pro"));
-        assert_eq!(parse_ok(&["--model", "qwen3.5-4b"]).model.as_deref(), Some("qwen3.5-4b"));
+        assert_eq!(
+            parse_ok(&["-m", "deepseek-v4-pro"]).model.as_deref(),
+            Some("deepseek-v4-pro")
+        );
+        assert_eq!(
+            parse_ok(&["--model", "qwen3.5-4b"]).model.as_deref(),
+            Some("qwen3.5-4b")
+        );
     }
 
     #[test]
@@ -440,9 +467,16 @@ mod tests {
 
     #[test]
     fn context_limit_valid_and_invalid() {
-        assert_eq!(parse_ok(&["--context-limit", "131072"]).context_limit, Some(131_072));
+        assert_eq!(
+            parse_ok(&["--context-limit", "131072"]).context_limit,
+            Some(131_072)
+        );
         let err = parse_err(&["--context-limit", "много"]);
-        assert!(err.message.contains("--context-limit"), "message: {}", err.message);
+        assert!(
+            err.message.contains("--context-limit"),
+            "message: {}",
+            err.message
+        );
         assert!(err.message.contains("много"), "message: {}", err.message);
     }
 
@@ -452,8 +486,12 @@ mod tests {
         // Граница: ноль — валидное значение (агент без ходов).
         assert_eq!(parse_ok(&["--max-turns", "0"]).max_turns, 0);
         // Отрицательное и дробное — ошибка (usize).
-        assert!(parse_err(&["--max-turns", "-3"]).message.contains("--max-turns"));
-        assert!(parse_err(&["--max-turns", "4.5"]).message.contains("--max-turns"));
+        assert!(parse_err(&["--max-turns", "-3"])
+            .message
+            .contains("--max-turns"));
+        assert!(parse_err(&["--max-turns", "4.5"])
+            .message
+            .contains("--max-turns"));
     }
 
     #[test]
@@ -468,7 +506,11 @@ mod tests {
         assert_eq!(a.inject_after_sec, 5);
         assert_eq!(a.inject_text, "пинг мир");
         let err = parse_err(&["--inject-after-sec", "скоро"]);
-        assert!(err.message.contains("--inject-after-sec"), "message: {}", err.message);
+        assert!(
+            err.message.contains("--inject-after-sec"),
+            "message: {}",
+            err.message
+        );
     }
 
     #[test]
@@ -502,14 +544,22 @@ mod tests {
     fn unknown_long_flag_suggests_similar() {
         let err = parse_err(&["--yoloo"]);
         assert!(err.message.contains("--yoloo"), "message: {}", err.message);
-        assert!(err.usage_hint.contains("--yolo"), "hint: {}", err.usage_hint);
+        assert!(
+            err.usage_hint.contains("--yolo"),
+            "hint: {}",
+            err.usage_hint
+        );
     }
 
     #[test]
     fn unknown_flag_without_close_match_gives_generic_hint() {
         let err = parse_err(&["--blabla"]);
         assert!(err.message.contains("--blabla"), "message: {}", err.message);
-        assert!(err.usage_hint.contains("--help"), "hint: {}", err.usage_hint);
+        assert!(
+            err.usage_hint.contains("--help"),
+            "hint: {}",
+            err.usage_hint
+        );
     }
 
     #[test]
@@ -523,7 +573,11 @@ mod tests {
         // main.rs молча игнорировал; строгий парсер — ошибка с именем флага.
         let err = parse_err(&["-p"]);
         assert!(err.message.contains("-p"), "message: {}", err.message);
-        assert!(err.usage_hint.contains("--help"), "hint: {}", err.usage_hint);
+        assert!(
+            err.usage_hint.contains("--help"),
+            "hint: {}",
+            err.usage_hint
+        );
         assert!(parse_err(&["--max-turns"]).message.contains("--max-turns"));
     }
 
@@ -595,19 +649,28 @@ mod tests {
     #[test]
     fn full_combination_all_fields() {
         let a = parse_ok(&[
-            "-w", "/tmp/ws",
-            "-p", "собери отчёт",
+            "-w",
+            "/tmp/ws",
+            "-p",
+            "собери отчёт",
             "--yolo",
             "--max",
-            "-m", "deepseek-v4-pro",
-            "--base-url", "http://127.0.0.1:8080/v1",
-            "--context-limit", "65536",
-            "--max-turns", "12",
-            "--resume", "/tmp/s1.json",
+            "-m",
+            "deepseek-v4-pro",
+            "--base-url",
+            "http://127.0.0.1:8080/v1",
+            "--context-limit",
+            "65536",
+            "--max-turns",
+            "12",
+            "--resume",
+            "/tmp/s1.json",
             "--sessions",
             "--fix",
-            "--inject-after-sec", "3",
-            "--inject-text", "пингуй",
+            "--inject-after-sec",
+            "3",
+            "--inject-text",
+            "пингуй",
             "--init",
         ]);
         assert_eq!(a.workspace, PathBuf::from("/tmp/ws"));

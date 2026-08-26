@@ -128,7 +128,11 @@ impl MemoryStore {
 
     /// Хранилище на произвольных часах (тесты, воспроизводимость).
     pub fn with_clock(clock: Clock) -> Self {
-        MemoryStore { facts: BTreeMap::new(), next_id: 1, clock }
+        MemoryStore {
+            facts: BTreeMap::new(),
+            next_id: 1,
+            clock,
+        }
     }
 
     /// Число фактов в хранилище.
@@ -212,12 +216,16 @@ impl MemoryStore {
                 let overlap = hits as f64 / qset.len() as f64;
                 let age_days = now.saturating_sub(f.created_at) as f64 / 86_400.0;
                 let recency = 0.5f64.powf(age_days / RECENCY_HALF_LIFE_DAYS);
-                let score = overlap + CONFIDENCE_WEIGHT * f64::from(f.confidence) + RECENCY_WEIGHT * recency;
+                let score = overlap
+                    + CONFIDENCE_WEIGHT * f64::from(f.confidence)
+                    + RECENCY_WEIGHT * recency;
                 Some((score, f))
             })
             .collect();
         scored.sort_by(|a, b| {
-            b.0.partial_cmp(&a.0).unwrap_or(Ordering::Equal).then_with(|| b.1.id.cmp(&a.1.id))
+            b.0.partial_cmp(&a.0)
+                .unwrap_or(Ordering::Equal)
+                .then_with(|| b.1.id.cmp(&a.1.id))
         });
         scored.into_iter().map(|(_, f)| f).collect()
     }
@@ -314,7 +322,8 @@ impl MemoryStore {
     /// меньше; пары отсортированы по возрастанию обоих id.
     pub fn conflict_candidates_with_threshold(&self, threshold: f32) -> Vec<(u64, u64)> {
         let facts: Vec<&Fact> = self.facts.values().collect();
-        let vectors: Vec<HashMap<String, u32>> = facts.iter().map(|f| word_counts(&f.text)).collect();
+        let vectors: Vec<HashMap<String, u32>> =
+            facts.iter().map(|f| word_counts(&f.text)).collect();
         let mut out = Vec::new();
         for (i, a) in facts.iter().enumerate() {
             for (j, b) in facts.iter().enumerate().skip(i + 1) {
@@ -342,7 +351,12 @@ impl MemoryStore {
         let _ = writeln!(out, "# facts: {n}");
         for f in self.facts.values() {
             let id = f.id;
-            let tags = f.tags.iter().map(String::as_str).collect::<Vec<_>>().join(", ");
+            let tags = f
+                .tags
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
             let src = f.source;
             let created = f.created_at;
             let conf = f.confidence;
@@ -372,8 +386,10 @@ impl MemoryStore {
                 if let Some(p) = cur.take() {
                     store.insert_parsed(p)?;
                 }
-                let id: u64 =
-                    rest.trim().parse().with_context(|| format!("некорректный id факта: «{rest}»"))?;
+                let id: u64 = rest
+                    .trim()
+                    .parse()
+                    .with_context(|| format!("некорректный id факта: «{rest}»"))?;
                 cur = Some(ParsedFact::new(id));
                 continue;
             }
@@ -413,7 +429,12 @@ impl MemoryStore {
     }
 
     /// Вставка результата консолидации новой записью (свежий id и «сейчас»).
-    fn insert_consolidated(&mut self, text: String, tags: BTreeSet<String>, confidence: f32) -> u64 {
+    fn insert_consolidated(
+        &mut self,
+        text: String,
+        tags: BTreeSet<String>,
+        confidence: f32,
+    ) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
         let fact = Fact {
@@ -432,7 +453,9 @@ impl MemoryStore {
 
 /// Системные часы: секунды UNIX-времени (0 при сбое часов).
 fn system_now() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// Разбор текста на слова: буквенно-цифровые токены Unicode в нижнем
@@ -490,7 +513,12 @@ fn cosine(a: &HashMap<String, u32>, b: &HashMap<String, u32>) -> f64 {
         .iter()
         .filter_map(|(w, c)| big.get(w).map(|c2| f64::from(*c) * f64::from(*c2)))
         .sum();
-    let norm = |m: &HashMap<String, u32>| m.values().map(|c| f64::from(*c).powi(2)).sum::<f64>().sqrt();
+    let norm = |m: &HashMap<String, u32>| {
+        m.values()
+            .map(|c| f64::from(*c).powi(2))
+            .sum::<f64>()
+            .sqrt()
+    };
     let (na, nb) = (norm(a), norm(b));
     if na <= f64::EPSILON || nb <= f64::EPSILON {
         0.0 // пустой вектор слов — схожести нет
@@ -591,16 +619,19 @@ impl ParsedFact {
                 }
                 "source" => self.source = value.parse()?,
                 "created_at" => {
-                    self.created_at =
-                        value.parse().with_context(|| format!("некорректный created_at: «{value}»"))?;
+                    self.created_at = value
+                        .parse()
+                        .with_context(|| format!("некорректный created_at: «{value}»"))?;
                 }
                 "confidence" => {
-                    self.confidence =
-                        value.parse().with_context(|| format!("некорректный confidence: «{value}»"))?;
+                    self.confidence = value
+                        .parse()
+                        .with_context(|| format!("некорректный confidence: «{value}»"))?;
                 }
                 "access_count" => {
-                    self.access_count =
-                        value.parse().with_context(|| format!("некорректный access_count: «{value}»"))?;
+                    self.access_count = value
+                        .parse()
+                        .with_context(|| format!("некорректный access_count: «{value}»"))?;
                 }
                 _ => {} // неизвестные ключи — задел на будущие поля
             }
@@ -651,7 +682,11 @@ mod tests {
     #[test]
     fn add_assigns_monotonic_ids_and_normalizes() {
         let (mut s, _) = manual_store(1_000);
-        let id1 = s.add("  Первый факт  ", ["GPU", " gpu ", "Rust"], FactSource::Session);
+        let id1 = s.add(
+            "  Первый факт  ",
+            ["GPU", " gpu ", "Rust"],
+            FactSource::Session,
+        );
         let id2 = s.add("Второй факт", Vec::<String>::new(), FactSource::User);
         assert_eq!(id1, 1);
         assert_eq!(id2, 2);
@@ -659,7 +694,10 @@ mod tests {
         assert!(!s.is_empty());
         let f = s.get(1).unwrap();
         assert_eq!(f.text, "Первый факт");
-        assert_eq!(f.tags.iter().map(String::as_str).collect::<Vec<_>>(), vec!["gpu", "rust"]);
+        assert_eq!(
+            f.tags.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["gpu", "rust"]
+        );
         assert_eq!(f.source, FactSource::Session);
         assert_eq!(f.created_at, 1_000);
         assert!(approx(f.confidence, 1.0));
@@ -682,8 +720,16 @@ mod tests {
     #[test]
     fn search_boosts_by_confidence() {
         let (mut s, _) = manual_store(5_000);
-        let a = s.add("async runtime tokio executor", ["rust"], FactSource::Session);
-        let b = s.add("async runtime tokio executor", ["rust"], FactSource::Session);
+        let a = s.add(
+            "async runtime tokio executor",
+            ["rust"],
+            FactSource::Session,
+        );
+        let b = s.add(
+            "async runtime tokio executor",
+            ["rust"],
+            FactSource::Session,
+        );
         s.get_mut(a).unwrap().confidence = 0.2;
         s.get_mut(b).unwrap().confidence = 0.9;
         let hits = s.search("async tokio");
@@ -695,7 +741,11 @@ mod tests {
     #[test]
     fn search_boosts_by_recency() {
         let (mut s, now) = manual_store(1_000_000);
-        let old = s.add("kernel linux scheduler cgroups", ["os"], FactSource::Session);
+        let old = s.add(
+            "kernel linux scheduler cgroups",
+            ["os"],
+            FactSource::Session,
+        );
         now.store(1_000_000 + 120 * DAY, Ordering::SeqCst);
         let new = s.add("kernel linux modules ebpf", ["os"], FactSource::Session);
         assert_eq!(s.get(old).unwrap().created_at, 1_000_000);
@@ -757,7 +807,10 @@ mod tests {
         assert_eq!(s.len(), 2);
         let f0 = &merged[0];
         assert_eq!(f0.text, "У пользователя RTX 4080 SUPER"); // первый вариант текста
-        assert_eq!(f0.tags.iter().map(String::as_str).collect::<Vec<_>>(), vec!["gpu", "hardware", "nvidia"]);
+        assert_eq!(
+            f0.tags.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["gpu", "hardware", "nvidia"]
+        );
         assert!(approx(f0.confidence, 0.9));
         assert_eq!(f0.source, FactSource::Consolidation);
         assert_eq!(f0.created_at, 42);
@@ -768,14 +821,25 @@ mod tests {
     #[test]
     fn consolidate_merges_into_existing_fact() {
         let (mut s, _) = manual_store(7);
-        let id = s.add("Агент использует sandbox landlock", ["sec"], FactSource::User);
-        let merged = s.consolidate(vec![draft("агент использует sandbox landlock", &["sec", "linux"], 0.5)]);
+        let id = s.add(
+            "Агент использует sandbox landlock",
+            ["sec"],
+            FactSource::User,
+        );
+        let merged = s.consolidate(vec![draft(
+            "агент использует sandbox landlock",
+            &["sec", "linux"],
+            0.5,
+        )]);
         assert_eq!(merged.len(), 1);
         assert_eq!(s.len(), 1); // новых фактов не появилось
         assert_eq!(merged[0].id, id);
         let f = s.get(id).unwrap();
         assert_eq!(f.source, FactSource::User); // источник оригинала сохранён
-        assert_eq!(f.tags.iter().map(String::as_str).collect::<Vec<_>>(), vec!["linux", "sec"]);
+        assert_eq!(
+            f.tags.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec!["linux", "sec"]
+        );
         assert!(approx(f.confidence, 0.75));
     }
 
@@ -786,16 +850,31 @@ mod tests {
         assert!(merged.is_empty());
         assert!(s.is_empty());
         // Пропущенные тексты не съедают id.
-        assert_eq!(s.add("настоящий факт", Vec::<&str>::new(), FactSource::Session), 1);
+        assert_eq!(
+            s.add("настоящий факт", Vec::<&str>::new(), FactSource::Session),
+            1
+        );
     }
 
     #[test]
     fn conflict_candidates_flags_same_tag_low_similarity() {
         let (mut s, _) = manual_store(0);
-        let a = s.add("пользователь любит тёмную тему оформления", ["ui"], FactSource::Session);
-        let b = s.add("светлая тема читается лучше днём", ["ui"], FactSource::Session);
+        let a = s.add(
+            "пользователь любит тёмную тему оформления",
+            ["ui"],
+            FactSource::Session,
+        );
+        let b = s.add(
+            "светлая тема читается лучше днём",
+            ["ui"],
+            FactSource::Session,
+        );
         // Тот же текст, что у a, но без общего тега — не конфликт.
-        let c = s.add("пользователь любит тёмную тему оформления", ["prefs"], FactSource::Session);
+        let c = s.add(
+            "пользователь любит тёмную тему оформления",
+            ["prefs"],
+            FactSource::Session,
+        );
         let pairs = s.conflict_candidates();
         assert_eq!(pairs, vec![(a, b)]);
         assert!(pairs.iter().all(|p| p.0 != c && p.1 != c));
@@ -804,8 +883,16 @@ mod tests {
     #[test]
     fn conflict_candidates_ignores_similar_texts() {
         let (mut s, _) = manual_store(0);
-        let a = s.add("пользователь любит тёмную тему", ["ui"], FactSource::Session);
-        let b = s.add("пользователь любит тёмную тему очень", ["ui"], FactSource::Session);
+        let a = s.add(
+            "пользователь любит тёмную тему",
+            ["ui"],
+            FactSource::Session,
+        );
+        let b = s.add(
+            "пользователь любит тёмную тему очень",
+            ["ui"],
+            FactSource::Session,
+        );
         // Косинус ~0.89 — выше порога 0.3, конфликта нет...
         assert!(s.conflict_candidates().is_empty());
         // ...но с завышенным порогом пара всплывёт.
@@ -815,8 +902,16 @@ mod tests {
     #[test]
     fn markdown_roundtrip() {
         let (mut s, now) = manual_store(1_700_000_000);
-        let a = s.add("У пользователя RTX 4080 SUPER 16GB", ["gpu", "hardware"], FactSource::User);
-        let b = s.add("Многострочный\nфакт про настройки\nокружения", ["env"], FactSource::Session);
+        let a = s.add(
+            "У пользователя RTX 4080 SUPER 16GB",
+            ["gpu", "hardware"],
+            FactSource::User,
+        );
+        let b = s.add(
+            "Многострочный\nфакт про настройки\nокружения",
+            ["env"],
+            FactSource::Session,
+        );
         let c = s.add("Факт от консолидации", ["meta"], FactSource::Consolidation);
         s.get_mut(b).unwrap().confidence = 0.75;
         for _ in 0..4 {
@@ -841,7 +936,10 @@ mod tests {
         // Повторная сериализация даёт тот же текст.
         assert_eq!(md, loaded.to_markdown());
         // next_id восстановлен за максимальным id.
-        assert_eq!(loaded.add("новый факт", Vec::<&str>::new(), FactSource::Session), 4);
+        assert_eq!(
+            loaded.add("новый факт", Vec::<&str>::new(), FactSource::Session),
+            4
+        );
     }
 
     #[test]
@@ -849,7 +947,9 @@ mod tests {
         assert!(MemoryStore::from_markdown("## Fact xyz\n---\n---\nтекст").is_err());
         let dup = "## Fact 1\n---\n---\nпервый\n\n## Fact 1\n---\n---\nвторой\n";
         assert!(MemoryStore::from_markdown(dup).is_err());
-        assert!(MemoryStore::from_markdown("## Fact 1\n---\nconfidence: не-число\n---\nтекст").is_err());
+        assert!(
+            MemoryStore::from_markdown("## Fact 1\n---\nconfidence: не-число\n---\nтекст").is_err()
+        );
         assert!(MemoryStore::from_markdown("## Fact 1\n---\nsource: alien\n---\nтекст").is_err());
     }
 
@@ -865,6 +965,9 @@ mod tests {
         assert_eq!(f.source, FactSource::Session); // дефолт
         assert_eq!(f.created_at, 0); // дефолт
         assert!(approx(f.confidence, 1.0)); // дефолт
-        assert_eq!(s.add("ещё один", Vec::<&str>::new(), FactSource::Session), 6);
+        assert_eq!(
+            s.add("ещё один", Vec::<&str>::new(), FactSource::Session),
+            6
+        );
     }
 }

@@ -230,8 +230,7 @@ impl GitRepo {
     /// Для деталей (ahead/behind, счётчики по видам) см.
     /// [`GitRepo::status_summary`].
     pub fn is_dirty(&self) -> bool {
-        git_stdout(&["status", "--porcelain"], &self.root)
-            .is_some_and(|out| !out.trim().is_empty())
+        git_stdout(&["status", "--porcelain"], &self.root).is_some_and(|out| !out.trim().is_empty())
     }
 
     /// Сводка статуса из `git status --porcelain=v2 --branch`.
@@ -245,7 +244,12 @@ impl GitRepo {
     pub fn status_summary(&self) -> GitStatus {
         let mut status = GitStatus::default();
         let Some(out) = git_stdout(
-            &["status", "--porcelain=v2", "--branch", "--untracked-files=normal"],
+            &[
+                "status",
+                "--porcelain=v2",
+                "--branch",
+                "--untracked-files=normal",
+            ],
             &self.root,
         ) else {
             return status;
@@ -535,8 +539,14 @@ mod tests {
         assert!(GitRepo::discover(repo.path()).is_none());
         let elapsed = started.elapsed();
         // git убит по GIT_TIMEOUT (2 с), а не дождавшись sleep 30
-        assert!(elapsed >= GIT_TIMEOUT, "вернулся подозрительно рано: {elapsed:?}");
-        assert!(elapsed < Duration::from_secs(15), "не убился по таймауту: {elapsed:?}");
+        assert!(
+            elapsed >= GIT_TIMEOUT,
+            "вернулся подозрительно рано: {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(15),
+            "не убился по таймауту: {elapsed:?}"
+        );
     }
 
     #[test]
@@ -634,7 +644,10 @@ mod tests {
         // коммит в origin + fetch в клоне → расхождение: ahead 1, behind 1
         fs::write(origin.path().join("behind.txt"), "назад").unwrap();
         git(origin.path(), &["add", "behind.txt"]);
-        git(origin.path(), &["commit", "--quiet", "-m", "коммит в origin"]);
+        git(
+            origin.path(),
+            &["commit", "--quiet", "-m", "коммит в origin"],
+        );
         git(&clone, &["fetch", "--quiet", "origin"]);
         let status = GitRepo::discover(&clone).unwrap().status_summary();
         assert_eq!(status.ahead, 1);
@@ -647,7 +660,10 @@ mod tests {
         let repo = init_repo("log-order");
         fs::write(repo.path().join("second.txt"), "2").unwrap();
         git(repo.path(), &["add", "second.txt"]);
-        git(repo.path(), &["commit", "--quiet", "-m", "второй: добавил second.txt"]);
+        git(
+            repo.path(),
+            &["commit", "--quiet", "-m", "второй: добавил second.txt"],
+        );
         let log = GitRepo::discover(repo.path()).unwrap().recent_log(10);
         assert_eq!(log.len(), 2);
         assert_eq!(log[0].subject, "второй: добавил second.txt");
@@ -675,7 +691,10 @@ mod tests {
         assert_eq!(log[0].subject, "коммит 2");
         assert_eq!(log[1].subject, "коммит 1");
         // n = 0 — пустой вектор без вызова git
-        assert!(GitRepo::discover(repo.path()).unwrap().recent_log(0).is_empty());
+        assert!(GitRepo::discover(repo.path())
+            .unwrap()
+            .recent_log(0)
+            .is_empty());
     }
 
     #[test]
@@ -683,7 +702,11 @@ mod tests {
         let _guard = test_lock();
         let repo = init_repo("diff-counts");
         // «два» → «ДВА» (1 del + 1 add) и две новые строки (2 add)
-        fs::write(repo.path().join("file.txt"), "один\nДВА\nтри\nчетыре\nпять\n").unwrap();
+        fs::write(
+            repo.path().join("file.txt"),
+            "один\nДВА\nтри\nчетыре\nпять\n",
+        )
+        .unwrap();
         let stat = GitRepo::discover(repo.path()).unwrap().diff_stat();
         assert_eq!(stat, Some((1, 3, 1)));
     }
@@ -702,8 +725,14 @@ mod tests {
     fn parse_shortstat_handles_partial_forms() {
         let _guard = test_lock();
         assert_eq!(parse_shortstat(""), (0, 0, 0));
-        assert_eq!(parse_shortstat(" 1 file changed, 1 insertion(+)\n"), (1, 1, 0));
-        assert_eq!(parse_shortstat(" 2 files changed, 3 deletions(-)\n"), (2, 0, 3));
+        assert_eq!(
+            parse_shortstat(" 1 file changed, 1 insertion(+)\n"),
+            (1, 1, 0)
+        );
+        assert_eq!(
+            parse_shortstat(" 2 files changed, 3 deletions(-)\n"),
+            (2, 0, 3)
+        );
         assert_eq!(
             parse_shortstat(" 5 files changed, 10 insertions(+), 4 deletions(-)\n"),
             (5, 10, 4)

@@ -134,7 +134,11 @@ impl Color16 {
     /// SGR-параметр для установки этого цвета как цвета текста (30–37 / 90–97).
     pub fn fg_code(self) -> u8 {
         let idx = self.index();
-        if idx < 8 { 30 + idx } else { 90 + idx - 8 }
+        if idx < 8 {
+            30 + idx
+        } else {
+            90 + idx - 8
+        }
     }
 
     /// Разбор имени цвета, регистронезависимо.
@@ -583,7 +587,11 @@ fn relative_luminance(rgb: (u8, u8, u8)) -> f64 {
 
 /// Коэффициент контрастности двух яркостей: от 1.0 (нет контраста) до 21.0.
 fn contrast_ratio(lum1: f64, lum2: f64) -> f64 {
-    let (hi, lo) = if lum1 >= lum2 { (lum1, lum2) } else { (lum2, lum1) };
+    let (hi, lo) = if lum1 >= lum2 {
+        (lum1, lum2)
+    } else {
+        (lum2, lum1)
+    };
     (hi + 0.05) / (lo + 0.05)
 }
 
@@ -662,7 +670,10 @@ mod tests {
         }
         let src = "name = \"t\"\n[roles]\nwarn = \"bright-yellow\"\n";
         let theme = parse_theme(src).expect("тема должна разобраться");
-        assert_eq!(theme.get(ThemeRole::Warn), ColorSpec::Ansi(Color16::BrightYellow));
+        assert_eq!(
+            theme.get(ThemeRole::Warn),
+            ColorSpec::Ansi(Color16::BrightYellow)
+        );
     }
 
     #[test]
@@ -751,14 +762,27 @@ mod tests {
         assert_eq!(empty.get(ThemeRole::AgentText), ColorSpec::Default);
 
         // Задан только AgentText: прочие роли наследуют его.
-        let theme = Theme::new("t").with_role(ThemeRole::AgentText, ColorSpec::Ansi(Color16::White));
-        assert_eq!(theme.get(ThemeRole::ToolName), ColorSpec::Ansi(Color16::White));
-        assert_eq!(theme.get(ThemeRole::UserText), ColorSpec::Ansi(Color16::White));
+        let theme =
+            Theme::new("t").with_role(ThemeRole::AgentText, ColorSpec::Ansi(Color16::White));
+        assert_eq!(
+            theme.get(ThemeRole::ToolName),
+            ColorSpec::Ansi(Color16::White)
+        );
+        assert_eq!(
+            theme.get(ThemeRole::UserText),
+            ColorSpec::Ansi(Color16::White)
+        );
 
         // Явно заданная роль побеждает AgentText.
         let theme = theme.with_role(ThemeRole::ToolName, ColorSpec::Ansi(Color16::Magenta));
-        assert_eq!(theme.get(ThemeRole::ToolName), ColorSpec::Ansi(Color16::Magenta));
-        assert_eq!(theme.get(ThemeRole::AgentText), ColorSpec::Ansi(Color16::White));
+        assert_eq!(
+            theme.get(ThemeRole::ToolName),
+            ColorSpec::Ansi(Color16::Magenta)
+        );
+        assert_eq!(
+            theme.get(ThemeRole::AgentText),
+            ColorSpec::Ansi(Color16::White)
+        );
         assert!(theme.has_role(ThemeRole::ToolName));
         assert!(!theme.has_role(ThemeRole::Accent));
     }
@@ -776,7 +800,12 @@ mod tests {
                     assert_eq!(theme.get(role), ColorSpec::Default);
                 } else {
                     // Полные темы: все роли заданы явно, fallback не нужен.
-                    assert!(theme.has_role(role), "{}: нет роли {}", theme.name, role.as_str());
+                    assert!(
+                        theme.has_role(role),
+                        "{}: нет роли {}",
+                        theme.name,
+                        role.as_str()
+                    );
                     assert_ne!(theme.get(role), ColorSpec::Default);
                 }
             }
@@ -816,10 +845,19 @@ mod tests {
         assert_eq!(to_ansi_fg(ColorSpec::Ansi(Color16::Black)), "\u{1b}[30m");
         assert_eq!(to_ansi_fg(ColorSpec::Ansi(Color16::Red)), "\u{1b}[31m");
         assert_eq!(to_ansi_fg(ColorSpec::Ansi(Color16::White)), "\u{1b}[37m");
-        assert_eq!(to_ansi_fg(ColorSpec::Ansi(Color16::BrightRed)), "\u{1b}[91m");
-        assert_eq!(to_ansi_fg(ColorSpec::Ansi(Color16::BrightWhite)), "\u{1b}[97m");
+        assert_eq!(
+            to_ansi_fg(ColorSpec::Ansi(Color16::BrightRed)),
+            "\u{1b}[91m"
+        );
+        assert_eq!(
+            to_ansi_fg(ColorSpec::Ansi(Color16::BrightWhite)),
+            "\u{1b}[97m"
+        );
         assert_eq!(to_ansi_fg(ColorSpec::Rgb(1, 2, 3)), "\u{1b}[38;2;1;2;3m");
-        assert_eq!(to_ansi_fg(ColorSpec::Rgb(255, 255, 255)), "\u{1b}[38;2;255;255;255m");
+        assert_eq!(
+            to_ansi_fg(ColorSpec::Rgb(255, 255, 255)),
+            "\u{1b}[38;2;255;255;255m"
+        );
         assert_eq!(to_ansi_fg(ColorSpec::Default), "\u{1b}[39m");
     }
 
@@ -863,7 +901,8 @@ mod tests {
     #[test]
     fn contrast_check_defaults_to_black_background() {
         // Тема без PopupBg: фон считается чёрным.
-        let theme = Theme::new("t").with_role(ThemeRole::AgentText, ColorSpec::Ansi(Color16::Black));
+        let theme =
+            Theme::new("t").with_role(ThemeRole::AgentText, ColorSpec::Ansi(Color16::Black));
         let flagged = contrast_check(&theme);
         assert_eq!(flagged.len(), 1);
         assert_eq!(flagged[0].0, ThemeRole::AgentText);

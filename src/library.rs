@@ -11,10 +11,10 @@
 //!   запроса с keywords ветки (слова короче двух букв и чисто цифровые
 //!   токены отбрасываются);
 //! * [`LibraryIndex::search_docs`] обходит txt-зеркала: слово запроса в
-//!   имени файла — [`SCORE_FILENAME`] очков, каждое вхождение в первые
-//!   [`TEXT_WINDOW`] байт текста — [`SCORE_TEXT_PER_MATCH`]; обход
-//!   ограничен [`MAX_WALK_FILES`] файлами с ранним выходом по
-//!   `limit * `[`HIT_EARLY_EXIT_FACTOR`] находок;
+//!   имени файла — `SCORE_FILENAME` очков, каждое вхождение в первые
+//!   `TEXT_WINDOW` байт текста — `SCORE_TEXT_PER_MATCH`; обход
+//!   ограничен `MAX_WALK_FILES` файлами с ранним выходом по
+//!   `limit * HIT_EARLY_EXIT_FACTOR` находок;
 //! * [`LibraryIndex::read_excerpt`] читает txt-зеркало (для `file.pdf`
 //!   подставляется `file.pdf.txt`), вежливо отказывает для PDF без зеркала
 //!   и для docx, а `..` и симлинки наружу корня режет проверкой пути.
@@ -28,8 +28,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 
 /// Корень боевой библиотеки на машине пользователя.
-pub const DEFAULT_ROOT: &str =
-    "/home/roman/Документы/КОД/gigachat/РАЗБОРЫ/recipes_taxonomy";
+pub const DEFAULT_ROOT: &str = "/home/roman/Документы/КОД/gigachat/РАЗБОРЫ/recipes_taxonomy";
 
 /// Имя файла маппинга «ветка → keywords» в корне библиотеки.
 const MAPPING_FILE: &str = "taxonomy_mapping.json";
@@ -69,10 +68,10 @@ pub struct DocHit {
     /// Ветка — родительский каталог относительно корня
     /// («03_ПОСТ-ТРЕЙНИНГ_RL/02_RL_методы»; пустая строка для файлов в корне).
     pub branch: String,
-    /// Итоговый скор: [`SCORE_FILENAME`] за слово в имени файла плюс
-    /// [`SCORE_TEXT_PER_MATCH`] за каждое вхождение в голову текста.
+    /// Итоговый скор: `SCORE_FILENAME` за слово в имени файла плюс
+    /// `SCORE_TEXT_PER_MATCH` за каждое вхождение в голову текста.
     pub score: u64,
-    /// Первая строка с совпадением (до [`SNIPPET_MAX_CHARS`] символов);
+    /// Первая строка с совпадением (до `SNIPPET_MAX_CHARS` символов);
     /// если совпадение только в имени файла — первая непустая строка.
     pub snippet: String,
 }
@@ -105,7 +104,10 @@ impl LibraryIndex {
             .canonicalize()
             .with_context(|| format!("корень библиотеки недоступен: {}", root.display()))?;
         if !canon.is_dir() {
-            bail!("корень библиотеки не является каталогом: {}", canon.display());
+            bail!(
+                "корень библиотеки не является каталогом: {}",
+                canon.display()
+            );
         }
 
         let mut branches: Vec<Branch> = Vec::new();
@@ -114,12 +116,10 @@ impl LibraryIndex {
             let raw = fs::read_to_string(&mapping_path).with_context(|| {
                 format!("не читается {MAPPING_FILE}: {}", mapping_path.display())
             })?;
-            let map: std::collections::HashMap<String, Vec<String>> =
-                serde_json::from_str(&raw)
-                    .with_context(|| format!("битый JSON в {}", mapping_path.display()))?;
+            let map: std::collections::HashMap<String, Vec<String>> = serde_json::from_str(&raw)
+                .with_context(|| format!("битый JSON в {}", mapping_path.display()))?;
             for (key, kws) in map {
-                let mut keywords: Vec<String> =
-                    kws.iter().map(|k| k.to_lowercase()).collect();
+                let mut keywords: Vec<String> = kws.iter().map(|k| k.to_lowercase()).collect();
                 for tok in tokenize(&key) {
                     if !keywords.contains(&tok) {
                         keywords.push(tok);
@@ -158,7 +158,10 @@ impl LibraryIndex {
                     }
                 }
             }
-            branches.push(Branch { key: name, keywords });
+            branches.push(Branch {
+                key: name,
+                keywords,
+            });
         }
         branches.sort_by(|a, b| a.key.cmp(&b.key));
         Ok(Self {
@@ -205,11 +208,11 @@ impl LibraryIndex {
     /// Ищет по текстовым документам библиотеки (`*.txt` зеркала PDF, а также
     /// `*.md`/`*.markdown` — дайджесты и заметки; расширение обхода 24.07).
     ///
-    /// Скор файла: [`SCORE_FILENAME`] за каждое слово запроса в имени плюс
-    /// [`SCORE_TEXT_PER_MATCH`] за каждое вхождение слова в первые
-    /// [`TEXT_WINDOW`] байт текста; файлы без совпадений отбрасываются.
-    /// Обход — не более [`MAX_WALK_FILES`] зеркал за проход, с ранним
-    /// выходом после `limit * `[`HIT_EARLY_EXIT_FACTOR`] находок (дальше
+    /// Скор файла: `SCORE_FILENAME` за каждое слово запроса в имени плюс
+    /// `SCORE_TEXT_PER_MATCH` за каждое вхождение слова в первые
+    /// `TEXT_WINDOW` байт текста; файлы без совпадений отбрасываются.
+    /// Обход — не более `MAX_WALK_FILES` зеркал за проход, с ранним
+    /// выходом после `limit * HIT_EARLY_EXIT_FACTOR` находок (дальше
     /// сортировка по скору и отрезание до `limit`). Скрытые каталоги и
     /// симлинки не посещаются. Пустой запрос или `limit == 0` — пустой
     /// результат.
@@ -223,7 +226,9 @@ impl LibraryIndex {
         let mut examined = 0usize;
         let mut stack = vec![self.root.clone()];
         'walk: while let Some(dir) = stack.pop() {
-            let Ok(entries) = fs::read_dir(&dir) else { continue };
+            let Ok(entries) = fs::read_dir(&dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let Ok(ft) = entry.file_type() else { continue };
                 if ft.is_symlink() {
@@ -326,10 +331,7 @@ impl LibraryIndex {
     /// Скорит одно зеркало; `None` — если совпадений нет совсем.
     fn score_doc(&self, path: &Path, words: &[String]) -> Option<DocHit> {
         let name = path.file_name()?.to_string_lossy().to_lowercase();
-        let fname_hits = words
-            .iter()
-            .filter(|w| name.contains(w.as_str()))
-            .count() as u64;
+        let fname_hits = words.iter().filter(|w| name.contains(w.as_str())).count() as u64;
         // Нечитаемый файл не мешает поиску: имя всё равно может дать очки.
         let head = read_head(path).unwrap_or_default();
         let lower = head.to_lowercase();
@@ -364,7 +366,8 @@ fn is_text_doc(name_lower: &str) -> bool {
     name_lower.ends_with(".txt") || name_lower.ends_with(".md") || name_lower.ends_with(".markdown")
 }
 
-fn tokenize(text: &str) -> Vec<String> {    let mut out: Vec<String> = Vec::new();
+fn tokenize(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
     for raw in text.split(|c: char| !c.is_alphanumeric()) {
         let word = raw.to_lowercase();
         if word.chars().count() >= 2
@@ -673,14 +676,21 @@ mod tests {
     fn search_docs_finds_markdown_digests() {
         let (tmp, idx) = make_index();
         tmp.write("03_RL/paper.pdf.txt", "агентные скиллы и trigger-тесты");
-        tmp.write("08_Новостные_дайджесты/AINews/2026-07-14_Coding.md",
-            "# Дайджест\n\nагентные скиллы недели");
+        tmp.write(
+            "08_Новостные_дайджесты/AINews/2026-07-14_Coding.md",
+            "# Дайджест\n\nагентные скиллы недели",
+        );
         tmp.write("09_x/note.markdown", "агентные скиллы в markdown");
         let hits = idx.search_docs("агентные скиллы", 10);
         let paths: Vec<&PathBuf> = hits.iter().map(|h| &h.path).collect();
-        assert!(paths.iter().any(|p| p.ends_with("2026-07-14_Coding.md")),
-            "md-дайджест не найден: {paths:?}");
-        assert!(paths.iter().any(|p| p.ends_with("note.markdown")), "{paths:?}");
+        assert!(
+            paths.iter().any(|p| p.ends_with("2026-07-14_Coding.md")),
+            "md-дайджест не найден: {paths:?}"
+        );
+        assert!(
+            paths.iter().any(|p| p.ends_with("note.markdown")),
+            "{paths:?}"
+        );
         // is_text_doc: txt/md/markdown — да; docx/pdf/bin — нет
         assert!(is_text_doc("a.txt") && is_text_doc("b.md") && is_text_doc("c.markdown"));
         assert!(!is_text_doc("d.docx") && !is_text_doc("e.pdf") && !is_text_doc("f.bin"));
@@ -689,15 +699,24 @@ mod tests {
     /// md/markdown — обычный текст (баг 24.07: library_read отказывал
     /// дайджестам «неподдерживаемое расширение «md»»).
     #[test]
-    fn read_excerpt_reads_markdown_as_text() {        let (tmp, idx) = make_index();
-        tmp.write("08_Новостные_дайджесты/AINews/2026-07-14_Coding_Agent.md",
-            "# Дайджест\n\nновости про агентов");
-        let got = idx.read_excerpt(
-            Path::new("08_Новостные_дайджесты/AINews/2026-07-14_Coding_Agent.md"), 100).unwrap();
+    fn read_excerpt_reads_markdown_as_text() {
+        let (tmp, idx) = make_index();
+        tmp.write(
+            "08_Новостные_дайджесты/AINews/2026-07-14_Coding_Agent.md",
+            "# Дайджест\n\nновости про агентов",
+        );
+        let got = idx
+            .read_excerpt(
+                Path::new("08_Новостные_дайджесты/AINews/2026-07-14_Coding_Agent.md"),
+                100,
+            )
+            .unwrap();
         assert!(got.contains("новости про агентов"), "{got}");
         tmp.write("09_x/note.markdown", "markdown body");
-        assert!(idx.read_excerpt(Path::new("09_x/note.markdown"), 100)
-            .unwrap().contains("markdown body"));
+        assert!(idx
+            .read_excerpt(Path::new("09_x/note.markdown"), 100)
+            .unwrap()
+            .contains("markdown body"));
     }
 
     #[test]

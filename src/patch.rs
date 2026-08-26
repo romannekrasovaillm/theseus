@@ -101,9 +101,9 @@ fn normalize_marker_lines(lines: &[&str]) -> Vec<String> {
     while i < lines.len() {
         let line = lines[i];
         let trimmed = line.trim();
-        let bare = MARKERS.iter().find(|m| {
-            trimmed == **m || trimmed == format!("{m}:").as_str()
-        });
+        let bare = MARKERS
+            .iter()
+            .find(|m| trimmed == **m || trimmed == format!("{m}:").as_str());
         if let Some(m) = bare {
             // следующая непустая строка — путь (не маркер)
             let mut j = i + 1;
@@ -232,10 +232,18 @@ pub fn parse_patch(text: &str) -> Result<Vec<PatchOp>> {
                         path.display()
                     );
                 }
-                chunks.push(UpdateChunk { context, old_lines, new_lines, patch_line: chunk_start });
+                chunks.push(UpdateChunk {
+                    context,
+                    old_lines,
+                    new_lines,
+                    patch_line: chunk_start,
+                });
             }
             if chunks.is_empty() {
-                bail!("строка {i}: секция Update File '{}' не содержит изменений", path.display());
+                bail!(
+                    "строка {i}: секция Update File '{}' не содержит изменений",
+                    path.display()
+                );
             }
             ops.push(PatchOp::Update { path, chunks });
         } else {
@@ -274,14 +282,16 @@ pub fn apply_ops(ops: &[PatchOp], root: &Path) -> Result<Vec<PathBuf>> {
         match op {
             PatchOp::Add { contents, .. } => {
                 if let Some(parent) = abs.parent() {
-                    fs::create_dir_all(parent)
-                        .with_context(|| format!("не удалось создать каталог {}", parent.display()))?;
+                    fs::create_dir_all(parent).with_context(|| {
+                        format!("не удалось создать каталог {}", parent.display())
+                    })?;
                 }
                 atomic_write(&abs, contents.as_bytes())?;
             }
             PatchOp::Update { chunks, .. } => {
-                let original = fs::read_to_string(&abs)
-                    .with_context(|| format!("не удалось прочитать файл {} для обновления", abs.display()))?;
+                let original = fs::read_to_string(&abs).with_context(|| {
+                    format!("не удалось прочитать файл {} для обновления", abs.display())
+                })?;
                 let updated = apply_chunks(&original, chunks, op.path())?;
                 atomic_write(&abs, updated.as_bytes())?;
             }
@@ -313,10 +323,16 @@ fn safe_join(root: &Path, rel: &Path) -> Result<PathBuf> {
         match comp {
             Component::Normal(_) | Component::CurDir => {}
             Component::ParentDir => {
-                bail!("путь '{}' выходит за пределы рабочего корня (компонент '..')", rel.display())
+                bail!(
+                    "путь '{}' выходит за пределы рабочего корня (компонент '..')",
+                    rel.display()
+                )
             }
             Component::RootDir | Component::Prefix(_) => {
-                bail!("абсолютный путь '{}' запрещён; указывайте пути относительно корня", rel.display())
+                bail!(
+                    "абсолютный путь '{}' запрещён; указывайте пути относительно корня",
+                    rel.display()
+                )
             }
         }
     }
@@ -329,7 +345,11 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
     let file_name = path
         .file_name()
         .ok_or_else(|| anyhow::anyhow!("некорректный путь для записи: {}", path.display()))?;
-    let tmp = path.with_file_name(format!(".{}.patch-tmp-{}", file_name.to_string_lossy(), std::process::id()));
+    let tmp = path.with_file_name(format!(
+        ".{}.patch-tmp-{}",
+        file_name.to_string_lossy(),
+        std::process::id()
+    ));
     let result = (|| -> Result<()> {
         {
             use std::io::Write;
@@ -341,7 +361,11 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<()> {
                 .with_context(|| format!("не удалось сбросить на диск {}", tmp.display()))?;
         }
         fs::rename(&tmp, path).with_context(|| {
-            format!("не удалось переименовать {} в {}", tmp.display(), path.display())
+            format!(
+                "не удалось переименовать {} в {}",
+                tmp.display(),
+                path.display()
+            )
         })?;
         Ok(())
     })();
@@ -379,18 +403,26 @@ fn apply_chunks(original: &str, chunks: &[UpdateChunk], rel_path: &Path) -> Resu
         }
         match seek_sequence(&lines, &chunk.old_lines, search_from) {
             Some(idx) => {
-                lines.splice(idx..idx + chunk.old_lines.len(), chunk.new_lines.iter().cloned());
+                lines.splice(
+                    idx..idx + chunk.old_lines.len(),
+                    chunk.new_lines.iter().cloned(),
+                );
                 cursor = idx + chunk.new_lines.len();
             }
             None => {
-                let preview: Vec<&str> = chunk.old_lines.iter().take(3).map(String::as_str).collect();
+                let preview: Vec<&str> =
+                    chunk.old_lines.iter().take(3).map(String::as_str).collect();
                 bail!(
                     "строка {}: контекст не найден в файле '{}' (ищем блок из {} строк: {}{})",
                     chunk.patch_line,
                     rel_path.display(),
                     chunk.old_lines.len(),
                     preview.join(" / "),
-                    if chunk.old_lines.len() > 3 { " …" } else { "" }
+                    if chunk.old_lines.len() > 3 {
+                        " …"
+                    } else {
+                        ""
+                    }
                 )
             }
         }
@@ -515,7 +547,9 @@ mod tests {
 
     #[test]
     fn parse_add_file() {
-        let ops = parse_patch("*** Begin Patch\n*** Add File: foo.txt\n+hello\n+world\n*** End Patch").unwrap();
+        let ops =
+            parse_patch("*** Begin Patch\n*** Add File: foo.txt\n+hello\n+world\n*** End Patch")
+                .unwrap();
         assert_eq!(
             ops,
             vec![PatchOp::Add {
@@ -528,7 +562,12 @@ mod tests {
     #[test]
     fn parse_delete_file() {
         let ops = parse_patch("*** Begin Patch\n*** Delete File: old.py\n*** End Patch").unwrap();
-        assert_eq!(ops, vec![PatchOp::Delete { path: PathBuf::from("old.py") }]);
+        assert_eq!(
+            ops,
+            vec![PatchOp::Delete {
+                path: PathBuf::from("old.py")
+            }]
+        );
     }
 
     #[test]
@@ -654,7 +693,11 @@ mod tests {
     #[test]
     fn apply_update_anchor_selects_right_block() {
         let root = temp_root("anchor");
-        fs::write(root.join("f.py"), "def a():\n    x = 1\n\ndef b():\n    x = 1\n").unwrap();
+        fs::write(
+            root.join("f.py"),
+            "def a():\n    x = 1\n\ndef b():\n    x = 1\n",
+        )
+        .unwrap();
         let patch = "*** Begin Patch\n\
                      *** Update File: f.py\n\
                      @@ def b():\n\
@@ -662,7 +705,10 @@ mod tests {
                      +    x = 2\n\
                      *** End Patch";
         apply_patch(patch, &root).unwrap();
-        assert_eq!(read(&root, "f.py"), "def a():\n    x = 1\n\ndef b():\n    x = 2\n");
+        assert_eq!(
+            read(&root, "f.py"),
+            "def a():\n    x = 1\n\ndef b():\n    x = 2\n"
+        );
         fs::remove_dir_all(&root).unwrap();
     }
 
@@ -830,7 +876,12 @@ mod tests {
         // Пустой паттерн совпадает на курсоре.
         assert_eq!(seek_sequence(&lines, &[], 3), Some(3));
         // Паттерн длиннее файла — промах.
-        let long = vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()];
+        let long = vec![
+            "a".to_string(),
+            "b".to_string(),
+            "c".to_string(),
+            "d".to_string(),
+        ];
         assert_eq!(seek_sequence(&lines, &long, 0), None);
     }
 }

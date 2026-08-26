@@ -142,7 +142,12 @@ impl HookMatcher {
             .filter(|p| !p.is_empty())
             .map(Regex::new)
             .transpose()?;
-        Ok(Self { event, tool_pattern, command: command.into(), timeout })
+        Ok(Self {
+            event,
+            tool_pattern,
+            command: command.into(),
+            timeout,
+        })
     }
 
     /// Подходит ли хук под имя инструмента: без regex — всегда; с regex —
@@ -291,7 +296,12 @@ fn join_trimmed<'a>(parts: impl Iterator<Item = &'a String>) -> String {
 
 /// Исполнить один хук и оформить итог; `blocked` ставится только в режиме
 /// `PreToolUse` (block_on_exit2) при коде выхода 2.
-fn run_hook(command: &str, context_json: &str, timeout: Duration, block_on_exit2: bool) -> HookOutcome {
+fn run_hook(
+    command: &str,
+    context_json: &str,
+    timeout: Duration,
+    block_on_exit2: bool,
+) -> HookOutcome {
     let proc = run_process(command, context_json, timeout);
     let blocked = block_on_exit2 && proc.exit_code == 2 && !proc.timed_out;
     HookOutcome {
@@ -374,8 +384,14 @@ fn run_process(command: &str, context_json: &str, timeout: Duration) -> ProcOutp
 
     // Читатели непрерывно дренят каналы (сверх лимита — в sink), иначе ребёнок
     // мог бы встать на переполненном канале и никогда не завершиться.
-    let stdout_reader = child.stdout.take().map(|pipe| thread::spawn(move || drain(pipe)));
-    let stderr_reader = child.stderr.take().map(|pipe| thread::spawn(move || drain(pipe)));
+    let stdout_reader = child
+        .stdout
+        .take()
+        .map(|pipe| thread::spawn(move || drain(pipe)));
+    let stderr_reader = child
+        .stderr
+        .take()
+        .map(|pipe| thread::spawn(move || drain(pipe)));
 
     let timeout = timeout.max(MIN_HOOK_TIMEOUT);
     let deadline = Instant::now() + timeout;
@@ -391,7 +407,11 @@ fn run_process(command: &str, context_json: &str, timeout: Duration) -> ProcOutp
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                break (-1, false, Some(format!("ошибка ожидания процесса хука: {e}")));
+                break (
+                    -1,
+                    false,
+                    Some(format!("ошибка ожидания процесса хука: {e}")),
+                );
             }
         }
     };
@@ -399,16 +419,28 @@ fn run_process(command: &str, context_json: &str, timeout: Duration) -> ProcOutp
     if let Some(w) = writer {
         let _ = w.join();
     }
-    let stdout = stdout_reader.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
-    let mut stderr = stderr_reader.map(|h| h.join().unwrap_or_default()).unwrap_or_default();
+    let stdout = stdout_reader
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
+    let mut stderr = stderr_reader
+        .map(|h| h.join().unwrap_or_default())
+        .unwrap_or_default();
 
     if timed_out {
-        append_note(&mut stderr, &format!("хук убит по таймауту ({} мс)", timeout.as_millis()));
+        append_note(
+            &mut stderr,
+            &format!("хук убит по таймауту ({} мс)", timeout.as_millis()),
+        );
     }
     if let Some(e) = wait_error {
         append_note(&mut stderr, &e);
     }
-    ProcOutput { exit_code, stdout, stderr, timed_out }
+    ProcOutput {
+        exit_code,
+        stdout,
+        stderr,
+        timed_out,
+    }
 }
 
 /// Добавить строку-заметку к накопленному stderr (через перевод строки).
@@ -435,7 +467,12 @@ mod tests {
     const SEC: Duration = Duration::from_secs(1);
 
     /// Короткий конструктор матчера для тестов.
-    fn mk(event: HookEvent, pattern: Option<&str>, command: &str, timeout: Duration) -> HookMatcher {
+    fn mk(
+        event: HookEvent,
+        pattern: Option<&str>,
+        command: &str,
+        timeout: Duration,
+    ) -> HookMatcher {
         HookMatcher::new(event, pattern, command, timeout).expect("валидный regex в тесте")
     }
 
@@ -474,8 +511,14 @@ mod tests {
 
     #[test]
     fn tool_name_extraction_variants() {
-        assert_eq!(extract_tool_name(r#"{"tool_name":"Bash"}"#).as_deref(), Some("Bash"));
-        assert_eq!(extract_tool_name(r#"{"tool":"Write"}"#).as_deref(), Some("Write"));
+        assert_eq!(
+            extract_tool_name(r#"{"tool_name":"Bash"}"#).as_deref(),
+            Some("Bash")
+        );
+        assert_eq!(
+            extract_tool_name(r#"{"tool":"Write"}"#).as_deref(),
+            Some("Write")
+        );
         // Приоритет tool_name над tool.
         assert_eq!(
             extract_tool_name(r#"{"tool_name":"Bash","tool":"Write"}"#).as_deref(),
@@ -527,7 +570,12 @@ mod tests {
 
     #[test]
     fn echo_hook_succeeds_and_captures_stdout() {
-        let engine = HookEngine::from_specs(vec![mk(HookEvent::SessionStart, None, "echo hello-hook", SEC)]);
+        let engine = HookEngine::from_specs(vec![mk(
+            HookEvent::SessionStart,
+            None,
+            "echo hello-hook",
+            SEC,
+        )]);
         let out = engine.fire(HookEvent::SessionStart, "{}");
         assert_eq!(out.len(), 1);
         let o = &out[0];
@@ -553,9 +601,12 @@ mod tests {
 
     #[test]
     fn stderr_is_captured_separately() {
-        let engine = HookEngine::from_specs(vec![
-            mk(HookEvent::SessionEnd, None, "echo out-line; echo err-line >&2", SEC),
-        ]);
+        let engine = HookEngine::from_specs(vec![mk(
+            HookEvent::SessionEnd,
+            None,
+            "echo out-line; echo err-line >&2",
+            SEC,
+        )]);
         let out = engine.fire(HookEvent::SessionEnd, "{}");
         assert_eq!(out[0].stdout.trim(), "out-line");
         assert_eq!(out[0].stderr.trim(), "err-line");
@@ -584,7 +635,11 @@ mod tests {
 
     #[test]
     fn exit2_outside_pre_tool_use_does_not_block() {
-        for ev in [HookEvent::PostToolUse, HookEvent::SessionEnd, HookEvent::GoalSet] {
+        for ev in [
+            HookEvent::PostToolUse,
+            HookEvent::SessionEnd,
+            HookEvent::GoalSet,
+        ] {
             let engine = HookEngine::from_specs(vec![mk(ev, None, "exit 2", SEC)]);
             let out = engine.fire(ev, "{}");
             assert_eq!(out.len(), 1);
@@ -627,8 +682,12 @@ mod tests {
 
     #[test]
     fn zero_timeout_is_clamped_not_instant_kill() {
-        let engine =
-            HookEngine::from_specs(vec![mk(HookEvent::SessionStart, None, "echo fast", Duration::ZERO)]);
+        let engine = HookEngine::from_specs(vec![mk(
+            HookEvent::SessionStart,
+            None,
+            "echo fast",
+            Duration::ZERO,
+        )]);
         let out = engine.fire(HookEvent::SessionStart, "{}");
         assert_eq!(out[0].exit_code, 0);
         assert_eq!(out[0].stdout.trim(), "fast");
@@ -640,7 +699,12 @@ mod tests {
     #[test]
     fn hooks_run_in_parallel_and_keep_spec_order() {
         let sleepy = |tag: &str| {
-            mk(HookEvent::PostToolUse, None, &format!("sleep 1; echo {tag}"), Duration::from_secs(10))
+            mk(
+                HookEvent::PostToolUse,
+                None,
+                &format!("sleep 1; echo {tag}"),
+                Duration::from_secs(10),
+            )
         };
         let engine = HookEngine::from_specs(vec![sleepy("A"), sleepy("B"), sleepy("C")]);
         let start = Instant::now();
@@ -660,7 +724,12 @@ mod tests {
     fn tool_pattern_routes_events_to_matching_hooks() {
         let engine = HookEngine::from_specs(vec![
             mk(HookEvent::PreToolUse, Some("^Bash$"), "echo bash-hook", SEC),
-            mk(HookEvent::PreToolUse, Some("^(Write|Edit)$"), "echo write-hook", SEC),
+            mk(
+                HookEvent::PreToolUse,
+                Some("^(Write|Edit)$"),
+                "echo write-hook",
+                SEC,
+            ),
         ]);
         let out = engine.fire(HookEvent::PreToolUse, r#"{"tool_name":"Bash"}"#);
         assert_eq!(out.len(), 1);

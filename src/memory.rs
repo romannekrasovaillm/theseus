@@ -17,7 +17,9 @@ impl Memory {
         Memory { dir }
     }
 
-    fn file(&self) -> PathBuf { self.dir.join("MEMORY.md") }
+    fn file(&self) -> PathBuf {
+        self.dir.join("MEMORY.md")
+    }
 
     /// Дописать факт одной строкой (с датой).
     /// Атомарная запись: tmp-файл + rename (как session.rs) — защита
@@ -31,7 +33,10 @@ impl Memory {
         match std::fs::write(&tmp, &cur) {
             Ok(_) => match std::fs::rename(&tmp, self.file()) {
                 Ok(_) => format!("OK: факт записан в память ({} символов)", line.len()),
-                Err(e) => { let _ = std::fs::remove_file(&tmp); format!("ERROR: {e}") }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&tmp);
+                    format!("ERROR: {e}")
+                }
             },
             Err(e) => format!("ERROR: {e}"),
         }
@@ -43,9 +48,15 @@ impl Memory {
             Ok(t) => t,
             Err(e) => return format!("ERROR: {e}"),
         };
-        let q: Vec<String> = query.to_lowercase().split(|c: char| !c.is_alphanumeric())
-            .filter(|t| t.len() > 2).map(String::from).collect();
-        if q.is_empty() { return "(пустой запрос)".into(); }
+        let q: Vec<String> = query
+            .to_lowercase()
+            .split(|c: char| !c.is_alphanumeric())
+            .filter(|t| t.len() > 2)
+            .map(String::from)
+            .collect();
+        if q.is_empty() {
+            return "(пустой запрос)".into();
+        }
         let mut scored: Vec<(usize, usize, String)> = vec![];
         for (i, line) in text.lines().enumerate() {
             let l = line.to_lowercase();
@@ -55,16 +66,24 @@ impl Memory {
             }
         }
         scored.sort_by_key(|s| std::cmp::Reverse(s.0));
-        if scored.is_empty() { return "(в памяти ничего не найдено)".into(); }
-        scored.into_iter().take(top)
+        if scored.is_empty() {
+            return "(в памяти ничего не найдено)".into();
+        }
+        scored
+            .into_iter()
+            .take(top)
             .map(|(s, i, l)| format!("MEMORY.md:{i} (score {s}): {l}"))
-            .collect::<Vec<_>>().join("\n")
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 
     /// Сколько непустых строк-фактов (для гейта консолидации)
     pub fn fact_count(&self) -> usize {
-        std::fs::read_to_string(self.file()).unwrap_or_default()
-            .lines().filter(|l| l.starts_with("- [")).count()
+        std::fs::read_to_string(self.file())
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| l.starts_with("- ["))
+            .count()
     }
 }
 

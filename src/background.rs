@@ -57,7 +57,11 @@ pub struct BgTaskInfo {
 /// Чистая функция — для тестов.
 pub fn short_kind(label: &str) -> String {
     if let Some(rest) = label.strip_prefix("subagent ") {
-        return rest.split([' ', '—']).next().unwrap_or("subagent").to_string();
+        return rest
+            .split([' ', '—'])
+            .next()
+            .unwrap_or("subagent")
+            .to_string();
     }
     if let Some(rest) = label.strip_prefix("peer ") {
         let name = rest.split([' ', '—']).next().unwrap_or("?");
@@ -93,7 +97,12 @@ impl Default for BgRegistry {
 
 impl BgRegistry {
     pub fn new() -> Self {
-        BgRegistry { tasks: BTreeMap::new(), next: 0, counter: None, snapshot: None }
+        BgRegistry {
+            tasks: BTreeMap::new(),
+            next: 0,
+            counter: None,
+            snapshot: None,
+        }
     }
 
     /// Подключить разделяемый счётчик работающих задач (Controls.bg_running).
@@ -131,7 +140,8 @@ impl BgRegistry {
 
     pub fn spawn(&mut self, command: &str, cwd: &PathBuf) -> Result<u64> {
         let mut child = Command::new("bash")
-            .arg("-lc").arg(command)
+            .arg("-lc")
+            .arg(command)
             .current_dir(cwd)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -170,44 +180,58 @@ impl BgRegistry {
             let done2 = done.clone();
             let counter2 = self.counter.clone();
             let snapshot2 = self.snapshot.clone();
-            std::thread::spawn(move || {
-                loop {
-                    let status = {
-                        let mut ch = child2.lock().unwrap();
-                        ch.try_wait()
-                    };
-                    match status {
-                        Ok(Some(st)) => {
-                            if finalize(&done2, st.code()) {
-                                if let Some(s) = &snapshot2 {
-                                    if let Some(info) = s.lock().unwrap().iter_mut().find(|i| i.id == id) {
-                                        info.done = true;
-                                    }
-                                }
-                                if let Some(c) = &counter2 {
-                                    let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
-                                        std::sync::atomic::Ordering::Relaxed,
-                                        |v| Some(v.saturating_sub(1)));
+            std::thread::spawn(move || loop {
+                let status = {
+                    let mut ch = child2.lock().unwrap();
+                    ch.try_wait()
+                };
+                match status {
+                    Ok(Some(st)) => {
+                        if finalize(&done2, st.code()) {
+                            if let Some(s) = &snapshot2 {
+                                if let Some(info) =
+                                    s.lock().unwrap().iter_mut().find(|i| i.id == id)
+                                {
+                                    info.done = true;
                                 }
                             }
-                            break;
+                            if let Some(c) = &counter2 {
+                                let _ = c.fetch_update(
+                                    std::sync::atomic::Ordering::Relaxed,
+                                    std::sync::atomic::Ordering::Relaxed,
+                                    |v| Some(v.saturating_sub(1)),
+                                );
+                            }
                         }
-                        Ok(None) => std::thread::sleep(std::time::Duration::from_millis(300)),
-                        Err(_) => break,
+                        break;
                     }
+                    Ok(None) => std::thread::sleep(std::time::Duration::from_millis(300)),
+                    Err(_) => break,
                 }
             });
         }
 
         self.counter_inc();
-        self.tasks.insert(id, BgTask {
-            id, command: command.to_string(), started: Instant::now(),
-            out, child: Some(child), done, threaded: false,
-            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-        });
+        self.tasks.insert(
+            id,
+            BgTask {
+                id,
+                command: command.to_string(),
+                started: Instant::now(),
+                out,
+                child: Some(child),
+                done,
+                threaded: false,
+                cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            },
+        );
         self.snap_push(BgTaskInfo {
-            id, kind: "bash".to_string(), label: command.to_string(),
-            started: Instant::now(), done: false, tail: String::new(),
+            id,
+            kind: "bash".to_string(),
+            label: command.to_string(),
+            started: Instant::now(),
+            done: false,
+            tail: String::new(),
         });
         Ok(id)
     }
@@ -220,8 +244,12 @@ impl BgRegistry {
     /// проверяется замыканием на границе хода (субагент) или игнорируется
     /// (peer-вызов — тот прервётся по своему таймауту). Замыканию передаётся
     /// id задачи — для обновления хвоста вывода в снимке (set_tail).
-    pub fn spawn_fn(&mut self, label: String, cancel: Arc<std::sync::atomic::AtomicBool>,
-                    f: impl FnOnce(u64) -> String + Send + 'static) -> u64 {
+    pub fn spawn_fn(
+        &mut self,
+        label: String,
+        cancel: Arc<std::sync::atomic::AtomicBool>,
+        f: impl FnOnce(u64) -> String + Send + 'static,
+    ) -> u64 {
         let out = Arc::new(Mutex::new(String::new()));
         let done = Arc::new(Mutex::new(None));
         self.next += 1;
@@ -241,20 +269,34 @@ impl BgRegistry {
                 }
             }
             if let Some(c) = counter2 {
-                let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                let _ = c.fetch_update(
                     std::sync::atomic::Ordering::Relaxed,
-                    |v| Some(v.saturating_sub(1)));
+                    std::sync::atomic::Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)),
+                );
             }
         });
         self.snap_push(BgTaskInfo {
-            id, kind: short_kind(&label), label: label.clone(),
-            started: Instant::now(), done: false, tail: String::new(),
+            id,
+            kind: short_kind(&label),
+            label: label.clone(),
+            started: Instant::now(),
+            done: false,
+            tail: String::new(),
         });
-        self.tasks.insert(id, BgTask {
-            id, command: label, started: Instant::now(),
-            out, child: None, done, threaded: true,
-            cancel,
-        });
+        self.tasks.insert(
+            id,
+            BgTask {
+                id,
+                command: label,
+                started: Instant::now(),
+                out,
+                child: None,
+                done,
+                threaded: true,
+                cancel,
+            },
+        );
         id
     }
 
@@ -274,16 +316,28 @@ impl BgRegistry {
             // анти-flail (живой кейс 21.07: модель опросила task_output 7 раз
             // подряд за 5с и бросила ждать) — направляем на другую работу
             None => "выполняется — НЕ опрашивайте подряд: продолжайте другую \
-                     работу, а когда задач несколько — ждите разом через swarm_wait".to_string(),
+                     работу, а когда задач несколько — ждите разом через swarm_wait"
+                .to_string(),
         };
         let out = t.out.lock().unwrap().clone();
         // хвост: для процессов — последние ~400 символов лога, для потоковых
         // (субагенты/пиры) — до ~2000: там результат целиком, он и есть payload
         let tail_chars = if t.threaded { 2000 } else { 400 };
         let tail = if out.len() > 4096 * 2 {
-            out.chars().skip(out.chars().count() - tail_chars).collect::<String>()
-        } else { out };
-        format!("[bg {}] {} | {:.0}s | {}\n{}", id, t.command, t.started.elapsed().as_secs_f32(), status, tail)
+            out.chars()
+                .skip(out.chars().count() - tail_chars)
+                .collect::<String>()
+        } else {
+            out
+        };
+        format!(
+            "[bg {}] {} | {:.0}s | {}\n{}",
+            id,
+            t.command,
+            t.started.elapsed().as_secs_f32(),
+            status,
+            tail
+        )
     }
 
     /// Ленивое обновление статуса процессной задачи (try_wait) + декремент
@@ -305,9 +359,11 @@ impl BgRegistry {
         }
         if finalized {
             if let Some(c) = &counter {
-                let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                let _ = c.fetch_update(
                     std::sync::atomic::Ordering::Relaxed,
-                    |v| Some(v.saturating_sub(1)));
+                    std::sync::atomic::Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)),
+                );
             }
             self.snap_done(id);
         }
@@ -317,7 +373,9 @@ impl BgRegistry {
     /// обновлением для процессных), None — задача не найдена. Для swarm_wait.
     pub fn is_done(&mut self, id: u64) -> Option<bool> {
         self.refresh(id);
-        self.tasks.get(&id).map(|t| t.done.lock().unwrap().is_some())
+        self.tasks
+            .get(&id)
+            .map(|t| t.done.lock().unwrap().is_some())
     }
 
     pub fn stop(&mut self, id: u64) -> String {
@@ -332,7 +390,8 @@ impl BgRegistry {
             t.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
             return format!(
                 "[bg {id}] флаг остановки выставлен: субагент прервётся на \
-                 границе хода (peer — по своему таймауту)");
+                 границе хода (peer — по своему таймауту)"
+            );
         }
         let mut killed = false;
         if let Some(ch) = t.child.as_mut() {
@@ -348,9 +407,11 @@ impl BgRegistry {
         }
         if killed {
             if let Some(c) = &counter {
-                let _ = c.fetch_update(std::sync::atomic::Ordering::Relaxed,
+                let _ = c.fetch_update(
                     std::sync::atomic::Ordering::Relaxed,
-                    |v| Some(v.saturating_sub(1)));
+                    std::sync::atomic::Ordering::Relaxed,
+                    |v| Some(v.saturating_sub(1)),
+                );
             }
             self.snap_done(id);
             format!("[bg {id}] остановлена")
@@ -360,7 +421,9 @@ impl BgRegistry {
     }
 
     pub fn list(&mut self) -> String {
-        if self.tasks.is_empty() { return "(нет фоновых задач)".into(); }
+        if self.tasks.is_empty() {
+            return "(нет фоновых задач)".into();
+        }
         let mut lines = vec![];
         // ключи копируем: output() ниже берёт &mut self, итератор по tasks держать нельзя
         let ids: Vec<u64> = self.tasks.keys().copied().collect();
@@ -385,7 +448,10 @@ mod tests {
         assert!(!out.contains("{id}"), "литерал-плейсхолдер остался: {out}");
         let stop = reg.stop(43);
         assert!(stop.contains("43"), "id не подставлен: {stop}");
-        assert!(!stop.contains("{id}"), "литерал-плейсхолдер остался: {stop}");
+        assert!(
+            !stop.contains("{id}"),
+            "литерал-плейсхолдер остался: {stop}"
+        );
     }
 
     /// Счётчик работающих задач (индикатор «фон: N» в TUI): +1 на старте
@@ -396,24 +462,40 @@ mod tests {
         let counter = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let mut reg = BgRegistry::new();
         reg.set_counter(counter.clone());
-        let id = reg.spawn_fn("subagent — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            "ok".to_string()
-        });
-        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 1,
-            "после старта — одна работающая");
+        let id = reg.spawn_fn(
+            "subagent — тест".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                "ok".to_string()
+            },
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            1,
+            "после старта — одна работающая"
+        );
         for _ in 0..60 {
-            if counter.load(std::sync::atomic::Ordering::Relaxed) == 0 { break; }
+            if counter.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0,
-            "после завершения — ноль");
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "после завершения — ноль"
+        );
         let _ = reg.output(id);
         // процессная задача: спавн + обнаружение завершения
-        let id2 = reg.spawn("true", &std::env::temp_dir()).expect("spawn bash");
+        let id2 = reg
+            .spawn("true", &std::env::temp_dir())
+            .expect("spawn bash");
         assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 1);
         for _ in 0..60 {
-            if counter.load(std::sync::atomic::Ordering::Relaxed) == 0 { break; }
+            if counter.load(std::sync::atomic::Ordering::Relaxed) == 0 {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
             let _ = reg.output(id2);
         }
@@ -434,13 +516,26 @@ mod tests {
         assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 1);
         // никаких output()/is_done — только ждём watcher
         for _ in 0..80 {
-            let done = snap.lock().unwrap().first().map(|i| i.done).unwrap_or(false);
-            if done { break; }
+            let done = snap
+                .lock()
+                .unwrap()
+                .first()
+                .map(|i| i.done)
+                .unwrap_or(false);
+            if done {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        assert!(snap.lock().unwrap()[0].done, "watcher обязан пометить done сам");
-        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), 0,
-            "и декрементить счётчик без опроса");
+        assert!(
+            snap.lock().unwrap()[0].done,
+            "watcher обязан пометить done сам"
+        );
+        assert_eq!(
+            counter.load(std::sync::atomic::Ordering::Relaxed),
+            0,
+            "и декрементить счётчик без опроса"
+        );
     }
 
     /// Снимок задач для живой панели TUI (v0.7): push при спавне с коротким
@@ -450,10 +545,14 @@ mod tests {
         let snap = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
         let mut reg = BgRegistry::new();
         reg.set_snapshot(snap.clone());
-        let id = reg.spawn_fn("subagent explore — что-то".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            "ok".to_string()
-        });
+        let id = reg.spawn_fn(
+            "subagent explore — что-то".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                "ok".to_string()
+            },
+        );
         {
             let items = snap.lock().unwrap();
             assert_eq!(items.len(), 1, "одна задача в снимке");
@@ -462,7 +561,9 @@ mod tests {
             assert!(!items[0].done, "на старте работает");
         }
         for _ in 0..60 {
-            if snap.lock().unwrap()[0].done { break; }
+            if snap.lock().unwrap()[0].done {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         assert!(snap.lock().unwrap()[0].done, "после завершения — done");
@@ -483,20 +584,29 @@ mod tests {
     #[test]
     fn spawn_fn_lifecycle() {
         let mut reg = BgRegistry::new();
-        let id = reg.spawn_fn("subagent explore — тест".into(), std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            "ответ субагента".to_string()
-        });
+        let id = reg.spawn_fn(
+            "subagent explore — тест".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| {
+                std::thread::sleep(std::time::Duration::from_millis(80));
+                "ответ субагента".to_string()
+            },
+        );
         let running = reg.output(id);
         assert!(running.contains("subagent explore"), "{running}");
         // дождаться завершения потока
         for _ in 0..50 {
-            if reg.output(id).contains("завершена") { break; }
+            if reg.output(id).contains("завершена") {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
         let done = reg.output(id);
         assert!(done.contains("завершена"), "{done}");
-        assert!(done.contains("ответ субагента"), "результат потерян: {done}");
+        assert!(
+            done.contains("ответ субагента"),
+            "результат потерян: {done}"
+        );
         // stop на потоковой — кооперативный флаг (v0.7), не отказ
         let stop = reg.stop(id);
         assert!(stop.contains("флаг остановки"), "{stop}");
@@ -508,17 +618,22 @@ mod tests {
     #[test]
     fn stop_threaded_sets_cancel_flag() {
         let mut reg = BgRegistry::new();
-        let id = reg.spawn_fn("subagent explore — долгий".into(),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), |_id| {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            "поздний".to_string()
-        });
+        let id = reg.spawn_fn(
+            "subagent explore — долгий".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            |_id| {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                "поздний".to_string()
+            },
+        );
         let flag = reg.cancel_flag(id).expect("флаг есть");
         assert!(!flag.load(std::sync::atomic::Ordering::Relaxed));
         let out = reg.stop(id);
         assert!(out.contains("флаг остановки выставлен"), "{out}");
-        assert!(flag.load(std::sync::atomic::Ordering::Relaxed),
-            "флаг обязан быть взведён после stop");
+        assert!(
+            flag.load(std::sync::atomic::Ordering::Relaxed),
+            "флаг обязан быть взведён после stop"
+        );
     }
 
     /// Хвост вывода в снимке (резерв 06.08): set_tail_in обновляет именно
@@ -531,18 +646,27 @@ mod tests {
         let got_id = std::sync::Arc::new(std::sync::Mutex::new(None));
         let got2 = got_id.clone();
         let snap2 = snap.clone();
-        let id = reg.spawn_fn("peer kimi — тест".into(),
-            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)), move |bg_id| {
-            *got2.lock().unwrap() = Some(bg_id);
-            set_tail_in(&snap2, bg_id, "последняя строка вывода".to_string());
-            "ok".to_string()
-        });
+        let id = reg.spawn_fn(
+            "peer kimi — тест".into(),
+            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            move |bg_id| {
+                *got2.lock().unwrap() = Some(bg_id);
+                set_tail_in(&snap2, bg_id, "последняя строка вывода".to_string());
+                "ok".to_string()
+            },
+        );
         // ждём финиша потоковой задачи
         for _ in 0..50 {
-            if reg.is_done(id).unwrap_or(false) { break; }
+            if reg.is_done(id).unwrap_or(false) {
+                break;
+            }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        assert_eq!(*got_id.lock().unwrap(), Some(id), "id в замыкание не доехал");
+        assert_eq!(
+            *got_id.lock().unwrap(),
+            Some(id),
+            "id в замыкание не доехал"
+        );
         let tail = {
             let items = snap.lock().unwrap();
             assert_eq!(items.len(), 1);

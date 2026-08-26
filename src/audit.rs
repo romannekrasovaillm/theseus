@@ -96,7 +96,11 @@ pub struct CompletionCriterion {
 impl CompletionCriterion {
     /// Конструктор без эвристик — когда критерий известен точно.
     pub fn new(text: impl Into<String>, kind: CriterionKind, target: Option<String>) -> Self {
-        Self { text: text.into(), kind, target }
+        Self {
+            text: text.into(),
+            kind,
+            target,
+        }
     }
 }
 
@@ -116,7 +120,11 @@ pub struct Evidence {
 impl Evidence {
     /// Полный конструктор.
     pub fn new(kind: CriterionKind, detail: impl Into<String>, ok: bool) -> Self {
-        Self { kind, detail: detail.into(), ok }
+        Self {
+            kind,
+            detail: detail.into(),
+            ok,
+        }
     }
 
     /// Короткий конструктор подтверждения (`ok = true`).
@@ -208,20 +216,48 @@ struct Rule {
 /// безопасно (без unwrap/expect): битый шаблон просто отбрасывается.
 const RAW_RULES: &[(CriterionKind, &str, usize)] = &[
     // 1. Тесты (рус + англ). Идут первыми: «cargo test» важнее «команды».
-    (CriterionKind::TestsPass, r#"(?i)(\bтест\w*\s+(зел[ёе]н\w*|проход\w*|запущ\w*|прогнан\w*)|\bвсе\s+тест\w*|\bпрогон\s+тест\w*|\bзапуск\s+тест\w*|\bтест\w*\s+должн\w*\s+(быть\s+)?(зел[ёе]н\w*|пройд\w*|проход\w*)|cargo\s+test|pytest|npm\s+test|go\s+test|\btests?\s+(pass\w*|are\s+green|must\s+pass|should\s+pass|succeed\w*|green\b)|\ball\s+tests\b|\bgreen\s+tests\b|\bunit\s+tests\b|\btest\s+suite\b)"#, 0),
+    (
+        CriterionKind::TestsPass,
+        r#"(?i)(\bтест\w*\s+(зел[ёе]н\w*|проход\w*|запущ\w*|прогнан\w*)|\bвсе\s+тест\w*|\bпрогон\s+тест\w*|\bзапуск\s+тест\w*|\bтест\w*\s+должн\w*\s+(быть\s+)?(зел[ёе]н\w*|пройд\w*|проход\w*)|cargo\s+test|pytest|npm\s+test|go\s+test|\btests?\s+(pass\w*|are\s+green|must\s+pass|should\s+pass|succeed\w*|green\b)|\ball\s+tests\b|\bgreen\s+tests\b|\bunit\s+tests\b|\btest\s+suite\b)"#,
+        0,
+    ),
     // 2. «... содержит "подстрока"» / 'output contains "DONE"' (до 2 слов между).
-    (CriterionKind::TextContains, r#"(?i)(?:\bсодерж\w*|\bcontains?\b|\bупомин\w*|\bmentions?\b)(?:\s+\S+){0,2}?\s*[`"'«»]([^`"'«»]{1,200})[`"'«»]"#, 1),
+    (
+        CriterionKind::TextContains,
+        r#"(?i)(?:\bсодерж\w*|\bcontains?\b|\bупомин\w*|\bmentions?\b)(?:\s+\S+){0,2}?\s*[`"'«»]([^`"'«»]{1,200})[`"'«»]"#,
+        1,
+    ),
     // 3. Команда: ключевое слово, затем команда в кавычках/бэктиках.
-    (CriterionKind::CommandSucceeds, r#"(?i)(?:\bкоманд\w*|\bcommand\w*|\bзапуст\w*|\bвыполн\w*|\brun\b|\bsucceed\w*|\bотработ\w*|\bотрабатыва\w*).{0,60}?[`"'«»]([^`"'«»]{1,200})[`"'«»]"#, 1),
+    (
+        CriterionKind::CommandSucceeds,
+        r#"(?i)(?:\bкоманд\w*|\bcommand\w*|\bзапуст\w*|\bвыполн\w*|\brun\b|\bsucceed\w*|\bотработ\w*|\bотрабатыва\w*).{0,60}?[`"'«»]([^`"'«»]{1,200})[`"'«»]"#,
+        1,
+    ),
     // 4. Команда в кавычках, затем глагол результата: «`cargo build` отрабатывает».
-    (CriterionKind::CommandSucceeds, r#"(?i)[`"'«»]([^`"'«»]{1,200})[`"'«»]\s*(?:отработ\w*|отрабатыва\w*|succeed\w*|проход\w*|зел[ёе]н\w*|без\s+ошибок|без\s+warnings|exits?\s+\w*\s*0\b|долж\w*\s+отработать|заверш\w*\s+(успешно|с\s+кодом\s+0))"#, 1),
+    (
+        CriterionKind::CommandSucceeds,
+        r#"(?i)[`"'«»]([^`"'«»]{1,200})[`"'«»]\s*(?:отработ\w*|отрабатыва\w*|succeed\w*|проход\w*|зел[ёе]н\w*|без\s+ошибок|без\s+warnings|exits?\s+\w*\s*0\b|долж\w*\s+отработать|заверш\w*\s+(успешно|с\s+кодом\s+0))"#,
+        1,
+    ),
     // 5. «файл X» / "file X": путь обязан содержать букву и расширение,
     //    чтобы не ловить «файл конфигурации» и версии вида «1.2».
-    (CriterionKind::FileExists, r#"(?i)(?:\bфайл\w*|\bfile\b)\s*[:—-]?\s*[`"'«»]?([~\w./+-]*[A-Za-zА-Яа-яЁё_][\w./~+-]*\.\w{1,6})[`"'«»]?"#, 1),
+    (
+        CriterionKind::FileExists,
+        r#"(?i)(?:\bфайл\w*|\bfile\b)\s*[:—-]?\s*[`"'«»]?([~\w./+-]*[A-Za-zА-Яа-яЁё_][\w./~+-]*\.\w{1,6})[`"'«»]?"#,
+        1,
+    ),
     // 6. Путь, затем глагол существования: «out.txt создан», "main.rs exists".
-    (CriterionKind::FileExists, r#"(?i)([~\w./+-]*[A-Za-zА-Яа-яЁё_][\w./~+-]*\.\w{1,6})\s+(?:долж\w*\s+)?(?:существу\w*|создан\w*|на\s+месте|находит\w*|exists?\b|created\b|updated\b|обновл\w*|present\b)"#, 1),
+    (
+        CriterionKind::FileExists,
+        r#"(?i)([~\w./+-]*[A-Za-zА-Яа-яЁё_][\w./~+-]*\.\w{1,6})\s+(?:долж\w*\s+)?(?:существу\w*|создан\w*|на\s+месте|находит\w*|exists?\b|created\b|updated\b|обновл\w*|present\b)"#,
+        1,
+    ),
     // 7. Модальные глаголы без автоматической проверки → ручной критерий.
-    (CriterionKind::Manual, r#"(?i)(\bдолж\w*|\bнужно\b|\bнадо\b|\bнеобходимо\b|\bтребуется\b|\bmust\b|\bshould\b|\bshall\b|\bensure\w*|\bverify\b|\bverified\b|\bvalidate\w*|\bпровер\w*|\bубеди\w*)"#, 0),
+    (
+        CriterionKind::Manual,
+        r#"(?i)(\bдолж\w*|\bнужно\b|\bнадо\b|\bнеобходимо\b|\bтребуется\b|\bmust\b|\bshould\b|\bshall\b|\bensure\w*|\bverify\b|\bverified\b|\bvalidate\w*|\bпровер\w*|\bубеди\w*)"#,
+        0,
+    ),
 ];
 
 /// Скомпилированные правила (ленивая инициализация, один раз на процесс).
@@ -231,7 +267,11 @@ fn rules() -> &'static [Rule] {
         RAW_RULES
             .iter()
             .filter_map(|&(kind, pattern, target_group)| {
-                Regex::new(pattern).ok().map(|re| Rule { kind, re, target_group })
+                Regex::new(pattern).ok().map(|re| Rule {
+                    kind,
+                    re,
+                    target_group,
+                })
             })
             .collect()
     })
@@ -326,11 +366,17 @@ pub fn parse_criteria(goal_text: &str) -> Vec<CompletionCriterion> {
         if text.chars().count() < 4 || !text.chars().any(char::is_alphabetic) {
             continue;
         }
-        let Some((kind, target)) = classify(text) else { continue };
+        let Some((kind, target)) = classify(text) else {
+            continue;
+        };
         if !seen.insert(text.to_lowercase()) {
             continue;
         }
-        out.push(CompletionCriterion { text: text.to_string(), kind, target });
+        out.push(CompletionCriterion {
+            text: text.to_string(),
+            kind,
+            target,
+        });
     }
     out
 }
@@ -364,7 +410,12 @@ pub fn evaluate(
     } else {
         Verdict::Fail
     };
-    AuditReport { criteria, evidence, verdict, missing }
+    AuditReport {
+        criteria,
+        evidence,
+        verdict,
+        missing,
+    }
 }
 
 /// Рендерит отчёт в markdown: строка вердикта, маркированный список
@@ -528,13 +579,20 @@ mod tests {
 
     #[test]
     fn parse_manual_ru_and_en() {
-        assert_eq!(parse_one("должен быть README на русском языке").kind, CriterionKind::Manual);
-        assert_eq!(parse_one("README should be updated").kind, CriterionKind::Manual);
+        assert_eq!(
+            parse_one("должен быть README на русском языке").kind,
+            CriterionKind::Manual
+        );
+        assert_eq!(
+            parse_one("README should be updated").kind,
+            CriterionKind::Manual
+        );
     }
 
     #[test]
     fn parse_mixed_multiline_order_and_markers() {
-        let goal = "1. Тесты зелёные\n2) файл report/out.txt создан\n- команда `make lint` отрабатывает";
+        let goal =
+            "1. Тесты зелёные\n2) файл report/out.txt создан\n- команда `make lint` отрабатывает";
         let v = parse_criteria(goal);
         assert_eq!(
             kinds(&v),
@@ -554,7 +612,10 @@ mod tests {
     fn parse_sentence_split_prose() {
         // Граница предложения: «. » перед заглавной; точка в «out.txt» не режет.
         let v = parse_criteria("Создать файл out.txt. Тесты зелёные.");
-        assert_eq!(kinds(&v), vec![CriterionKind::FileExists, CriterionKind::TestsPass]);
+        assert_eq!(
+            kinds(&v),
+            vec![CriterionKind::FileExists, CriterionKind::TestsPass]
+        );
         assert_eq!(v[0].target.as_deref(), Some("out.txt"));
     }
 
@@ -579,7 +640,9 @@ mod tests {
             CompletionCriterion::new("тесты зелёные", CriterionKind::TestsPass, None),
             CompletionCriterion::new("файл a.rs", CriterionKind::FileExists, Some("a.rs".into())),
         ];
-        let report = evaluate(criteria, &|c: &CompletionCriterion| Evidence::confirmed(c.kind, "ок"));
+        let report = evaluate(criteria, &|c: &CompletionCriterion| {
+            Evidence::confirmed(c.kind, "ок")
+        });
         assert_eq!(report.verdict, Verdict::Pass);
         assert!(report.is_pass());
         assert!(report.missing.is_empty());
@@ -607,7 +670,9 @@ mod tests {
             CompletionCriterion::new("a", CriterionKind::TestsPass, None),
             CompletionCriterion::new("b", CriterionKind::FileExists, None),
         ];
-        let report = evaluate(criteria, &|c: &CompletionCriterion| Evidence::refuted(c.kind, "нет"));
+        let report = evaluate(criteria, &|c: &CompletionCriterion| {
+            Evidence::refuted(c.kind, "нет")
+        });
         assert_eq!(report.verdict, Verdict::Fail);
         assert_eq!(report.missing, vec![0, 1]);
     }
@@ -619,7 +684,11 @@ mod tests {
             calls.set(calls.get() + 1);
             Evidence::confirmed(c.kind, "не должно случиться")
         });
-        assert_eq!(calls.get(), 0, "коллектор не должен вызываться на пустом списке");
+        assert_eq!(
+            calls.get(),
+            0,
+            "коллектор не должен вызываться на пустом списке"
+        );
         assert_eq!(report.verdict, Verdict::Uncertain);
         assert!(report.criteria.is_empty());
         assert!(report.evidence.is_empty());
@@ -655,7 +724,10 @@ mod tests {
         });
         let md = render(&report);
         assert!(md.contains("Вердикт аудита: ✅ PASS"), "{md}");
-        assert!(md.contains("- ✅ [тесты] тесты зелёные — cargo test: 12 passed"), "{md}");
+        assert!(
+            md.contains("- ✅ [тесты] тесты зелёные — cargo test: 12 passed"),
+            "{md}"
+        );
         assert!(md.contains("Подтверждено 1/1"), "{md}");
         assert!(!md.contains("без доказательств"), "{md}");
     }
@@ -664,19 +736,31 @@ mod tests {
     fn render_fail_format_lists_missing() {
         let criteria = vec![
             CompletionCriterion::new("тесты зелёные", CriterionKind::TestsPass, None),
-            CompletionCriterion::new("файл src/audit.rs создан", CriterionKind::FileExists, Some("src/audit.rs".into())),
+            CompletionCriterion::new(
+                "файл src/audit.rs создан",
+                CriterionKind::FileExists,
+                Some("src/audit.rs".into()),
+            ),
         ];
         let report = evaluate(criteria, &mock_collector(CriterionKind::FileExists));
         let md = render(&report);
         assert!(md.contains("Вердикт аудита: ❌ FAIL"), "{md}");
         assert!(md.contains("- ✅ [тесты]"), "{md}");
-        assert!(md.contains("- ❌ [файл] файл src/audit.rs создан — не подтверждено (мок)"), "{md}");
-        assert!(md.contains("Подтверждено 1/2; без доказательств: #2"), "{md}");
+        assert!(
+            md.contains("- ❌ [файл] файл src/audit.rs создан — не подтверждено (мок)"),
+            "{md}"
+        );
+        assert!(
+            md.contains("Подтверждено 1/2; без доказательств: #2"),
+            "{md}"
+        );
     }
 
     #[test]
     fn render_uncertain_format() {
-        let report = evaluate(Vec::new(), &|c: &CompletionCriterion| Evidence::confirmed(c.kind, ""));
+        let report = evaluate(Vec::new(), &|c: &CompletionCriterion| {
+            Evidence::confirmed(c.kind, "")
+        });
         let md = render(&report);
         assert!(md.contains("Вердикт аудита: ❓ UNCERTAIN"), "{md}");
         assert!(md.contains("переформулируйте цель"), "{md}");
@@ -695,7 +779,10 @@ mod tests {
         });
         assert_eq!(report.verdict, Verdict::Fail);
         let md = render(&report);
-        assert!(md.contains("- ❓ [ручная проверка] должен быть README на русском"), "{md}");
+        assert!(
+            md.contains("- ❓ [ручная проверка] должен быть README на русском"),
+            "{md}"
+        );
         assert!(md.contains("❌ FAIL"), "{md}");
     }
 
@@ -712,7 +799,10 @@ mod tests {
             missing: vec![1],
         };
         let md = render(&report);
-        assert!(md.contains("- ❓ [файл] файл — доказательство не собрано"), "{md}");
+        assert!(
+            md.contains("- ❓ [файл] файл — доказательство не собрано"),
+            "{md}"
+        );
     }
 
     // --- Serde ---

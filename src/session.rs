@@ -26,7 +26,7 @@
 //!   last-writer-wins, но без повреждения файла (rename атомарен);
 //! - [`SessionStore::load`] — строгий полный парс: битый файл = ошибка;
 //! - [`SessionStore::list`] — толерантное перечисление: парсится только шапка
-//!   файла без материализации тел сообщений ([`SessionHeader`]), битые файлы
+//!   файла без материализации тел сообщений (`SessionHeader`), битые файлы
 //!   пропускаются с предупреждением в stderr, недостающие `id`/`created`
 //!   добираются из имени файла (совместимость со старыми `session-<ts>.json`);
 //! - [`SessionStore::fork`] — ветка дерева resume: новая сессия с
@@ -106,7 +106,11 @@ pub struct Message {
 impl Message {
     /// Произвольное сообщение без вызовов инструментов.
     pub fn new(role: Role, content: impl Into<String>) -> Self {
-        Message { role, content: content.into(), tool_calls: None }
+        Message {
+            role,
+            content: content.into(),
+            tool_calls: None,
+        }
     }
 
     /// Системное сообщение.
@@ -131,12 +135,18 @@ impl Message {
 
     /// Сообщение ассистента с вызовами инструментов.
     pub fn assistant_with_tools(content: impl Into<String>, calls: Vec<ToolCall>) -> Self {
-        Message { role: Role::Assistant, content: content.into(), tool_calls: Some(calls) }
+        Message {
+            role: Role::Assistant,
+            content: content.into(),
+            tool_calls: Some(calls),
+        }
     }
 
     /// `true`, если сообщение несёт вызовы инструментов.
     pub fn has_tool_calls(&self) -> bool {
-        self.tool_calls.as_ref().is_some_and(|calls| !calls.is_empty())
+        self.tool_calls
+            .as_ref()
+            .is_some_and(|calls| !calls.is_empty())
     }
 }
 
@@ -157,7 +167,7 @@ pub struct Meta {
 /// остальные имеют serde-умолчания, чтобы не ломаться на урезанных файлах.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
-    /// уникальный id сессии (см. [`new_id`])
+    /// уникальный id сессии (см. `new_id`)
     pub id: String,
     /// id родительской сессии; `None` — корень дерева resume
     #[serde(default)]
@@ -292,7 +302,8 @@ impl SessionStore {
         fs::write(&tmp, json).with_context(|| format!("не удалось записать {}", tmp.display()))?;
         if let Err(e) = fs::rename(&tmp, &path) {
             let _ = fs::remove_file(&tmp); // не оставляем сироту
-            return Err(e).with_context(|| format!("не удалось переименовать в {}", path.display()));
+            return Err(e)
+                .with_context(|| format!("не удалось переименовать в {}", path.display()));
         }
         Ok(path)
     }
@@ -302,8 +313,7 @@ impl SessionStore {
         let path = path.as_ref();
         let text = fs::read_to_string(path)
             .with_context(|| format!("не удалось прочитать {}", path.display()))?;
-        serde_json::from_str(&text)
-            .with_context(|| format!("битый файл сессии {}", path.display()))
+        serde_json::from_str(&text).with_context(|| format!("битый файл сессии {}", path.display()))
     }
 
     /// Перечислить сессии: новые первыми (`created` по убыванию, при равенстве —
@@ -330,7 +340,9 @@ impl SessionStore {
             };
             let name = entry.file_name();
             let Some(name) = name.to_str() else { continue };
-            let Some((created_in_name, id_in_name)) = parse_file_name(name) else { continue };
+            let Some((created_in_name, id_in_name)) = parse_file_name(name) else {
+                continue;
+            };
             let path = entry.path();
             if !path.is_file() {
                 continue; // подкаталог с «нашим» именем — не сессия
@@ -342,8 +354,8 @@ impl SessionStore {
                         meta.created = created_in_name;
                     }
                     if meta.id.is_empty() {
-                        meta.id =
-                            id_in_name.map_or_else(|| format!("legacy-{created_in_name}"), String::from);
+                        meta.id = id_in_name
+                            .map_or_else(|| format!("legacy-{created_in_name}"), String::from);
                     }
                     out.push(meta);
                 }
@@ -459,7 +471,10 @@ fn parse_file_name(name: &str) -> Option<(u64, Option<&str>)> {
 /// Проверить id на файлобезопасность: непустой, только `[A-Za-z0-9_-]`.
 /// Защита от path traversal при сохранении сессии с чужим или битым id.
 fn validate_id(id: &str) -> Result<()> {
-    let ok = !id.is_empty() && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
+    let ok = !id.is_empty()
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_');
     if ok {
         Ok(())
     } else {
@@ -472,7 +487,10 @@ fn validate_id(id: &str) -> Result<()> {
 /// процессами — наносекундами и pid.
 fn new_id() -> String {
     static SEQ: AtomicU64 = AtomicU64::new(0);
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_nanos();
     let pid = std::process::id();
     let seq = SEQ.fetch_add(1, Ordering::Relaxed);
     format!("{nanos:x}-{pid:x}-{seq:x}")
@@ -480,7 +498,10 @@ fn new_id() -> String {
 
 /// Текущее UNIX-время в секундах (0, если системные часы переведены назад).
 fn now_secs() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs()
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs()
 }
 
 #[cfg(test)]
@@ -535,7 +556,10 @@ mod tests {
         s.record_turn();
         s.record_api_call(120, 30);
         let path = store.save(&s).unwrap();
-        assert_eq!(path.file_name().unwrap().to_str().unwrap(), "session-1784366471-abc-123.json");
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "session-1784366471-abc-123.json"
+        );
         let loaded = store.load(&path).unwrap();
         assert_eq!(s, loaded);
         assert!(loaded.is_fork());
@@ -571,7 +595,11 @@ mod tests {
         s.push_message(Message::assistant("ответ"));
         let path = store.save(&s).unwrap();
         let files: Vec<_> = fs::read_dir(&dir).unwrap().collect();
-        assert_eq!(files.len(), 1, "повторный save не плодит файлы, tmp не остаётся");
+        assert_eq!(
+            files.len(),
+            1,
+            "повторный save не плодит файлы, tmp не остаётся"
+        );
         assert_eq!(store.load(&path).unwrap().message_count(), 2);
         cleanup(&dir);
     }
@@ -620,7 +648,10 @@ mod tests {
         fs::write(&path, "{ broken").unwrap();
         let err = store.load(&path).unwrap_err();
         assert!(format!("{err:#}").contains("битый файл сессии"));
-        assert!(store.load(dir.join("session-2-y.json")).is_err(), "нет файла — ошибка");
+        assert!(
+            store.load(dir.join("session-2-y.json")).is_err(),
+            "нет файла — ошибка"
+        );
         cleanup(&dir);
     }
 
@@ -635,7 +666,11 @@ mod tests {
         )
         .unwrap();
         // новое имя, но шапка без id — id добирается из имени файла
-        fs::write(dir.join("session-777-named.json"), r#"{"created":777,"messages":[]}"#).unwrap();
+        fs::write(
+            dir.join("session-777-named.json"),
+            r#"{"created":777,"messages":[]}"#,
+        )
+        .unwrap();
         let list = store.list().unwrap();
         assert_eq!(list.len(), 2);
         assert_eq!(list[0].id, "named");
@@ -673,10 +708,24 @@ mod tests {
         let dir = fresh_dir("fork_edge");
         let store = SessionStore::new(&dir).unwrap();
         let path = store.save(&make_session("e", 1, 3)).unwrap();
-        assert_eq!(store.fork(&path, 0).unwrap().message_count(), 0, "форк с нуля — пусто");
-        assert_eq!(store.fork(&path, 3).unwrap().message_count(), 3, "форк с кончика — всё");
-        assert!(store.fork(&path, 4).is_err(), "за пределами истории — ошибка");
-        assert!(store.fork(dir.join("session-9-ghost.json"), 0).is_err(), "нет файла — ошибка");
+        assert_eq!(
+            store.fork(&path, 0).unwrap().message_count(),
+            0,
+            "форк с нуля — пусто"
+        );
+        assert_eq!(
+            store.fork(&path, 3).unwrap().message_count(),
+            3,
+            "форк с кончика — всё"
+        );
+        assert!(
+            store.fork(&path, 4).is_err(),
+            "за пределами истории — ошибка"
+        );
+        assert!(
+            store.fork(dir.join("session-9-ghost.json"), 0).is_err(),
+            "нет файла — ошибка"
+        );
         cleanup(&dir);
     }
 
@@ -699,7 +748,11 @@ mod tests {
 
         let kids = store.children_of("root").unwrap();
         let kid_ids: Vec<&str> = kids.iter().map(|m| m.id.as_str()).collect();
-        assert_eq!(kid_ids, [b.id.as_str(), d.id.as_str()], "дети — по возрастанию created");
+        assert_eq!(
+            kid_ids,
+            [b.id.as_str(), d.id.as_str()],
+            "дети — по возрастанию created"
+        );
         assert!(kids.iter().all(|m| m.parent.as_deref() == Some("root")));
         assert!(!kids[0].is_root());
 
@@ -734,10 +787,21 @@ mod tests {
         s.record_turn();
         s.record_api_call(100, 50);
         s.record_api_call(200, 70);
-        assert_eq!(s.meta, Meta { turns: 2, api_calls: 2, tokens: 420 });
+        assert_eq!(
+            s.meta,
+            Meta {
+                turns: 2,
+                api_calls: 2,
+                tokens: 420
+            }
+        );
         let path = store.save(&s).unwrap();
         assert_eq!(store.load(&path).unwrap().meta, s.meta, "полный парс");
-        assert_eq!(store.list().unwrap()[0].meta, s.meta, "лёгкий list видит те же счётчики");
+        assert_eq!(
+            store.list().unwrap()[0].meta,
+            s.meta,
+            "лёгкий list видит те же счётчики"
+        );
         cleanup(&dir);
     }
 
@@ -746,7 +810,10 @@ mod tests {
         let dir = fresh_dir("unsafe_id");
         let store = SessionStore::new(&dir).unwrap();
         for bad in ["../evil", "a/b", "", "a b", "a.b"] {
-            assert!(store.save(&make_session(bad, 1, 0)).is_err(), "id {bad:?} должен быть отклонён");
+            assert!(
+                store.save(&make_session(bad, 1, 0)).is_err(),
+                "id {bad:?} должен быть отклонён"
+            );
         }
         assert!(store.save(&make_session("ok_ID-9", 1, 0)).is_ok());
         cleanup(&dir);
@@ -760,7 +827,11 @@ mod tests {
         // с вызовами — присутствует; roundtrip через Value
         let m = Message::assistant_with_tools(
             "",
-            vec![ToolCall { id: "c1".to_string(), name: "read_file".to_string(), arguments: "{}".to_string() }],
+            vec![ToolCall {
+                id: "c1".to_string(),
+                name: "read_file".to_string(),
+                arguments: "{}".to_string(),
+            }],
         );
         let v = serde_json::to_value(&m).unwrap();
         assert!(v.get("tool_calls").is_some());

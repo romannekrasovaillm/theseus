@@ -205,7 +205,10 @@ fn build_hunks(ops: &[LineOp], old: &[&str], new: &[&str], context: usize) -> Ve
         .into_iter()
         .map(|(first, last)| {
             let start = first.saturating_sub(context);
-            let end = last.saturating_add(context).saturating_add(1).min(ops.len());
+            let end = last
+                .saturating_add(context)
+                .saturating_add(1)
+                .min(ops.len());
             slice_hunk(ops, old, new, start, end)
         })
         .collect()
@@ -233,8 +236,16 @@ fn slice_hunk(ops: &[LineOp], old: &[&str], new: &[&str], start: usize, end: usi
         .filter(|op| matches!(op, LineOp::Equal | LineOp::Insert))
         .count();
     // При нулевом счётчике GNU diff указывает строку ПЕРЕД местом изменения.
-    let old_start = if old_count == 0 { old_before } else { old_before + 1 };
-    let new_start = if new_count == 0 { new_before } else { new_before + 1 };
+    let old_start = if old_count == 0 {
+        old_before
+    } else {
+        old_before + 1
+    };
+    let new_start = if new_count == 0 {
+        new_before
+    } else {
+        new_before + 1
+    };
     let mut lines = Vec::with_capacity(end - start);
     let (mut oi, mut ni) = (old_before, new_before);
     for op in hunk_ops {

@@ -73,7 +73,10 @@ impl SlashCmd {
     /// по имени или любому алиасу, без учёта регистра.
     pub fn matches(&self, token: &str) -> bool {
         self.name.eq_ignore_ascii_case(token)
-            || self.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(token))
+            || self
+                .aliases
+                .iter()
+                .any(|alias| alias.eq_ignore_ascii_case(token))
     }
 }
 
@@ -236,7 +239,8 @@ static BUILTIN: &[SlashCmd] = &[
     SlashCmd {
         name: "peers",
         aliases: &["agents"],
-        summary: "Внешние CLI-агенты (Claude Code, Kimi, CodeWhale, Hermes, OpenClaw): статус установки",
+        summary:
+            "Внешние CLI-агенты (Claude Code, Kimi, CodeWhale, Hermes, OpenClaw): статус установки",
         usage: "/peers",
         kind: SlashKind::Local,
     },
@@ -256,13 +260,19 @@ pub fn builtin_commands() -> Vec<SlashCmd> {
 pub enum Parsed<'a> {
     /// Распознанная команда: ссылка на описание в реестре и хвост строки
     /// после имени команды (аргументы, обрезанные по краям; может быть пустым).
-    Cmd { cmd: &'static SlashCmd, args: &'a str },
+    Cmd {
+        cmd: &'static SlashCmd,
+        args: &'a str,
+    },
     /// Ввод не является slash-командой: обычный текст, пустая строка
     /// или одинокий слеш без имени (`/`, `/ `).
     NotSlash,
     /// Слеш есть, но такой команды нет. `suggestions` — до трёх имён
     /// встроенных команд, похожих на введённое (префикс или Левенштейн).
-    Unknown { name: String, suggestions: Vec<String> },
+    Unknown {
+        name: String,
+        suggestions: Vec<String>,
+    },
 }
 
 /// Разобрать строку ввода пользователя.
@@ -296,7 +306,10 @@ pub fn parse(input: &str) -> Parsed<'_> {
     if let Some(cmd) = BUILTIN.iter().find(|cmd| cmd.matches(head)) {
         return Parsed::Cmd { cmd, args };
     }
-    Parsed::Unknown { name: head.to_string(), suggestions: suggest(head) }
+    Parsed::Unknown {
+        name: head.to_string(),
+        suggestions: suggest(head),
+    }
 }
 
 /// Подсказки для неизвестной команды: имена встроенных команд, у которых
@@ -318,8 +331,9 @@ fn suggest(input: &str) -> Vec<String> {
                         Some(0)
                     } else {
                         let dist = levenshtein(&input, cand);
-                        (dist <= MAX_SUGGESTION_DISTANCE && dist < input_len.max(cand.chars().count()))
-                            .then_some(dist)
+                        (dist <= MAX_SUGGESTION_DISTANCE
+                            && dist < input_len.max(cand.chars().count()))
+                        .then_some(dist)
                     }
                 })
                 .min()
@@ -329,7 +343,10 @@ fn suggest(input: &str) -> Vec<String> {
         .collect();
     scored.sort_unstable();
     scored.truncate(MAX_SUGGESTIONS);
-    scored.into_iter().map(|(_, cmd_name)| cmd_name.to_string()).collect()
+    scored
+        .into_iter()
+        .map(|(_, cmd_name)| cmd_name.to_string())
+        .collect()
 }
 
 /// Расстояние Левенштейна между двумя строками (по Unicode-символам).
@@ -371,7 +388,11 @@ pub fn help_page(cmd: &SlashCmd) -> String {
     let aliases = if cmd.aliases.is_empty() {
         "нет".to_string()
     } else {
-        cmd.aliases.iter().map(|alias| format!("/{alias}")).collect::<Vec<_>>().join(", ")
+        cmd.aliases
+            .iter()
+            .map(|alias| format!("/{alias}"))
+            .collect::<Vec<_>>()
+            .join(", ")
     };
     format!(
         "/{name} — {summary}\nИспользование: {usage}\nАлиасы: {aliases}\nТип: {kind}",
@@ -420,7 +441,11 @@ pub fn validate_commands(cmds: &[SlashCmd]) -> Result<(), Vec<String>> {
     for cmd in cmds {
         if cmd.name.is_empty() {
             errors.push("пустое имя команды".to_string());
-        } else if !cmd.name.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-') {
+        } else if !cmd
+            .name
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        {
             errors.push(format!(
                 "имя команды /{} должно состоять из строчных a-z, цифр и '-'",
                 cmd.name
@@ -448,7 +473,11 @@ pub fn validate_commands(cmds: &[SlashCmd]) -> Result<(), Vec<String>> {
             }
         }
     }
-    if errors.is_empty() { Ok(()) } else { Err(errors) }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
@@ -476,7 +505,16 @@ mod tests {
 
     #[test]
     fn parse_aliases() {
-        for (input, expected) in [("/h", "help"), ("/?", "help"), ("/exit", "quit"), ("/q", "quit"), ("/m", "model"), ("/ls", "sessions"), ("/mem", "memory"), ("/health", "doctor")] {
+        for (input, expected) in [
+            ("/h", "help"),
+            ("/?", "help"),
+            ("/exit", "quit"),
+            ("/q", "quit"),
+            ("/m", "model"),
+            ("/ls", "sessions"),
+            ("/mem", "memory"),
+            ("/health", "doctor"),
+        ] {
             match parse(input) {
                 Parsed::Cmd { cmd, .. } => assert_eq!(cmd.name, expected, "ввод: {input}"),
                 other => panic!("ввод {input}: ожидался алиас {expected}, получено: {other:?}"),
@@ -518,7 +556,10 @@ mod tests {
         match parse("/hlep") {
             Parsed::Unknown { name, suggestions } => {
                 assert_eq!(name, "hlep");
-                assert!(suggestions.contains(&"help".to_string()), "подсказки: {suggestions:?}");
+                assert!(
+                    suggestions.contains(&"help".to_string()),
+                    "подсказки: {suggestions:?}"
+                );
             }
             other => panic!("ожидался Unknown, получено: {other:?}"),
         }
@@ -527,7 +568,9 @@ mod tests {
     #[test]
     fn unknown_with_prefix_suggestion() {
         match parse("/tra") {
-            Parsed::Unknown { suggestions, .. } => assert_eq!(suggestions, vec!["trace".to_string()]),
+            Parsed::Unknown { suggestions, .. } => {
+                assert_eq!(suggestions, vec!["trace".to_string()])
+            }
             other => panic!("ожидался Unknown, получено: {other:?}"),
         }
     }
@@ -538,8 +581,14 @@ mod tests {
         // порядок — алфавитный.
         match parse("/s") {
             Parsed::Unknown { suggestions, .. } => {
-                assert_eq!(suggestions, vec!["sessions".to_string(),
-                    "skill-search".to_string(), "skills".to_string()]);
+                assert_eq!(
+                    suggestions,
+                    vec![
+                        "sessions".to_string(),
+                        "skill-search".to_string(),
+                        "skills".to_string()
+                    ]
+                );
             }
             other => panic!("ожидался Unknown, получено: {other:?}"),
         }
@@ -550,7 +599,10 @@ mod tests {
         // «heal» — префикс алиаса «health» команды doctor.
         match parse("/heal") {
             Parsed::Unknown { suggestions, .. } => {
-                assert!(suggestions.contains(&"doctor".to_string()), "подсказки: {suggestions:?}");
+                assert!(
+                    suggestions.contains(&"doctor".to_string()),
+                    "подсказки: {suggestions:?}"
+                );
             }
             other => panic!("ожидался Unknown, получено: {other:?}"),
         }
@@ -573,8 +625,14 @@ mod tests {
         // а mcp и memory — на расстоянии <= 2.
         match parse("/mo") {
             Parsed::Unknown { suggestions, .. } => {
-                assert!(suggestions.len() <= MAX_SUGGESTIONS, "подсказки: {suggestions:?}");
-                assert!(suggestions.contains(&"model".to_string()), "подсказки: {suggestions:?}");
+                assert!(
+                    suggestions.len() <= MAX_SUGGESTIONS,
+                    "подсказки: {suggestions:?}"
+                );
+                assert!(
+                    suggestions.contains(&"model".to_string()),
+                    "подсказки: {suggestions:?}"
+                );
             }
             other => panic!("ожидался Unknown, получено: {other:?}"),
         }
@@ -582,7 +640,12 @@ mod tests {
 
     #[test]
     fn parse_is_case_insensitive() {
-        for (input, expected) in [("/HELP", "help"), ("/Doctor", "doctor"), ("/QuIt", "quit"), ("/Yolo", "yolo")] {
+        for (input, expected) in [
+            ("/HELP", "help"),
+            ("/Doctor", "doctor"),
+            ("/QuIt", "quit"),
+            ("/Yolo", "yolo"),
+        ] {
             match parse(input) {
                 Parsed::Cmd { cmd, .. } => assert_eq!(cmd.name, expected, "ввод: {input}"),
                 other => panic!("ввод {input}: ожидалась {expected}, получено: {other:?}"),
@@ -612,8 +675,14 @@ mod tests {
     #[test]
     fn help_page_contains_usage_aliases_and_kind() {
         let page = help_page(&builtin("help"));
-        assert!(page.contains("/help — Справка по командам TUI"), "страница:\n{page}");
-        assert!(page.contains("Использование: /help [команда]"), "страница:\n{page}");
+        assert!(
+            page.contains("/help — Справка по командам TUI"),
+            "страница:\n{page}"
+        );
+        assert!(
+            page.contains("Использование: /help [команда]"),
+            "страница:\n{page}"
+        );
         assert!(page.contains("Алиасы: /h, /?"), "страница:\n{page}");
         assert!(page.contains("Тип: локальная"), "страница:\n{page}");
     }
@@ -629,9 +698,16 @@ mod tests {
     fn help_index_lists_all_commands() {
         let index = help_index();
         let cmds = builtin_commands();
-        assert!(index.contains("Доступные команды (23):"), "индекс:\n{index}");
+        assert!(
+            index.contains("Доступные команды (23):"),
+            "индекс:\n{index}"
+        );
         for cmd in &cmds {
-            assert!(index.contains(&format!("/{}", cmd.name)), "нет /{} в индексе:\n{index}", cmd.name);
+            assert!(
+                index.contains(&format!("/{}", cmd.name)),
+                "нет /{} в индексе:\n{index}",
+                cmd.name
+            );
         }
         let rows = index.lines().filter(|line| line.starts_with("  /")).count();
         assert_eq!(rows, cmds.len());
@@ -649,7 +725,12 @@ mod tests {
         let dup = cmds[0];
         cmds.push(dup);
         let errors = validate_commands(&cmds).expect_err("дубли имён должны ловиться");
-        assert!(errors.iter().any(|e| e.contains("дублирующееся имя команды: /help")), "ошибки: {errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("дублирующееся имя команды: /help")),
+            "ошибки: {errors:?}"
+        );
     }
 
     #[test]
@@ -660,7 +741,12 @@ mod tests {
         rogue.aliases = &["trace"]; // алиас совпадает с именем другой команды
         cmds.push(rogue);
         let errors = validate_commands(&cmds).expect_err("конфликт алиаса и имени должен ловиться");
-        assert!(errors.iter().any(|e| e.contains("пересекается с именем команды")), "ошибки: {errors:?}");
+        assert!(
+            errors
+                .iter()
+                .any(|e| e.contains("пересекается с именем команды")),
+            "ошибки: {errors:?}"
+        );
     }
 
     #[test]
@@ -671,7 +757,10 @@ mod tests {
         rogue.aliases = &["q"]; // уже алиас /quit
         cmds.push(rogue);
         let errors = validate_commands(&cmds).expect_err("дубли алиасов должны ловиться");
-        assert!(errors.iter().any(|e| e.contains("дублирующийся алиас: /q")), "ошибки: {errors:?}");
+        assert!(
+            errors.iter().any(|e| e.contains("дублирующийся алиас: /q")),
+            "ошибки: {errors:?}"
+        );
     }
 
     #[test]
@@ -679,7 +768,10 @@ mod tests {
         let mut rogue = builtin("mcp");
         rogue.name = "MCP";
         let errors = validate_commands(&[rogue]).expect_err("верхний регистр должен ловиться");
-        assert!(errors.iter().any(|e| e.contains("строчных a-z")), "ошибки: {errors:?}");
+        assert!(
+            errors.iter().any(|e| e.contains("строчных a-z")),
+            "ошибки: {errors:?}"
+        );
     }
 
     #[test]
@@ -700,7 +792,11 @@ mod tests {
         assert_eq!(cmds.len(), 23);
         for cmd in &cmds {
             assert!(!cmd.name.is_empty());
-            assert!(cmd.usage.starts_with(&format!("/{}", cmd.name)), "usage {} не начинается с имени", cmd.name);
+            assert!(
+                cmd.usage.starts_with(&format!("/{}", cmd.name)),
+                "usage {} не начинается с имени",
+                cmd.name
+            );
             assert!(!cmd.summary.is_empty());
             assert!(!cmd.kind.label().is_empty());
         }

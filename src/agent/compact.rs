@@ -13,20 +13,27 @@ impl Agent {
     /// `parent` — спан текущего хода, к нему родительствуются compact-спаны.
     /// PreCompact/PostCompact (hooks_ext) обрамляют весь эпизод компактификации
     /// ровно один раз (порог L1 пройден раньше остальных — он и есть «вход»).
-    pub(crate) fn maybe_compact(&mut self, messages: &mut Vec<Message>, parent: Option<SpanId>) -> Result<()> {
+    pub(crate) fn maybe_compact(
+        &mut self,
+        messages: &mut Vec<Message>,
+        parent: Option<SpanId>,
+    ) -> Result<()> {
         // стадия 0: переразмерные tool-сообщения маскируются ВСЕГДА, до порогов —
         // один гигант в истории (баг 06.08) раздувает est и валит запрос 413
         let oversized = mask_oversized_tool_outputs(messages);
         if oversized > 0 {
             self.emit(AgentEvent::HookNote(format!(
-                "⤓ маскирование переразмера: {oversized} tool-сообщений (>32 КБ)")));
+                "⤓ маскирование переразмера: {oversized} tool-сообщений (>32 КБ)"
+            )));
         }
         let limit = self.context_limit;
         let est = est_tokens(messages).max(self.last_prompt);
         let engaged = est >= limit * self.compact_mask_pct / 100;
         if engaged {
-            self.fire_ext(ExtHookEvent::PreCompact,
-                serde_json::json!({"est_tokens": est, "context_limit": limit}));
+            self.fire_ext(
+                ExtHookEvent::PreCompact,
+                serde_json::json!({"est_tokens": est, "context_limit": limit}),
+            );
         }
 
         // L1 (70%): маскирование старых tool-выводов — дёшево и без потерь пар
@@ -37,10 +44,16 @@ impl Agent {
                 let sp = self.trace.open_span("compact", parent);
                 self.trace.attr(sp, "level", "L1");
                 self.trace.attr(sp, "from", &est.to_string());
-                self.trace.attr(sp, "to", &est_tokens(messages).max(self.last_prompt).to_string());
+                self.trace.attr(
+                    sp,
+                    "to",
+                    &est_tokens(messages).max(self.last_prompt).to_string(),
+                );
                 self.trace.close_span(sp);
                 self.emit(AgentEvent::HookNote(format!(
-                    "⤓ L1 маскирование: {masked} tool-выводов ({}% окна)", self.compact_mask_pct)));
+                    "⤓ L1 маскирование: {masked} tool-выводов ({}% окна)",
+                    self.compact_mask_pct
+                )));
             }
         }
 
@@ -55,7 +68,11 @@ impl Agent {
                 let sp = self.trace.open_span("compact", parent);
                 self.trace.attr(sp, "level", "L2");
                 self.trace.attr(sp, "from", &est2.to_string());
-                self.trace.attr(sp, "to", &est_tokens(messages).max(self.last_prompt).to_string());
+                self.trace.attr(
+                    sp,
+                    "to",
+                    &est_tokens(messages).max(self.last_prompt).to_string(),
+                );
                 self.trace.close_span(sp);
                 self.emit(AgentEvent::HookNote(format!(
                     "⤓ L2 прунинг: {pruned} результатов, дедупов: {dups}, сем-дедупов: {sem_dups} ({}% окна)", self.compact_prune_pct)));
@@ -78,9 +95,11 @@ impl Agent {
         });
         if engaged {
             // PostCompact — в любом исходе, включая ошибку L3 (симметрия с PreCompact)
-            self.fire_ext(ExtHookEvent::PostCompact,
+            self.fire_ext(
+                ExtHookEvent::PostCompact,
                 serde_json::json!({"est_tokens": est_tokens(messages).max(self.last_prompt),
-                    "l3": l3.is_some(), "ok": l3.as_ref().is_none_or(Result::is_ok)}));
+                    "l3": l3.is_some(), "ok": l3.as_ref().is_none_or(Result::is_ok)}),
+            );
         }
         if let Some(res) = l3 {
             res?;
@@ -91,12 +110,20 @@ impl Agent {
     /// L3: LLM-суммаризация старого в одно сообщение (границы tool-пар не нарушаются).
     /// Спан compact (level=L3): from/to — число сообщений до/после (как в AgentEvent::Compact);
     /// при ошибке API спан закрывается с атрибутом error (ручной scopeguard).
-    pub(crate) fn llm_compact(&mut self, messages: &mut Vec<Message>, parent: Option<SpanId>) -> Result<()> {
+    pub(crate) fn llm_compact(
+        &mut self,
+        messages: &mut Vec<Message>,
+        parent: Option<SpanId>,
+    ) -> Result<()> {
         let keep_tail = 6.min(messages.len().saturating_sub(2));
         let mut cut = messages.len().saturating_sub(keep_tail);
         // нельзя резать между assistant(tool_calls) и его tool-результатами
-        while cut < messages.len() && messages[cut].role == "tool" { cut += 1; }
-        if cut <= 1 || cut >= messages.len() { return Ok(()); }
+        while cut < messages.len() && messages[cut].role == "tool" {
+            cut += 1;
+        }
+        if cut <= 1 || cut >= messages.len() {
+            return Ok(());
+        }
         let old: Vec<Message> = messages[1..cut].to_vec();
         let from = messages.len();
         let sp = self.trace.open_span("compact", parent);
@@ -112,35 +139,50 @@ impl Agent {
         ];
         // стрим-режим, как везде в харнесс (run_turn): endpoint тот же, а моки
         // (mock_sse) говорят только SSE; дельты саммари в UI не выводим
-        let resp = match self.api.chat_stream(&sum_prompt, &serde_json::Value::Null, &mut |_| {}, &|| false) {
-            Ok(r) => r,
-            Err(e) => {
-                self.trace.attr(sp, "error", &format!("{e:#}"));
-                self.trace.close_span(sp);
-                return Err(e);
-            }
-        };
+        let resp =
+            match self
+                .api
+                .chat_stream(&sum_prompt, &serde_json::Value::Null, &mut |_| {}, &|| {
+                    false
+                }) {
+                Ok(r) => r,
+                Err(e) => {
+                    self.trace.attr(sp, "error", &format!("{e:#}"));
+                    self.trace.close_span(sp);
+                    return Err(e);
+                }
+            };
         // цепочку рассуждений саммари тоже прикрепляем: DeepSeek thinking+tools
         // требует reasoning_content на КАЖДОМ assistant-сообщении истории
         // (доки thinking_mode#tool-calls), голая вставка саммари роняла
         // следующий запрос с 400 «reasoning_content must be passed back»
         // (живой баг 25.08, сессия 1787226001: L3 318→8 → 400 без ретрая)
         let summary_reasoning = resp.reasoning.clone();
-        let summary = resp.content.unwrap_or_else(|| "(пустая суммаризация)".into());
+        let summary = resp
+            .content
+            .unwrap_or_else(|| "(пустая суммаризация)".into());
         let mut rebuilt = vec![messages[0].clone()];
-        rebuilt.push(Message::assistant(Some(format!("CONTEXT COMPACTED ({from} сообщений → саммари): {summary}")), None)
-            .with_reasoning(summary_reasoning));
+        rebuilt.push(
+            Message::assistant(
+                Some(format!(
+                    "CONTEXT COMPACTED ({from} сообщений → саммари): {summary}"
+                )),
+                None,
+            )
+            .with_reasoning(summary_reasoning),
+        );
         rebuilt.extend_from_slice(&messages[cut..]);
         *messages = rebuilt;
         // перенос provider-overhead (урок Grok): калибруем счётчик заново, чтобы не зациклиться
         self.last_prompt = est_tokens(messages);
         self.trace.attr(sp, "to", &messages.len().to_string());
         self.trace.close_span(sp);
-        self.emit(AgentEvent::Compact { from_msgs: from, to_msgs: messages.len() });
+        self.emit(AgentEvent::Compact {
+            from_msgs: from,
+            to_msgs: messages.len(),
+        });
         Ok(())
     }
-
-
 }
 
 /// Стадия 1 прогрессивной компакции (OpenDev ACC): маскирование старых tool-выводов
@@ -148,9 +190,15 @@ fn mask_old_tool_outputs(messages: &mut [Message], keep_last: usize, max_chars: 
     let mut masked = 0;
     let cutoff = messages.len().saturating_sub(keep_last);
     for m in messages.iter_mut().take(cutoff) {
-        if m.role != "tool" { continue; }
-        let Some(c) = m.content.as_mut() else { continue; };
-        if c.starts_with("[masked]") || c.chars().count() <= max_chars { continue; }
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(c) = m.content.as_mut() else {
+            continue;
+        };
+        if c.starts_with("[masked]") || c.chars().count() <= max_chars {
+            continue;
+        }
         let head: String = c.chars().take(max_chars).collect();
         *c = format!("[masked] {head} …(урезано харнессом)");
         masked += 1;
@@ -170,11 +218,19 @@ const TOOL_MSG_HARD_CAP_BYTES: usize = 32 * 1024;
 pub(crate) fn mask_oversized_tool_outputs(messages: &mut [Message]) -> usize {
     let mut masked = 0;
     for m in messages.iter_mut() {
-        if m.role != "tool" { continue; }
-        let Some(c) = m.content.as_mut() else { continue; };
-        if c.len() <= TOOL_MSG_HARD_CAP_BYTES || c.starts_with("[masked]") { continue; }
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(c) = m.content.as_mut() else {
+            continue;
+        };
+        if c.len() <= TOOL_MSG_HARD_CAP_BYTES || c.starts_with("[masked]") {
+            continue;
+        }
         let mut head_end = TOOL_MSG_HARD_CAP_BYTES.min(c.len());
-        while !c.is_char_boundary(head_end) { head_end -= 1; }
+        while !c.is_char_boundary(head_end) {
+            head_end -= 1;
+        }
         let skipped = c.len() - head_end;
         let head = &c[..head_end];
         *c = format!("[masked] {head}\n…(урезано харнессом: {skipped} байт переразмера)");
@@ -188,14 +244,23 @@ fn dedupe_tool_results(messages: &mut [Message]) -> usize {
     let mut seen = std::collections::HashMap::new();
     let mut dups = 0;
     for m in messages.iter_mut() {
-        if m.role != "tool" { continue; }
-        let Some(c) = m.content.as_mut() else { continue; };
-        if c.len() < 200 || c.starts_with("[dedup]") || c.starts_with("[pruned]") { continue; }
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(c) = m.content.as_mut() else {
+            continue;
+        };
+        if c.len() < 200 || c.starts_with("[dedup]") || c.starts_with("[pruned]") {
+            continue;
+        }
         let fp = fingerprint("tool_result", &serde_json::json!(c));
         if let std::collections::hash_map::Entry::Vacant(e) = seen.entry(fp) {
             e.insert(());
         } else {
-            *c = format!("[dedup] идентичный результат уже был выше ({} байт)", c.len());
+            *c = format!(
+                "[dedup] идентичный результат уже был выше ({} байт)",
+                c.len()
+            );
             dups += 1;
         }
     }
@@ -210,14 +275,23 @@ fn dedupe_tool_results_semantic(messages: &mut [Message]) -> usize {
     let mut seen: Vec<(u64, usize)> = Vec::new(); // (simhash, индекс сообщения)
     let mut dups = 0;
     for (i, m) in messages.iter_mut().enumerate() {
-        if m.role != "tool" { continue; }
-        let Some(c) = m.content.as_mut() else { continue; };
-        if c.len() < 500 || c.starts_with('[') { continue; } // заглушки L1/L2 пропускаем
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(c) = m.content.as_mut() else {
+            continue;
+        };
+        if c.len() < 500 || c.starts_with('[') {
+            continue;
+        } // заглушки L1/L2 пропускаем
         let h = crate::compact_v2::simhash64(c);
-        if let Some(&(_, j)) = seen.iter()
-            .find(|(ph, _)| crate::compact_v2::hamming(*ph, h) <= crate::compact_v2::DEFAULT_HAMMING_THRESHOLD)
-        {
-            *c = format!("[dedup~] похожий результат уже был выше (сообщение #{j}, {} байт)", c.len());
+        if let Some(&(_, j)) = seen.iter().find(|(ph, _)| {
+            crate::compact_v2::hamming(*ph, h) <= crate::compact_v2::DEFAULT_HAMMING_THRESHOLD
+        }) {
+            *c = format!(
+                "[dedup~] похожий результат уже был выше (сообщение #{j}, {} байт)",
+                c.len()
+            );
             dups += 1;
         } else {
             seen.push((h, i));
@@ -231,10 +305,18 @@ fn prune_tool_results(messages: &mut [Message], keep_last: usize) -> usize {
     let mut pruned = 0;
     let cutoff = messages.len().saturating_sub(keep_last);
     for m in messages.iter_mut().take(cutoff) {
-        if m.role != "tool" { continue; }
-        let Some(c) = m.content.as_mut() else { continue; };
-        if c.starts_with("[pruned]") { continue; }
-        if c.len() < 150 { continue; }
+        if m.role != "tool" {
+            continue;
+        }
+        let Some(c) = m.content.as_mut() else {
+            continue;
+        };
+        if c.starts_with("[pruned]") {
+            continue;
+        }
+        if c.len() < 150 {
+            continue;
+        }
         *c = format!("[pruned] tool result dropped ({} bytes)", c.len());
         pruned += 1;
     }
@@ -246,7 +328,9 @@ mod compact_tests {
     use super::*;
     use crate::api::Message;
 
-    fn tool_msg(s: &str) -> Message { Message::tool("id1", s.to_string().repeat(30)) }
+    fn tool_msg(s: &str) -> Message {
+        Message::tool("id1", s.to_string().repeat(30))
+    }
 
     /// Регрессия (живой баг 25.08, сессия 1787226001): после компактификации
     /// (L1+L2+L3) КАЖДОЕ assistant-сообщение истории обязано нести непустой
@@ -262,14 +346,18 @@ mod compact_tests {
         use crate::permissions::{Mode, PermissionEngine};
 
         // суммаризатор отвечает с цепочкой рассуждений, как thinking-модель
-        let handle = MockLlm::with_scenarios(vec![
-            Scenario::new().reply_reasoning(&["обдумываю саммари"]).reply_text("краткое саммари"),
-        ]).serve_on_ephemeral().expect("мок поднялся");
+        let handle = MockLlm::with_scenarios(vec![Scenario::new()
+            .reply_reasoning(&["обдумываю саммари"])
+            .reply_text("краткое саммари")])
+        .serve_on_ephemeral()
+        .expect("мок поднялся");
         let ws = std::env::temp_dir().join(format!(
             "theseus_reason_passback_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         ));
         std::fs::create_dir_all(&ws).expect("временный workspace");
         let cfg = Config {
@@ -300,28 +388,53 @@ mod compact_tests {
         let big = "x".repeat(600);
         let mut msgs = vec![Message::system("s")];
         for i in 0..12 {
-            msgs.push(Message::assistant(Some(big.clone()), Some(vec![ToolCall {
-                id: format!("call_{i}"),
-                kind: "function".into(),
-                function: crate::api::ToolFunction { name: "read_file".into(), arguments: "{}".into() },
-            }])).with_reasoning(Some(format!("рассуждение {i}"))));
+            msgs.push(
+                Message::assistant(
+                    Some(big.clone()),
+                    Some(vec![ToolCall {
+                        id: format!("call_{i}"),
+                        kind: "function".into(),
+                        function: crate::api::ToolFunction {
+                            name: "read_file".into(),
+                            arguments: "{}".into(),
+                        },
+                    }]),
+                )
+                .with_reasoning(Some(format!("рассуждение {i}"))),
+            );
             msgs.push(Message::tool(format!("call_{i}"), big.clone()));
         }
-        agent.maybe_compact(&mut msgs, None).expect("компактификация");
-        assert!(msgs.iter().any(|m| m.role == "assistant"
-            && m.content.as_deref().is_some_and(|c| c.starts_with("CONTEXT COMPACTED"))),
-            "L3 реально отработала");
+        agent
+            .maybe_compact(&mut msgs, None)
+            .expect("компактификация");
+        assert!(
+            msgs.iter().any(|m| m.role == "assistant"
+                && m.content
+                    .as_deref()
+                    .is_some_and(|c| c.starts_with("CONTEXT COMPACTED"))),
+            "L3 реально отработала"
+        );
         for (i, m) in msgs.iter().enumerate() {
             if m.role == "assistant" {
-                assert!(m.reasoning_content.as_deref().is_some_and(|r| !r.is_empty()),
+                assert!(
+                    m.reasoning_content
+                        .as_deref()
+                        .is_some_and(|r| !r.is_empty()),
                     "assistant #{i} (tools={}) без reasoning_content после компактификации",
-                    m.tool_calls.is_some());
+                    m.tool_calls.is_some()
+                );
             }
         }
         // вставка саммари несёт цепочку суммаризатора, хвост — исходные цепочки
-        assert_eq!(msgs[1].reasoning_content.as_deref(), Some("обдумываю саммари"));
-        assert!(msgs.iter().any(|m| m.reasoning_content.as_deref() == Some("рассуждение 11")),
-            "хвост сохранил свежие цепочки");
+        assert_eq!(
+            msgs[1].reasoning_content.as_deref(),
+            Some("обдумываю саммари")
+        );
+        assert!(
+            msgs.iter()
+                .any(|m| m.reasoning_content.as_deref() == Some("рассуждение 11")),
+            "хвост сохранил свежие цепочки"
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 
@@ -370,7 +483,10 @@ mod compact_tests {
             Message::tool("c1", "маленький результат"),
             Message::tool("c2", giant),
             Message::user("u"),
-            Message::tool("c3", "[masked] уже урезан ".to_string() + &"y".repeat(40 * 1024)),
+            Message::tool(
+                "c3",
+                "[masked] уже урезан ".to_string() + &"y".repeat(40 * 1024),
+            ),
         ];
         let n = mask_oversized_tool_outputs(&mut msgs);
         assert_eq!(n, 1, "замаскирован только гигант: {n}");
@@ -379,14 +495,20 @@ mod compact_tests {
         assert!(c2.contains("урезано харнессом"), "маркер: {c2:.60}");
         assert!(c2.len() < 34 * 1024, "размер после урезки: {}", c2.len());
         assert_eq!(msgs[2].content.as_deref(), Some("маленький результат"));
-        assert!(msgs[5].content.as_ref().unwrap().starts_with("[masked] уже урезан"));
+        assert!(msgs[5]
+            .content
+            .as_ref()
+            .unwrap()
+            .starts_with("[masked] уже урезан"));
     }
 
     /// L2b: похожие (не идентичные) повторные чтения ловятся simhash-дедупом.
     #[test]
     fn semantic_dedupe_catches_near_duplicate_reads() {
         // два прочтения одного файла до/после правки одной строки — exact match нет
-        let v1: String = (1..80).map(|i| format!("строка {i}: содержимое конфигурации системы\n")).collect();
+        let v1: String = (1..80)
+            .map(|i| format!("строка {i}: содержимое конфигурации системы\n"))
+            .collect();
         let v2 = v1.replace("строка 40", "строка 40 ИЗМЕНЕНА");
         let mut msgs = vec![
             Message::system("s"),
@@ -402,8 +524,12 @@ mod compact_tests {
     /// L2b: разные по смыслу результаты не задеваются; мелкие — пропускаются.
     #[test]
     fn semantic_dedupe_ignores_dissimilar_and_small() {
-        let a: String = (1..80).map(|i| format!("строка {i}: совершенно иной текст про погоду\n")).collect();
-        let b: String = (1..80).map(|i| format!("record {i}: database migration log output here\n")).collect();
+        let a: String = (1..80)
+            .map(|i| format!("строка {i}: совершенно иной текст про погоду\n"))
+            .collect();
+        let b: String = (1..80)
+            .map(|i| format!("record {i}: database migration log output here\n"))
+            .collect();
         let mut msgs = vec![
             Message::tool("id1", a),
             Message::tool("id2", b),
@@ -433,7 +559,9 @@ mod compact_tests {
             "theseus_l3_futile_{}_{}",
             std::process::id(),
             std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_nanos())
+                .unwrap_or(0)
         ));
         std::fs::create_dir_all(&ws).expect("временный workspace");
         let cfg = Config {
@@ -472,20 +600,34 @@ mod compact_tests {
                 msgs.push(Message::assistant(Some(big.clone()), None));
             }
         }
-        assert!(est_tokens(&msgs) >= 2_000 * 95 / 100, "стартовый est выше порога L3");
+        assert!(
+            est_tokens(&msgs) >= 2_000 * 95 / 100,
+            "стартовый est выше порога L3"
+        );
 
-        agent.maybe_compact(&mut msgs, None).expect("первая компактификация");
+        agent
+            .maybe_compact(&mut msgs, None)
+            .expect("первая компактификация");
         assert_eq!(agent.api.accounting.calls, 1, "L3 сработала ровно один раз");
         assert!(agent.l3_futile, "неэффективная L3 помечается бесполезной");
-        assert!(est_tokens(&msgs).max(agent.last_prompt) >= 2_000 * 95 / 100,
-            "est остался выше порога — повод для цикла есть, пропуск именно по флагу");
+        assert!(
+            est_tokens(&msgs).max(agent.last_prompt) >= 2_000 * 95 / 100,
+            "est остался выше порога — повод для цикла есть, пропуск именно по флагу"
+        );
 
         // следующие ходы: L3 больше не вызывается, несмотря на est выше порога
-        agent.maybe_compact(&mut msgs, None).expect("вторая компактификация");
-        agent.maybe_compact(&mut msgs, None).expect("третья компактификация");
+        agent
+            .maybe_compact(&mut msgs, None)
+            .expect("вторая компактификация");
+        agent
+            .maybe_compact(&mut msgs, None)
+            .expect("третья компактификация");
         assert_eq!(agent.api.accounting.calls, 1, "повторных вызовов L3 нет");
-        assert_eq!(server.requests().len(), 1, "на мок ушёл ровно один HTTP-запрос");
+        assert_eq!(
+            server.requests().len(),
+            1,
+            "на мок ушёл ровно один HTTP-запрос"
+        );
         std::fs::remove_dir_all(&ws).ok();
     }
 }
-

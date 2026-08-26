@@ -49,12 +49,43 @@ pub enum Decision {
 
 /// Префиксы команд, считающихся безопасными read-only (урок Grok: tee туда не входит)
 const SAFE_BASH_PREFIXES: &[&str] = &[
-    "ls", "pwd", "cat", "head", "tail", "wc", "sort", "uniq", "find", "rg", "grep",
-    "git status", "git diff", "git log", "git show", "git branch", "git rev-parse",
-    "python3 --version", "python --version", "pip list", "pip show",
-    "cargo check", "cargo --version", "rustc --version",
-    "echo", "true", "date", "uname", "df", "du", "free", "stat", "file", "which", "env",
-    "python3 -c", "python -c",
+    "ls",
+    "pwd",
+    "cat",
+    "head",
+    "tail",
+    "wc",
+    "sort",
+    "uniq",
+    "find",
+    "rg",
+    "grep",
+    "git status",
+    "git diff",
+    "git log",
+    "git show",
+    "git branch",
+    "git rev-parse",
+    "python3 --version",
+    "python --version",
+    "pip list",
+    "pip show",
+    "cargo check",
+    "cargo --version",
+    "rustc --version",
+    "echo",
+    "true",
+    "date",
+    "uname",
+    "df",
+    "du",
+    "free",
+    "stat",
+    "file",
+    "which",
+    "env",
+    "python3 -c",
+    "python -c",
 ];
 
 pub struct PermissionEngine {
@@ -90,11 +121,23 @@ impl PermissionEngine {
     pub fn new(mode: Mode, cfg: PermissionConfig, workspace: &Path) -> Self {
         let deny_set = regex::RegexSet::new(&cfg.bash_deny_patterns)
             .unwrap_or_else(|_| regex::RegexSet::new::<_, &&str>(&[]).unwrap());
-        let deny_res = cfg.bash_deny_patterns.iter()
-            .filter_map(|p| regex::Regex::new(p).ok()).collect();
+        let deny_res = cfg
+            .bash_deny_patterns
+            .iter()
+            .filter_map(|p| regex::Regex::new(p).ok())
+            .collect();
         let policy = execpolicy::PolicyEngine::new(policy_rules(&cfg));
-        PermissionEngine { mode, mode_override: None, cfg, workspace: workspace.to_path_buf(),
-                           always_allowed: vec![], deny_set, deny_res, rules: vec![], policy }
+        PermissionEngine {
+            mode,
+            mode_override: None,
+            cfg,
+            workspace: workspace.to_path_buf(),
+            always_allowed: vec![],
+            deny_set,
+            deny_res,
+            rules: vec![],
+            policy,
+        }
     }
 
     pub fn with_rules(mut self, rules: Vec<crate::config::PermissionRule>) -> Self {
@@ -103,7 +146,10 @@ impl PermissionEngine {
     }
 
     /// Подключить общий атомик режима (переключение /mode в рантайме).
-    pub fn with_mode_override(mut self, atomic: std::sync::Arc<std::sync::atomic::AtomicU8>) -> Self {
+    pub fn with_mode_override(
+        mut self,
+        atomic: std::sync::Arc<std::sync::atomic::AtomicU8>,
+    ) -> Self {
         self.mode_override = Some(atomic);
         self
     }
@@ -133,14 +179,22 @@ impl PermissionEngine {
     }
 
     fn in_workspace(&self, p: &Path) -> bool {
-        let abs = if p.is_absolute() { p.to_path_buf() } else { self.workspace.join(p) };
+        let abs = if p.is_absolute() {
+            p.to_path_buf()
+        } else {
+            self.workspace.join(p)
+        };
         // каноникализация может упасть для несуществующего файла — нормализуем вручную
         let norm = normalize(&abs);
         norm.starts_with(&self.workspace)
     }
 
     fn protected(&self, p: &Path) -> bool {
-        let abs = if p.is_absolute() { normalize(p) } else { normalize(&self.workspace.join(p)) };
+        let abs = if p.is_absolute() {
+            normalize(p)
+        } else {
+            normalize(&self.workspace.join(p))
+        };
         abs.components().any(|c| c.as_os_str() == ".git")
     }
 
@@ -207,8 +261,12 @@ impl PermissionEngine {
     /// Команда из белого списка read-only (для plan-режима, v0.3)
     pub fn is_readonly_bash(&self, cmd: &str) -> bool {
         let cmd = cmd.trim();
-        if cmd.contains('$') || cmd.contains('`') { return false; }
-        SAFE_BASH_PREFIXES.iter().any(|p| cmd == *p || cmd.starts_with(&format!("{p} ")))
+        if cmd.contains('$') || cmd.contains('`') {
+            return false;
+        }
+        SAFE_BASH_PREFIXES
+            .iter()
+            .any(|p| cmd == *p || cmd.starts_with(&format!("{p} ")))
     }
 
     /// Решение для bash: слои hard-deny → always → белый список → режим.
@@ -226,7 +284,9 @@ impl PermissionEngine {
         for part in &split_simple_chain(cmd) {
             let d = self.bash_single(part);
             decision = worst(decision, d);
-            if matches!(decision, Decision::Deny(_)) { return decision; }
+            if matches!(decision, Decision::Deny(_)) {
+                return decision;
+            }
         }
         worst(decision, self.bash_via_policy(cmd))
     }
@@ -239,7 +299,9 @@ impl PermissionEngine {
     /// execpolicy — движок классификации, а не источник новых решений: проход
     /// может лишь ужесточить обходы legacy-сплита (напр. `ls && make > x`).
     fn bash_via_policy(&self, cmd: &str) -> Decision {
-        if cmd.is_empty() { return Decision::Allow; }
+        if cmd.is_empty() {
+            return Decision::Allow;
+        }
         let (d, _reasons) = self.policy.decide(cmd, ep_mode(self.mode()));
         match d {
             execpolicy::Decision::Allow => Decision::Allow,
@@ -258,7 +320,8 @@ impl PermissionEngine {
         if self.deny_set.is_match(cmd) {
             return Some(cmd.to_string());
         }
-        execpolicy::canonicalize_command(cmd).into_iter()
+        execpolicy::canonicalize_command(cmd)
+            .into_iter()
             .find(|s| self.deny_set.is_match(s))
     }
 
@@ -276,7 +339,9 @@ impl PermissionEngine {
 
     fn bash_single(&self, command: &str) -> Decision {
         let cmd = command.trim();
-        if cmd.is_empty() { return Decision::Allow; }
+        if cmd.is_empty() {
+            return Decision::Allow;
+        }
         // слой 0: hard-deny всегда
         if self.deny_set.is_match(cmd) {
             return self.hard_deny(cmd);
@@ -287,14 +352,21 @@ impl PermissionEngine {
             return Decision::Allow;
         }
         // слой 2: белый список read-only префиксов
-        if SAFE_BASH_PREFIXES.iter().any(|p| cmd == *p || cmd.starts_with(&format!("{p} "))) {
+        if SAFE_BASH_PREFIXES
+            .iter()
+            .any(|p| cmd == *p || cmd.starts_with(&format!("{p} ")))
+        {
             // подстановка $()/backtick может прятать произвольный код (`echo $(rm -rf ~)`):
             // белый список применяем только к «чистым» командам (урок Codex)
             if cmd.contains('$') || cmd.contains('`') {
                 return match self.mode() {
                     Mode::Yolo | Mode::Max => Decision::Allow,
-                    Mode::DontAsk => Decision::Deny(format!("подстановка в команде (dontAsk): {cmd}")),
-                    Mode::Ask | Mode::SemiAuto => Decision::Ask(format!("команда с подстановкой: {cmd}")),
+                    Mode::DontAsk => {
+                        Decision::Deny(format!("подстановка в команде (dontAsk): {cmd}"))
+                    }
+                    Mode::Ask | Mode::SemiAuto => {
+                        Decision::Ask(format!("команда с подстановкой: {cmd}"))
+                    }
                 };
             }
             // v0.2: read-confinement — read-only команды не должны читать абсолютные пути
@@ -306,7 +378,12 @@ impl PermissionEngine {
             }
             return Decision::Allow;
         }
-        if self.cfg.bash_allow_prefixes.iter().any(|p| cmd.starts_with(p.as_str())) {
+        if self
+            .cfg
+            .bash_allow_prefixes
+            .iter()
+            .any(|p| cmd.starts_with(p.as_str()))
+        {
             return Decision::Allow;
         }
         // слой 3: запись вне рабочего дерева через редирект — анти-байпасс (урок Grok shell_access)
@@ -327,9 +404,17 @@ impl PermissionEngine {
 /// Более строгое из двух решений (Deny > Ask > Allow)
 fn worst(a: Decision, b: Decision) -> Decision {
     fn rank(d: &Decision) -> u8 {
-        match d { Decision::Deny(_) => 2, Decision::Ask(_) => 1, Decision::Allow => 0 }
+        match d {
+            Decision::Deny(_) => 2,
+            Decision::Ask(_) => 1,
+            Decision::Allow => 0,
+        }
     }
-    if rank(&b) > rank(&a) { b } else { a }
+    if rank(&b) > rank(&a) {
+        b
+    } else {
+        a
+    }
 }
 
 /// Режим permissions → зеркальный режим execpolicy
@@ -359,7 +444,9 @@ fn policy_rules(cfg: &PermissionConfig) -> Vec<execpolicy::Rule> {
             rules.push(r);
         }
     }
-    let whitelist = SAFE_BASH_PREFIXES.iter().copied()
+    let whitelist = SAFE_BASH_PREFIXES
+        .iter()
+        .copied()
         .chain(cfg.bash_allow_prefixes.iter().map(String::as_str));
     for prefix in whitelist {
         let pat = format!("^{}(\\s|$)", regex::escape(prefix));
@@ -387,7 +474,11 @@ fn split_simple_chain(cmd: &str) -> Vec<String> {
     let chars: Vec<char> = cmd.chars().collect();
     let mut i = 0;
     while i < chars.len() {
-        let two: String = chars.get(i..(i + 2).min(chars.len())).unwrap_or(&[]).iter().collect();
+        let two: String = chars
+            .get(i..(i + 2).min(chars.len()))
+            .unwrap_or(&[])
+            .iter()
+            .collect();
         if two == "&&" || two == "||" {
             parts.push(cur.trim().to_string());
             cur.clear();
@@ -446,8 +537,7 @@ fn rule_target_matches(tool: &str, target: &str, prefix: &str) -> bool {
         return true;
     }
     execpolicy::canonicalize_command(target).iter().any(|sub| {
-        sub.starts_with(prefix)
-            || unwrapped_subcommand(sub).is_some_and(|s| s.starts_with(prefix))
+        sub.starts_with(prefix) || unwrapped_subcommand(sub).is_some_and(|s| s.starts_with(prefix))
     })
 }
 
@@ -479,15 +569,28 @@ fn unwrapped_start(words: &[String]) -> usize {
         let prog = w.rsplit('/').next().unwrap_or(w);
         i = match prog {
             "command" | "builtin" | "nohup" | "exec" => i + 1,
-            "env" => skip_wrapper_args(words, i + 1,
-                &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"]),
-            "sudo" => skip_wrapper_args(words, i + 1,
-                &["-u", "-g", "-h", "-p", "-C", "-T", "--user", "--group", "--host", "--prompt"]),
+            "env" => skip_wrapper_args(
+                words,
+                i + 1,
+                &["-u", "-C", "-S", "--unset", "--chdir", "--split-string"],
+            ),
+            "sudo" => skip_wrapper_args(
+                words,
+                i + 1,
+                &[
+                    "-u", "-g", "-h", "-p", "-C", "-T", "--user", "--group", "--host", "--prompt",
+                ],
+            ),
             "nice" => skip_wrapper_args(words, i + 1, &["-n", "--adjustment"]),
-            "stdbuf" => skip_wrapper_args(words, i + 1,
-                &["-i", "-o", "-e", "--input", "--output", "--error"]),
+            "stdbuf" => skip_wrapper_args(
+                words,
+                i + 1,
+                &["-i", "-o", "-e", "--input", "--output", "--error"],
+            ),
             // после флагов timeout идёт ДЛИТЕЛЬНОСТЬ, и только потом команда
-            "timeout" => skip_wrapper_args(words, i + 1, &["-k", "-s", "--kill-after", "--signal"]) + 1,
+            "timeout" => {
+                skip_wrapper_args(words, i + 1, &["-k", "-s", "--kill-after", "--signal"]) + 1
+            }
             _ => break,
         };
     }
@@ -538,7 +641,9 @@ fn normalize(p: &Path) -> PathBuf {
         use std::path::Component::*;
         match c {
             CurDir => {}
-            ParentDir => { out.pop(); }
+            ParentDir => {
+                out.pop();
+            }
             other => out.push(other.as_os_str()),
         }
     }
@@ -573,14 +678,26 @@ mod tests {
 
     #[test]
     fn unknown_by_mode() {
-        assert!(matches!(engine(Mode::Yolo).bash("make install"), Decision::Allow));
-        assert!(matches!(engine(Mode::Ask).bash("make install"), Decision::Ask(_)));
-        assert!(matches!(engine(Mode::DontAsk).bash("make install"), Decision::Deny(_)));
+        assert!(matches!(
+            engine(Mode::Yolo).bash("make install"),
+            Decision::Allow
+        ));
+        assert!(matches!(
+            engine(Mode::Ask).bash("make install"),
+            Decision::Ask(_)
+        ));
+        assert!(matches!(
+            engine(Mode::DontAsk).bash("make install"),
+            Decision::Deny(_)
+        ));
     }
 
     #[test]
     fn tee_not_safe() {
-        assert!(matches!(engine(Mode::DontAsk).bash("tee /tmp/ws/x"), Decision::Deny(_)));
+        assert!(matches!(
+            engine(Mode::DontAsk).bash("tee /tmp/ws/x"),
+            Decision::Deny(_)
+        ));
     }
 
     #[test]
@@ -613,8 +730,9 @@ mod tests {
     /// Max доезжает до движка через общий атомик (переключение /mode в рантайме).
     #[test]
     fn max_mode_via_override_atomic() {
-        let e = engine(Mode::Ask)
-            .with_mode_override(std::sync::Arc::new(std::sync::atomic::AtomicU8::new(MODE_MAX)));
+        let e = engine(Mode::Ask).with_mode_override(std::sync::Arc::new(
+            std::sync::atomic::AtomicU8::new(MODE_MAX),
+        ));
         assert_eq!(e.mode(), Mode::Max);
         assert!(matches!(e.bash("rm -rf /"), Decision::Allow));
     }
@@ -622,15 +740,24 @@ mod tests {
     #[test]
     fn redirect_outside_asks() {
         let e = engine(Mode::Ask);
-        assert!(matches!(e.bash("make > /tmp/outside.txt"), Decision::Ask(_)));
-        assert!(matches!(e.bash("make > /tmp/ws/inside.txt"), Decision::Ask(_))); // сама make — ask
+        assert!(matches!(
+            e.bash("make > /tmp/outside.txt"),
+            Decision::Ask(_)
+        ));
+        assert!(matches!(
+            e.bash("make > /tmp/ws/inside.txt"),
+            Decision::Ask(_)
+        )); // сама make — ask
     }
 
     #[test]
     fn hard_deny_real_regex() {
         let e = engine(Mode::Yolo);
         assert!(matches!(e.bash("mkfs.ext4 /dev/sda"), Decision::Deny(_)));
-        assert!(matches!(e.bash("dd if=/dev/zero > /dev/sda"), Decision::Deny(_)));
+        assert!(matches!(
+            e.bash("dd if=/dev/zero > /dev/sda"),
+            Decision::Deny(_)
+        ));
         assert!(matches!(e.bash("cargo build"), Decision::Allow));
     }
 
@@ -657,7 +784,10 @@ mod tests {
         // относительный путь внутри workspace → Allow
         assert!(matches!(e.bash("cat src/main.rs"), Decision::Allow));
         // yolo — без вопросов
-        assert!(matches!(engine(Mode::Yolo).bash("cat /etc/passwd"), Decision::Allow));
+        assert!(matches!(
+            engine(Mode::Yolo).bash("cat /etc/passwd"),
+            Decision::Allow
+        ));
     }
 
     // --- v0.4: интеграция execpolicy (каноникализация + PolicyEngine) ---
@@ -697,9 +827,18 @@ mod tests {
             execpolicy::CmdClass::Destructive
         );
         // семантика режимов прежняя: Ask → вопрос, DontAsk → запрет, Yolo → разрешено
-        assert!(matches!(engine(Mode::Ask).bash("git reset --hard HEAD"), Decision::Ask(_)));
-        assert!(matches!(engine(Mode::DontAsk).bash("git reset --hard HEAD"), Decision::Deny(_)));
-        assert!(matches!(engine(Mode::Yolo).bash("git reset --hard HEAD"), Decision::Allow));
+        assert!(matches!(
+            engine(Mode::Ask).bash("git reset --hard HEAD"),
+            Decision::Ask(_)
+        ));
+        assert!(matches!(
+            engine(Mode::DontAsk).bash("git reset --hard HEAD"),
+            Decision::Deny(_)
+        ));
+        assert!(matches!(
+            engine(Mode::Yolo).bash("git reset --hard HEAD"),
+            Decision::Allow
+        ));
     }
 
     #[test]
@@ -726,11 +865,17 @@ mod tests {
 
     #[test]
     fn readonly_git_status_allowed_in_dontask() {
-        assert_eq!(execpolicy::classify("git status"), execpolicy::CmdClass::Readonly);
+        assert_eq!(
+            execpolicy::classify("git status"),
+            execpolicy::CmdClass::Readonly
+        );
         let e = engine(Mode::DontAsk);
         assert!(matches!(e.bash("git status"), Decision::Allow));
         // и внутри составной команды
-        assert!(matches!(e.bash("git status && git log -1"), Decision::Allow));
+        assert!(matches!(
+            e.bash("git status && git log -1"),
+            Decision::Allow
+        ));
     }
 
     /// Полуавтомат (v0.5.6): readonly bash и правки файлов в workspace — авто,
@@ -754,19 +899,30 @@ mod tests {
     /// Оверрайд режима через общий атомик (переключение /mode в рантайме).
     #[test]
     fn mode_override_atomic_switches_decisions() {
-        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_UNSET));
+        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            crate::permissions::MODE_UNSET,
+        ));
         let e = PermissionEngine::new(Mode::Ask, PermissionConfig::default(), Path::new("/tmp/ws"))
             .with_mode_override(atomic.clone());
         // без оверрайда — базовый Ask: побочный bash → Ask
         assert!(matches!(e.bash("make install"), Decision::Ask(_)));
         // переключили в автомат → Allow
-        atomic.store(crate::permissions::MODE_YOLO, std::sync::atomic::Ordering::Relaxed);
+        atomic.store(
+            crate::permissions::MODE_YOLO,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         assert!(matches!(e.bash("make install"), Decision::Allow));
         // переключили в полуавтомат → обратно Ask
-        atomic.store(crate::permissions::MODE_SEMI, std::sync::atomic::Ordering::Relaxed);
+        atomic.store(
+            crate::permissions::MODE_SEMI,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         assert!(matches!(e.bash("make install"), Decision::Ask(_)));
         // и обратно в с-подтверждением
-        atomic.store(crate::permissions::MODE_ASK, std::sync::atomic::Ordering::Relaxed);
+        atomic.store(
+            crate::permissions::MODE_ASK,
+            std::sync::atomic::Ordering::Relaxed,
+        );
         assert!(matches!(e.bash("make install"), Decision::Ask(_)));
     }
 
@@ -810,7 +966,13 @@ mod tests {
         }
         // обычные команды правило не цепляет: ни сырая строка, ни подкоманды,
         // ни слова-не-команды («rm» как аргумент grep/echo — не повод для deny)
-        for cmd in ["ls -la", "git status", "grep rm log.txt", "echo rm", "cat x && ls"] {
+        for cmd in [
+            "ls -la",
+            "git status",
+            "grep rm log.txt",
+            "echo rm",
+            "cat x && ls",
+        ] {
             assert_eq!(e.rule_decision("bash", cmd), None, "cmd: {cmd}");
         }
         // не-bash инструменты — прежняя семантика: префикс только сырой строки
@@ -849,7 +1011,9 @@ mod tests {
     /// Mode::DontAsk, а не проваливаться в базовый режим конструктора.
     #[test]
     fn mode_override_dontask_recognized() {
-        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(crate::permissions::MODE_DONTASK));
+        let atomic = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(
+            crate::permissions::MODE_DONTASK,
+        ));
         let e = PermissionEngine::new(Mode::Ask, PermissionConfig::default(), Path::new("/tmp/ws"))
             .with_mode_override(atomic);
         assert_eq!(e.mode(), Mode::DontAsk);

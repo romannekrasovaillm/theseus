@@ -260,7 +260,11 @@ fn score_card(card: &ConceptCard, needle: &str) -> u32 {
     if card.slug.eq_ignore_ascii_case(needle) {
         return SCORE_SLUG;
     }
-    if card.aliases.iter().any(|alias| alias.eq_ignore_ascii_case(needle)) {
+    if card
+        .aliases
+        .iter()
+        .any(|alias| alias.eq_ignore_ascii_case(needle))
+    {
         return SCORE_ALIAS;
     }
     if card.title.to_lowercase().contains(needle) {
@@ -537,8 +541,10 @@ mod tests {
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
-            let root = std::env::temp_dir()
-                .join(format!("theseus_ml_concepts_{}_{stamp}", std::process::id()));
+            let root = std::env::temp_dir().join(format!(
+                "theseus_ml_concepts_{}_{stamp}",
+                std::process::id()
+            ));
             TestLib { root }
         }
 
@@ -825,13 +831,22 @@ sources: [arxiv.1707.06347]
     #[test]
     fn related_bfs_depth_cycles_and_dangling() {
         let lib = TestLib::new();
-        lib.write_card("task/a.md", "---\nslug: a\ntype: task\ntitle: A\nrelated: [b, c]\n---\nтело\n");
-        lib.write_card("task/b.md", "---\nslug: b\ntype: task\ntitle: B\nrelated: [d]\n---\nтело\n");
+        lib.write_card(
+            "task/a.md",
+            "---\nslug: a\ntype: task\ntitle: A\nrelated: [b, c]\n---\nтело\n",
+        );
+        lib.write_card(
+            "task/b.md",
+            "---\nslug: b\ntype: task\ntitle: B\nrelated: [d]\n---\nтело\n",
+        );
         lib.write_card(
             "task/c.md",
             "---\nslug: c\ntype: task\ntitle: C\nrelated: [d, ghost]\n---\nтело\n",
         );
-        lib.write_card("task/d.md", "---\nslug: d\ntype: task\ntitle: D\nrelated: [a]\n---\nтело\n");
+        lib.write_card(
+            "task/d.md",
+            "---\nslug: d\ntype: task\ntitle: D\nrelated: [a]\n---\nтело\n",
+        );
         let index = lib.build();
         let slugs = |depth| -> Vec<String> {
             index
@@ -851,8 +866,14 @@ sources: [arxiv.1707.06347]
     #[test]
     fn duplicate_slug_first_wins() {
         let lib = TestLib::new();
-        lib.write_card("a_type/dup.md", "---\nslug: dup\ntype: a_type\ntitle: Первая\n---\nтело\n");
-        lib.write_card("b_type/dup.md", "---\nslug: dup\ntype: b_type\ntitle: Вторая\n---\nтело\n");
+        lib.write_card(
+            "a_type/dup.md",
+            "---\nslug: dup\ntype: a_type\ntitle: Первая\n---\nтело\n",
+        );
+        lib.write_card(
+            "b_type/dup.md",
+            "---\nslug: dup\ntype: b_type\ntitle: Вторая\n---\nтело\n",
+        );
         let index = lib.build();
         let (total, by_type) = index.stats();
         assert_eq!(total, 1);
@@ -872,7 +893,10 @@ sources: [arxiv.1707.06347]
         let fp2 = fingerprint(&lib.root);
         assert_ne!(fp1, fp2);
         // правка содержимого (другой размер) тоже меняет отпечаток
-        lib.write_card("task/two.md", &format!("{}\nдополнение к телу", minimal_card("two", "task")));
+        lib.write_card(
+            "task/two.md",
+            &format!("{}\nдополнение к телу", minimal_card("two", "task")),
+        );
         let fp3 = fingerprint(&lib.root);
         assert_ne!(fp2, fp3);
         // удаление файла возвращает отпечаток к исходному составу

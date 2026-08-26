@@ -101,7 +101,11 @@ struct JsonlRecord<'a> {
 
 /// Сериализовать событие в JSON-строку (без перевода строки).
 fn event_line(event: SpanEvent, span: &Span) -> io::Result<String> {
-    let record = JsonlRecord { event: event.as_str(), wall_ms: wall_now_ms(), span };
+    let record = JsonlRecord {
+        event: event.as_str(),
+        wall_ms: wall_now_ms(),
+        span,
+    };
     serde_json::to_string(&record).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
@@ -120,7 +124,9 @@ impl JsonlTraceWriter {
     /// Ошибка открытия файла (нет прав, не существует каталог и т.п.).
     pub fn append(path: impl AsRef<Path>) -> io::Result<Self> {
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(Self { file: BufWriter::new(file) })
+        Ok(Self {
+            file: BufWriter::new(file),
+        })
     }
 
     /// Записать событие жизненного цикла спана одной JSON-строкой.
@@ -154,7 +160,12 @@ pub struct TraceRegistry {
 impl TraceRegistry {
     /// Пустой реестр; монотонные часы стартуют в этот момент.
     pub fn new() -> Self {
-        Self { origin: Instant::now(), spans: Vec::new(), jsonl: None, write_error: None }
+        Self {
+            origin: Instant::now(),
+            spans: Vec::new(),
+            jsonl: None,
+            write_error: None,
+        }
     }
 
     /// Реестр с подключённым JSONL-потоком: open/close спанов сразу
@@ -201,7 +212,9 @@ impl TraceRegistry {
     /// auto-close при снапшоте).
     pub fn close_span(&mut self, id: SpanId) -> bool {
         let now = self.elapsed_ms();
-        let Some(span) = self.get_mut(id) else { return false };
+        let Some(span) = self.get_mut(id) else {
+            return false;
+        };
         if span.end_ms.is_some() {
             return false;
         }
@@ -215,7 +228,9 @@ impl TraceRegistry {
     /// Атрибуты можно ставить в любой момент жизни спана (в JSONL уже ушедшие
     /// события при этом, разумеется, не переписываются).
     pub fn attr(&mut self, id: SpanId, key: &str, value: &str) -> bool {
-        let Some(span) = self.get_mut(id) else { return false };
+        let Some(span) = self.get_mut(id) else {
+            return false;
+        };
         span.attrs.insert(key.to_owned(), value.to_owned());
         true
     }
@@ -267,7 +282,11 @@ impl TraceRegistry {
 
     /// id спанов без `end_ms` — выполняются прямо сейчас.
     pub fn unfinished_ids(&self) -> Vec<SpanId> {
-        self.spans.iter().filter(|s| s.end_ms.is_none()).map(|s| s.id).collect()
+        self.spans
+            .iter()
+            .filter(|s| s.end_ms.is_none())
+            .map(|s| s.id)
+            .collect()
     }
 
     /// id спанов, не закрытых штатно (утечки; auto-closed сюда тоже входят).
@@ -289,7 +308,12 @@ impl TraceRegistry {
         }
         // Деструктуризация даёт раздельные займы полей: писатель и спан
         // одновременно, без клонирования спана.
-        let Self { spans, jsonl, write_error, .. } = self;
+        let Self {
+            spans,
+            jsonl,
+            write_error,
+            ..
+        } = self;
         let Some(idx) = index_of(id) else { return };
         if let (Some(writer), Some(span)) = (jsonl.as_mut(), spans.get(idx)) {
             if let Err(err) = writer.record(event, span) {
@@ -318,7 +342,9 @@ fn millis_u64(ms: u128) -> u64 {
 
 /// Текущее UNIX-время в мс; 0, если системные часы ушли назад.
 fn wall_now_ms() -> u64 {
-    let elapsed = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     millis_u64(elapsed.as_millis())
 }
 
@@ -488,7 +514,9 @@ fn render_children(
     emitted: &mut HashSet<SpanId>,
     out: &mut String,
 ) {
-    let Some(kids) = children.get(&parent.id) else { return };
+    let Some(kids) = children.get(&parent.id) else {
+        return;
+    };
     let last = kids.len() - 1;
     for (i, kid) in kids.iter().enumerate() {
         if !emitted.insert(kid.id) {
@@ -535,7 +563,13 @@ mod tests {
 
     /// Синтетический спан с фиксированными метками времени: рендер и экспорт
     /// тестируем детерминированно, без реальных часов.
-    fn fixed_span(id: SpanId, parent: Option<SpanId>, name: &str, start_ms: u64, end_ms: Option<u64>) -> Span {
+    fn fixed_span(
+        id: SpanId,
+        parent: Option<SpanId>,
+        name: &str,
+        start_ms: u64,
+        end_ms: Option<u64>,
+    ) -> Span {
         Span {
             id,
             parent,
@@ -619,8 +653,12 @@ mod tests {
         reg.close_span(a);
         let spans = reg.snapshot();
         assert_eq!(spans.len(), 2);
-        assert!(spans.iter().any(|s| s.id == a && s.end_ms.is_some() && !s.open));
-        assert!(spans.iter().any(|s| s.id == b && s.end_ms.is_none() && s.open));
+        assert!(spans
+            .iter()
+            .any(|s| s.id == a && s.end_ms.is_some() && !s.open));
+        assert!(spans
+            .iter()
+            .any(|s| s.id == b && s.end_ms.is_none() && s.open));
         assert_eq!(reg.unfinished_ids(), vec![b]);
         // снапшот — независимая копия, переживает реестр
         drop(reg);
@@ -654,7 +692,10 @@ mod tests {
             fixed_span(2, Some(42), "orphan", 10, Some(20)),
         ];
         let tree = render_tree(&spans);
-        assert!(tree.contains("orphan (10 ms) (сирота: родитель #42 не найден)"), "дерево:\n{tree}");
+        assert!(
+            tree.contains("orphan (10 ms) (сирота: родитель #42 не найден)"),
+            "дерево:\n{tree}"
+        );
         // сирота — на верхнем уровне дерева (без отступа и коннектора)
         let orphan_line = tree.lines().find(|l| l.contains("orphan")).unwrap();
         assert!(!orphan_line.starts_with(' '));
@@ -675,7 +716,10 @@ mod tests {
         // метаданные (process + 1 thread) + B/E root + B/E child + B running
         assert_eq!(events.len(), 7);
         let pos = |name: &str, ph: &str| {
-            events.iter().position(|e| e["name"] == name && e["ph"] == ph).unwrap()
+            events
+                .iter()
+                .position(|e| e["name"] == name && e["ph"] == ph)
+                .unwrap()
         };
         assert!(pos("root", "B") < pos("child", "B"));
         assert!(pos("child", "B") < pos("child", "E"));
@@ -687,7 +731,9 @@ mod tests {
         assert_eq!(events[pos("child", "B")]["args"]["tool"], json!("Bash"));
         assert_eq!(events[pos("child", "B")]["args"]["span_id"], json!(2));
         // у незакрытого спана только B и маркер open
-        assert!(events.iter().all(|e| !(e["name"] == "running" && e["ph"] == "E")));
+        assert!(events
+            .iter()
+            .all(|e| !(e["name"] == "running" && e["ph"] == "E")));
         assert_eq!(events[pos("running", "B")]["args"]["open"], json!(true));
     }
 
@@ -702,12 +748,17 @@ mod tests {
         let parsed: Value = serde_json::from_str(&to_chrome_trace(&spans)).unwrap();
         let events = parsed["traceEvents"].as_array().unwrap();
         let tid_of = |name: &str| {
-            events.iter().find(|e| e["name"] == name && e["ph"] == "B").unwrap()["tid"].as_u64().unwrap()
+            events
+                .iter()
+                .find(|e| e["name"] == name && e["ph"] == "B")
+                .unwrap()["tid"]
+                .as_u64()
+                .unwrap()
         };
         assert_eq!(tid_of("turn#1"), tid_of("tool")); // потомок — в нити корня
         assert_ne!(tid_of("turn#1"), tid_of("turn#2")); // разные корни — разные нити
         assert_ne!(tid_of("orphan"), tid_of("turn#1")); // у сироты своя нить
-        // метаданные thread_name для каждой нити (2 корня + 1 сирота)
+                                                        // метаданные thread_name для каждой нити (2 корня + 1 сирота)
         let thread_names: Vec<&str> = events
             .iter()
             .filter(|e| e["ph"] == "M" && e["name"] == "thread_name")
@@ -817,7 +868,12 @@ agent.turn (20 ms)
         let content = std::fs::read_to_string(&path).unwrap();
         let events: Vec<String> = content
             .lines()
-            .map(|l| serde_json::from_str::<Value>(l).unwrap()["event"].as_str().unwrap().to_owned())
+            .map(|l| {
+                serde_json::from_str::<Value>(l).unwrap()["event"]
+                    .as_str()
+                    .unwrap()
+                    .to_owned()
+            })
             .collect();
         assert_eq!(events, ["open", "close", "open", "auto_close"]);
         std::fs::remove_file(&path).unwrap();

@@ -15,8 +15,10 @@ static STATUS: std::sync::OnceLock<SandboxStatus> = std::sync::OnceLock::new();
 
 /// Ограничить ТЕКУЩИЙ процесс (вызывать только в pre_exec ребёнка!)
 pub fn enforce_workspace(workspace: &Path) -> Result<(), String> {
-    use landlock::{ABI, Access, AccessFs, PathBeneath, PathFd, Ruleset,
-                   RulesetAttr, RulesetCreatedAttr, RulesetStatus};
+    use landlock::{
+        Access, AccessFs, PathBeneath, PathFd, Ruleset, RulesetAttr, RulesetCreatedAttr,
+        RulesetStatus, ABI,
+    };
     let abi = ABI::V1;
     let rw = AccessFs::from_all(abi);
     let ro = AccessFs::from_read(abi);
@@ -27,13 +29,20 @@ pub fn enforce_workspace(workspace: &Path) -> Result<(), String> {
     // Без него каждый bash-вызов загрязняет stderr мусором «Отказано в доступе».
     let devnull_fd = PathFd::new("/dev/null").map_err(|e| format!("PathFd /dev/null: {e}"))?;
     let status = Ruleset::default()
-        .handle_access(rw).map_err(|e| format!("handle_access: {e}"))?
-        .create().map_err(|e| format!("create ruleset: {e}"))?
-        .add_rule(PathBeneath::new(root_fd, ro)).map_err(|e| format!("rule /: {e}"))?
-        .add_rule(PathBeneath::new(tmp_fd, rw)).map_err(|e| format!("rule /tmp: {e}"))?
-        .add_rule(PathBeneath::new(ws_fd, rw)).map_err(|e| format!("rule workspace: {e}"))?
-        .add_rule(PathBeneath::new(devnull_fd, rw)).map_err(|e| format!("rule /dev/null: {e}"))?
-        .restrict_self().map_err(|e| format!("restrict_self: {e}"))?;
+        .handle_access(rw)
+        .map_err(|e| format!("handle_access: {e}"))?
+        .create()
+        .map_err(|e| format!("create ruleset: {e}"))?
+        .add_rule(PathBeneath::new(root_fd, ro))
+        .map_err(|e| format!("rule /: {e}"))?
+        .add_rule(PathBeneath::new(tmp_fd, rw))
+        .map_err(|e| format!("rule /tmp: {e}"))?
+        .add_rule(PathBeneath::new(ws_fd, rw))
+        .map_err(|e| format!("rule workspace: {e}"))?
+        .add_rule(PathBeneath::new(devnull_fd, rw))
+        .map_err(|e| format!("rule /dev/null: {e}"))?
+        .restrict_self()
+        .map_err(|e| format!("restrict_self: {e}"))?;
     match status.ruleset {
         RulesetStatus::FullyEnforced => Ok(()),
         // PartiallyEnforced: какие-то правила ядро проигнорировало (обычно вспомогательные,
@@ -50,8 +59,7 @@ pub fn status() -> SandboxStatus {
         let r = unsafe {
             std::process::Command::new("/bin/true")
                 .pre_exec(|| {
-                    enforce_workspace(Path::new("/tmp"))
-                        .map_err(std::io::Error::other)?;
+                    enforce_workspace(Path::new("/tmp")).map_err(std::io::Error::other)?;
                     Ok(())
                 })
                 .status()
@@ -75,39 +83,46 @@ mod tests {
 
     #[test]
     fn sandbox_blocks_write_outside() {
-        if status() != SandboxStatus::Available { return; }
+        if status() != SandboxStatus::Available {
+            return;
+        }
         use std::os::unix::process::CommandExt;
         let ws = std::env::temp_dir().join("theseus_sbx_ws");
         std::fs::create_dir_all(&ws).unwrap();
         // запись в workspace — должна работать
         let ok = unsafe {
             std::process::Command::new("bash")
-                .arg("-c").arg(format!("touch {}/ok.txt", ws.display()))
+                .arg("-c")
+                .arg(format!("touch {}/ok.txt", ws.display()))
                 .pre_exec({
                     let ws2 = ws.clone();
                     move || {
-                        enforce_workspace(&ws2)
-                            .map_err(std::io::Error::other)?;
+                        enforce_workspace(&ws2).map_err(std::io::Error::other)?;
                         Ok(())
                     }
                 })
-                .status().unwrap()
+                .status()
+                .unwrap()
         };
         assert!(ok.success(), "запись в workspace должна быть разрешена");
         // запись вне workspace (в $HOME) — должна быть запрещена
         let home = std::env::var("HOME").unwrap();
         let fail = unsafe {
             std::process::Command::new("bash")
-                .arg("-c").arg(format!("touch {home}/theseus_sbx_forbidden.txt"))
+                .arg("-c")
+                .arg(format!("touch {home}/theseus_sbx_forbidden.txt"))
                 .pre_exec({
                     move || {
-                        enforce_workspace(&ws)
-                            .map_err(std::io::Error::other)?;
+                        enforce_workspace(&ws).map_err(std::io::Error::other)?;
                         Ok(())
                     }
                 })
-                .status().unwrap()
+                .status()
+                .unwrap()
         };
-        assert!(!fail.success(), "запись вне workspace должна блокироваться Landlock");
+        assert!(
+            !fail.success(),
+            "запись вне workspace должна блокироваться Landlock"
+        );
     }
 }

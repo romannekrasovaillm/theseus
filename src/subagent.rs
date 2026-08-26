@@ -40,8 +40,13 @@ fn sub_toolset(spec: &AgentSpec) -> serde_json::Value {
 
 /// Исполнение одного вызова внутри субагента: файловые/shell — через ToolEnv,
 /// веб — свободные функции, фон — собственный BgRegistry прогона.
-fn dispatch_sub(env: &mut ToolEnv, bg: &mut BgRegistry, workspace: &Path,
-                name: &str, args: &serde_json::Value) -> String {
+fn dispatch_sub(
+    env: &mut ToolEnv,
+    bg: &mut BgRegistry,
+    workspace: &Path,
+    name: &str,
+    args: &serde_json::Value,
+) -> String {
     match name {
         "web_fetch" => tools::web_fetch(args["url"].as_str().unwrap_or(""), 30)
             .unwrap_or_else(|e| format!("ERROR: {e}")),
@@ -50,7 +55,10 @@ fn dispatch_sub(env: &mut ToolEnv, bg: &mut BgRegistry, workspace: &Path,
         "task_output" => bg.output(args["id"].as_u64().unwrap_or(0)),
         "task_stop" => bg.stop(args["id"].as_u64().unwrap_or(0)),
         "bash" if args["is_background"].as_bool().unwrap_or(false) => {
-            match bg.spawn(args["command"].as_str().unwrap_or(""), &workspace.to_path_buf()) {
+            match bg.spawn(
+                args["command"].as_str().unwrap_or(""),
+                &workspace.to_path_buf(),
+            ) {
                 Ok(id) => format!("[bg {id}] запущена в фоне; читайте task_output"),
                 Err(e) => format!("ERROR: {e}"),
             }
@@ -64,11 +72,23 @@ fn dispatch_sub(env: &mut ToolEnv, bg: &mut BgRegistry, workspace: &Path,
 /// `cancel` — флаг кооперативной остановки из BgRegistry (task_stop): проверяется
 /// на границе каждого хода; взведён — субагент прерывается с честным маркером
 /// (живой кейс 24.07: explore висел 25 минут, task_stop был бессилен).
-pub fn run_agent(cfg: &SubConfig, workspace: &Path, spec: &AgentSpec,
-                 prompt: &str, budget: AgentBudget, sandbox: bool,
-                 cancel: Option<&std::sync::atomic::AtomicBool>) -> Result<AgentResult> {
-    let mut api = ApiClient::new(&cfg.base_url, &cfg.api_key, &cfg.model,
-                                 cfg.timeout_secs, cfg.extra_body.clone(), cfg.max_output_tokens)?;
+pub fn run_agent(
+    cfg: &SubConfig,
+    workspace: &Path,
+    spec: &AgentSpec,
+    prompt: &str,
+    budget: AgentBudget,
+    sandbox: bool,
+    cancel: Option<&std::sync::atomic::AtomicBool>,
+) -> Result<AgentResult> {
+    let mut api = ApiClient::new(
+        &cfg.base_url,
+        &cfg.api_key,
+        &cfg.model,
+        cfg.timeout_secs,
+        cfg.extra_body.clone(),
+        cfg.max_output_tokens,
+    )?;
     let mut env = ToolEnv::new(workspace);
     env.sandbox = sandbox;
     let mut bg = BgRegistry::new();
@@ -82,38 +102,64 @@ pub fn run_agent(cfg: &SubConfig, workspace: &Path, spec: &AgentSpec,
         // кооперативная остановка — до очередного обращения к модели
         if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
             return Ok(AgentResult::from_guard(
-                format!("(субагент «{}» остановлен пользователем через task_stop)", spec.name),
-                &guard, true));
+                format!(
+                    "(субагент «{}» остановлен пользователем через task_stop)",
+                    spec.name
+                ),
+                &guard,
+                true,
+            ));
         }
         // настенный лимит — перед очередным обращением к модели
         if let Err(e) = guard.check() {
             return Ok(AgentResult::from_guard(
-                format!("(субагент «{}» остановлен: {e})", spec.name), &guard, true));
+                format!("(субагент «{}» остановлен: {e})", spec.name),
+                &guard,
+                true,
+            ));
         }
         let resp = api.chat(&messages, &tools)?;
         // счётные лимиты (ходы/токены) — после хода; обрыв фиксируем, но ход дозавершаем
-        let over = guard.consume(resp.prompt_tokens + resp.completion_tokens).err();
+        let over = guard
+            .consume(resp.prompt_tokens + resp.completion_tokens)
+            .err();
         let has_tools = !resp.tool_calls.is_empty();
-        messages.push(Message::assistant(resp.content.clone(),
-            if has_tools { Some(resp.tool_calls.clone()) } else { None })
-            .with_reasoning(resp.reasoning.clone()));
+        messages.push(
+            Message::assistant(
+                resp.content.clone(),
+                if has_tools {
+                    Some(resp.tool_calls.clone())
+                } else {
+                    None
+                },
+            )
+            .with_reasoning(resp.reasoning.clone()),
+        );
         if !has_tools {
-            let text = resp.content.unwrap_or_else(|| "(субагент завершил без текста)".into());
+            let text = resp
+                .content
+                .unwrap_or_else(|| "(субагент завершил без текста)".into());
             return Ok(AgentResult::from_guard(text, &guard, over.is_some()));
         }
         for call in &resp.tool_calls {
-            let args: serde_json::Value = serde_json::from_str(&call.function.arguments)
-                .unwrap_or(serde_json::json!({}));
+            let args: serde_json::Value =
+                serde_json::from_str(&call.function.arguments).unwrap_or(serde_json::json!({}));
             let out = if spec.allows_tool(&call.function.name) {
                 dispatch_sub(&mut env, &mut bg, workspace, &call.function.name, &args)
             } else {
-                format!("DENIED: субагент «{}» не имеет инструмента {}", spec.name, call.function.name)
+                format!(
+                    "DENIED: субагент «{}» не имеет инструмента {}",
+                    spec.name, call.function.name
+                )
             };
             messages.push(Message::tool(&call.id, out));
         }
         if let Some(e) = over {
             return Ok(AgentResult::from_guard(
-                format!("(субагент «{}» остановлен по бюджету: {e})", spec.name), &guard, true));
+                format!("(субагент «{}» остановлен по бюджету: {e})", spec.name),
+                &guard,
+                true,
+            ));
         }
     }
 }
@@ -131,8 +177,14 @@ mod tests {
     /// без единого API-вызова (base_url недостижим — не должен потребоваться).
     #[test]
     fn run_agent_stops_on_cancel_flag() {
-        let spec = crate::agents::AgentSpec::new("explore", "тест", "тестовый промпт",
-            &["read_file"], 5, true);
+        let spec = crate::agents::AgentSpec::new(
+            "explore",
+            "тест",
+            "тестовый промпт",
+            &["read_file"],
+            5,
+            true,
+        );
         let cfg = SubConfig {
             base_url: "http://127.0.0.1:1".into(),
             api_key: "test".into(),
@@ -142,30 +194,57 @@ mod tests {
             max_output_tokens: 16,
         };
         let cancel = std::sync::atomic::AtomicBool::new(true);
-        let res = run_agent(&cfg, Path::new("/tmp"), &spec, "задача",
-            crate::agents::AgentBudget::default(), false, Some(&cancel)).expect("ok");
-        assert!(res.summary.contains("остановлен пользователем"), "{}", res.summary);
+        let res = run_agent(
+            &cfg,
+            Path::new("/tmp"),
+            &spec,
+            "задача",
+            crate::agents::AgentBudget::default(),
+            false,
+            Some(&cancel),
+        )
+        .expect("ok");
+        assert!(
+            res.summary.contains("остановлен пользователем"),
+            "{}",
+            res.summary
+        );
         assert!(res.truncated, "обрыв помечается truncated");
     }
 
     #[test]
-    fn sub_toolset_follows_spec_and_drops_task() {        for spec in builtin_specs() {
+    fn sub_toolset_follows_spec_and_drops_task() {
+        for spec in builtin_specs() {
             let tools = sub_toolset(&spec);
-            let names: Vec<&str> = tools.as_array().expect("массив тулсета").iter()
-                .filter_map(|t| t["function"]["name"].as_str()).collect();
+            let names: Vec<&str> = tools
+                .as_array()
+                .expect("массив тулсета")
+                .iter()
+                .filter_map(|t| t["function"]["name"].as_str())
+                .collect();
             assert!(!names.is_empty(), "пустой тулсет у «{}»", spec.name);
-            assert!(!names.contains(&"task"), "task попал в тулсет «{}»", spec.name);
+            assert!(
+                !names.contains(&"task"),
+                "task попал в тулсет «{}»",
+                spec.name
+            );
             for n in &names {
                 assert!(spec.allows_tool(n), "«{n}» сверх спеки «{}»", spec.name);
                 if spec.readonly {
-                    assert!(!crate::agents::WRITE_TOOLS.contains(n),
-                        "пишущий «{n}» в readonly-спеке «{}»", spec.name);
+                    assert!(
+                        !crate::agents::WRITE_TOOLS.contains(n),
+                        "пишущий «{n}» в readonly-спеке «{}»",
+                        spec.name
+                    );
                 }
             }
             // все разрешённые спекой инструменты реально присутствуют
             for want in &spec.allowed_tools {
-                assert!(names.contains(&want.as_str()),
-                    "«{want}» из спеки «{}» не найден в общем реестре", spec.name);
+                assert!(
+                    names.contains(&want.as_str()),
+                    "«{want}» из спеки «{}» не найден в общем реестре",
+                    spec.name
+                );
             }
         }
     }

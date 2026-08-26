@@ -94,7 +94,8 @@ struct Shared {
 
 /// Блокировка мьютекса с внятной ошибкой вместо паники при отравлении.
 fn lock<T>(m: &Mutex<T>) -> Result<MutexGuard<'_, T>> {
-    m.lock().map_err(|_| anyhow!("мьютекс отравлен (паника в соседнем потоке)"))
+    m.lock()
+        .map_err(|_| anyhow!("мьютекс отравлен (паника в соседнем потоке)"))
 }
 
 /// ACP-клиент к внешнему агенту: дочерний процесс + NDJSON по stdio.
@@ -121,8 +122,14 @@ impl AcpClient {
             .stderr(Stdio::null())
             .spawn()
             .map_err(|e| anyhow!("не удалось запустить агента `{command}`: {e}"))?;
-        let stdin = child.stdin.take().ok_or_else(|| anyhow!("нет stdin у `{command}`"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow!("нет stdout у `{command}`"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow!("нет stdin у `{command}`"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("нет stdout у `{command}`"))?;
         let shared = Arc::new(Shared {
             stdin: Mutex::new(stdin),
             pending: Mutex::new(HashMap::new()),
@@ -192,7 +199,10 @@ impl AcpClient {
 
     /// Отправить нотификацию (без `id`, ответа не ждём).
     pub fn notify(&self, method: &str, params: Value) -> Result<()> {
-        write_value(&self.shared, &json!({"jsonrpc": "2.0", "method": method, "params": params}))
+        write_value(
+            &self.shared,
+            &json!({"jsonrpc": "2.0", "method": method, "params": params}),
+        )
     }
 
     /// ACP `initialize`: версия протокола + клиентские возможности
@@ -246,7 +256,10 @@ impl AcpClient {
             .into_iter()
             .filter(|u| u.session_id == session_id)
             .collect();
-        Ok(PromptOutcome { stop_reason, updates })
+        Ok(PromptOutcome {
+            stop_reason,
+            updates,
+        })
     }
 
     /// Забрать все накопленные нотификации `session/update` (буфер очищается).
@@ -458,7 +471,9 @@ fn notification(shared: &Shared, msg: &Value) {
 /// Неизвестный `id` (просрочен по таймауту или чужой) — игнорируем.
 fn response(shared: &Shared, msg: &Value) {
     let Some(id) = msg["id"].as_u64() else { return };
-    let sender = lock(&shared.pending).ok().and_then(|mut map| map.remove(&id));
+    let sender = lock(&shared.pending)
+        .ok()
+        .and_then(|mut map| map.remove(&id));
     let Some(sender) = sender else { return };
     let payload = match msg.get("error").filter(|e| !e.is_null()) {
         Some(err) => Err(format!("JSON-RPC ошибка на id {id}: {err}")),
@@ -566,7 +581,9 @@ done
     fn out_of_order_responses_are_matched_by_id() {
         let client = spawn_mock();
         let p1 = client.send_request("test/hold", json!({})).expect("p1");
-        let p2 = client.send_request("test/echo", json!({"tag": "p2"})).expect("p2");
+        let p2 = client
+            .send_request("test/echo", json!({"tag": "p2"}))
+            .expect("p2");
         assert_eq!(p1.id() + 1, p2.id(), "id должны идти подряд");
         let r2 = p2.wait(Duration::from_secs(5)).expect("p2 отвечают первым");
         let r1 = p1.wait(Duration::from_secs(5)).expect("p1 отвечают вторым");
@@ -646,7 +663,9 @@ done
                 }),
             )
             .expect("on_request");
-        let res = client.call("test/readfile", json!({})).expect("test/readfile");
+        let res = client
+            .call("test/readfile", json!({}))
+            .expect("test/readfile");
         assert_eq!(res["clientResponded"]["id"], 901);
         assert_eq!(res["clientResponded"]["result"]["content"], "fn main() {}");
         let seen = seen.lock().expect("seen");
@@ -658,7 +677,9 @@ done
     #[test]
     fn broken_line_is_skipped_and_counted() {
         let client = spawn_mock();
-        let res = client.call("test/garbage", json!({})).expect("test/garbage");
+        let res = client
+            .call("test/garbage", json!({}))
+            .expect("test/garbage");
         assert_eq!(res["ok"], true);
         assert!(
             client.dropped_lines() >= 1,
@@ -673,7 +694,9 @@ done
     fn slow_agent_hits_timeout_and_client_recovers() {
         let client = spawn_mock();
         client.set_timeout(Duration::from_millis(300));
-        let err = client.call("test/slow", json!({})).expect_err("должен быть таймаут");
+        let err = client
+            .call("test/slow", json!({}))
+            .expect_err("должен быть таймаут");
         assert!(
             err.to_string().contains("таймаут"),
             "ожидали таймаут, получили: {err}"

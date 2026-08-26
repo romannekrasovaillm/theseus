@@ -4,7 +4,7 @@
 //! Бенчмарки: simhash64+hamming (compact_v2), levenshtein (models),
 //! est_tokens (chars/4), сборка системного промпта.
 
-use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use theseus::compact_v2::{hamming, simhash64};
 
 // ---------------------------------------------------------------------------
@@ -32,7 +32,15 @@ fn bench_simhash(c: &mut Criterion) {
 
 fn bench_hamming(c: &mut Criterion) {
     let pairs: Vec<(u64, u64)> = (0..10_000)
-        .map(|i| (i as u64 * 0x517cc1b727220a95, i as u64 ^ 0xdeadbeefcafebabe))
+        // wrapping: `cargo test --all-targets` гоняет бенчи в debug-режиме,
+        // где переполнение u64 при умножении — паника (для бенча важно лишь
+        // разнообразие пар, а не точные значения)
+        .map(|i| {
+            (
+                (i as u64).wrapping_mul(0x517cc1b727220a95),
+                i as u64 ^ 0xdeadbeefcafebabe,
+            )
+        })
         .collect();
     let mut group = c.benchmark_group("hamming");
     group.bench_function("10k_pairs", |b| {
@@ -47,7 +55,12 @@ fn bench_hamming(c: &mut Criterion) {
 
 fn bench_hamming_identical(c: &mut Criterion) {
     c.bench_function("hamming_identical", |b| {
-        b.iter(|| hamming(std::hint::black_box(0xdeadbeef), std::hint::black_box(0xdeadbeef)))
+        b.iter(|| {
+            hamming(
+                std::hint::black_box(0xdeadbeef),
+                std::hint::black_box(0xdeadbeef),
+            )
+        })
     });
 }
 
@@ -83,7 +96,8 @@ fn bench_est_tokens(c: &mut Criterion) {
     for n in sizes {
         let messages: Vec<Message> = (0..n)
             .map(|i| {
-                let content = format!("сообщение {i:03}: некоторый текст для оценки токенов в контексте");
+                let content =
+                    format!("сообщение {i:03}: некоторый текст для оценки токенов в контексте");
                 if i % 3 == 0 {
                     Message::user(content)
                 } else if i % 3 == 1 {
@@ -95,12 +109,16 @@ fn bench_est_tokens(c: &mut Criterion) {
             .collect();
         group.bench_with_input(BenchmarkId::new("messages", n), &n, |b, _| {
             b.iter(|| {
-                let chars: usize = std::hint::black_box(&messages).iter().map(|m| {
-                    m.content.as_deref().unwrap_or("").len()
-                        + m.tool_calls.as_ref()
-                            .map(|v| serde_json::to_string(v).unwrap_or_default().len())
-                            .unwrap_or(0)
-                }).sum();
+                let chars: usize = std::hint::black_box(&messages)
+                    .iter()
+                    .map(|m| {
+                        m.content.as_deref().unwrap_or("").len()
+                            + m.tool_calls
+                                .as_ref()
+                                .map(|v| serde_json::to_string(v).unwrap_or_default().len())
+                                .unwrap_or(0)
+                    })
+                    .sum();
                 std::hint::black_box(chars / 4 + 1)
             })
         });
@@ -116,10 +134,12 @@ fn bench_system_prompt(c: &mut Criterion) {
     use theseus::prompts::{EnvContext, PromptBuilder, SkillDigest};
 
     let skills: Vec<SkillDigest> = (0..20)
-        .map(|i| SkillDigest::new(
-            format!("skill-{i}"),
-            format!("описание скилла номер {i} для тестового бенчмарка"),
-        ))
+        .map(|i| {
+            SkillDigest::new(
+                format!("skill-{i}"),
+                format!("описание скилла номер {i} для тестового бенчмарка"),
+            )
+        })
         .collect();
 
     let env = EnvContext {

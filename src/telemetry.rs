@@ -346,7 +346,8 @@ impl Timer {
 
 impl Drop for Timer {
     fn drop(&mut self) {
-        self.histogram.record(self.start.elapsed().as_secs_f64() * 1000.0);
+        self.histogram
+            .record(self.start.elapsed().as_secs_f64() * 1000.0);
     }
 }
 
@@ -450,7 +451,7 @@ impl MetricsRegistry {
     /// строки `# TYPE <имя> <counter|gauge|summary>`, затем значения.
     /// Гистограммы выводятся как `summary`: квантили 0.5 и 0.95 (если было
     /// хотя бы одно наблюдение), плюс `<имя>_sum` и `<имя>_count`.
-    /// Имена санитизируются ([`sanitize_name`]), метки из `{k=v}`-части
+    /// Имена санитизируются (`sanitize_name`), метки из `{k=v}`-части
     /// имени выводятся в фигурных скобках. Пустой реестр — пустая строка.
     pub fn export_prometheus(&self) -> String {
         // Схлопываем ряды с одинаковым санитизированным именем, чтобы
@@ -688,7 +689,11 @@ mod tests {
             std::thread::sleep(Duration::from_millis(5));
         }
         assert_eq!(h.count(), 1);
-        assert!(h.sum() >= 1.0, "elapsed должно быть > 0, получено {}", h.sum());
+        assert!(
+            h.sum() >= 1.0,
+            "elapsed должно быть > 0, получено {}",
+            h.sum()
+        );
         assert!(h.min().expect("min после записи") >= 1.0);
     }
 
@@ -792,10 +797,9 @@ mod tests {
             r#"^[a-zA-Z_:][a-zA-Z0-9_:]*(\{[a-zA-Z_][a-zA-Z0-9_]*="([^"\\]|\\.)*"(,[a-zA-Z_][a-zA-Z0-9_]*="([^"\\]|\\.)*")*\})? [-+0-9.eEnaIf]+$"#,
         )
         .expect("metric regex");
-        let type_re = regex::Regex::new(
-            r"^# TYPE [a-zA-Z_:][a-zA-Z0-9_:]* (counter|gauge|summary)$",
-        )
-        .expect("type regex");
+        let type_re =
+            regex::Regex::new(r"^# TYPE [a-zA-Z_:][a-zA-Z0-9_:]* (counter|gauge|summary)$")
+                .expect("type regex");
         let mut lines = 0;
         for line in text.lines() {
             lines += 1;
