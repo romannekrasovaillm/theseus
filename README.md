@@ -1,5 +1,7 @@
 # Theseus (Тесей)
 
+[![CI](https://github.com/romannekrasovaillm/theseus/actions/workflows/ci.yml/badge.svg)](https://github.com/romannekrasovaillm/theseus/actions/workflows/ci.yml)
+
 **Собственный агентный TUI-харнесс промышленного класса на Rust — создан за выходные Романом Некрасовым под свои интересы: LLM, RL и агентные системы.**
 
 Тесей проходит лабиринт задач с нитью Ариадны — в роли нити здесь локальная
